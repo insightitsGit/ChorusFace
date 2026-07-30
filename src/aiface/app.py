@@ -142,6 +142,10 @@ if TYPE_CHECKING:
     from aiface.seed import FaceBox
 
 MOUTH_RADIUS: Final = 14.0
+# AMIN step 11: display textures are decoupled from the 256² cell grid — the
+# shader samples by UV, so photo/plates render at capture resolution up to this
+# cap while the field keeps its grid size.
+MAX_DISPLAY_TEXTURE: Final = 1024
 # Audio-locked speech schedules a viseme per articulated sound, so the queue has
 # to hold a whole paragraph without dropping the beginning of it.
 MAX_PHONEME_QUEUE: Final = 512
@@ -481,7 +485,10 @@ class AvatarFaceApp(FieldRuntime):
             seed=17,
         )
         self._apply_capture_priors()
-        self._avatar_base_texture = self._create_avatar_base_texture()
+        (
+            self._avatar_base_texture,
+            self._avatar_parts_texture,
+        ) = self._create_avatar_base_texture()
         self._avatar_tissue_texture = self._create_tissue_texture()
         (
             self._avatar_open_plate_texture,
@@ -605,8 +612,52 @@ class AvatarFaceApp(FieldRuntime):
                 return candidate
         return None
 
+    def _mouth_center_from_regions(self) -> tuple[float, float] | None:
+        """AMIN steps 5+7 — the digested mouth *object* is the cell address.
+
+        Digestion already clustered the unlocked mouth cells into a region
+        object (``region_catalog.json``). Using its centroid means the runtime
+        feeds impulses to the exact cells that object owns instead of
+        re-deriving the address from grid statistics every launch.
+        """
+        catalog = self.world_path.with_name("region_catalog.json")
+        if not catalog.is_file():
+            return None
+        try:
+            payload = json.loads(catalog.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        best_cells: list | None = None
+        best_count = 0
+        for region in payload.get("regions") or []:
+            if not isinstance(region, dict) or region.get("name") != "mouth_unlocked":
+                continue
+            cells = region.get("cells") or region.get("cells_sample") or []
+            count = int(region.get("cell_count", len(cells)))
+            if cells and count > best_count:
+                best_cells = cells
+                best_count = count
+        if not best_cells:
+            return None
+        xs = np.asarray([cell[0] for cell in best_cells], dtype=np.float64)
+        ys = np.asarray([cell[1] for cell in best_cells], dtype=np.float64)
+        x = float(xs.mean()) + 0.5
+        y = float(ys.mean()) + 0.5
+        print(
+            f"Mouth object address from region catalog: {best_count} cells "
+            f"@ ({x:.1f}, {y:.1f})"
+        )
+        return (
+            float(np.clip(x, 1.0, self.grid_width - 1.0)),
+            float(np.clip(y, 1.0, self.grid_height - 1.0)),
+        )
+
     def _estimate_mouth_center(self) -> tuple[float, float]:
-        """Locate the mouth from seed metadata, part anchors, or unlocked tissue."""
+        """Locate the mouth from the digested region object, seed metadata,
+        part anchors, or unlocked tissue — in that order of authority."""
+        from_regions = self._mouth_center_from_regions()
+        if from_regions is not None:
+            return from_regions
         try:
             header, _grid = load_bds(self.world_path)
             meta = header.get("application_metadata", {}).get("avatar_seed", {})
@@ -664,8 +715,14 @@ class AvatarFaceApp(FieldRuntime):
 
     # --------------------------------------------------------------- render
 
-    def _create_avatar_base_texture(self) -> moderngl.Texture:
-        """Upload photograph + anatomical part-id atlas (A channel)."""
+    def _create_avatar_base_texture(self) -> tuple[moderngl.Texture, moderngl.Texture]:
+        """Upload the photograph and the anatomical part-id map.
+
+        AMIN step 11 split them: the photo renders at capture resolution with
+        mipmaps (LINEAR minification — hi-res without cache thrash on iGPUs),
+        while discrete part ids stay a small NEAREST texture at grid size.
+        Packing ids into the photo's alpha forced NEAREST + no mips on both.
+        """
         rgba: np.ndarray | None = None
         parts_file = default_parts_path(self.world_path)
         if parts_file.is_file():
@@ -701,32 +758,81 @@ class AvatarFaceApp(FieldRuntime):
                 print(f"warning: face part atlas unavailable ({exc})")
 
         if rgba is None:
-            if self._avatar_source is not None:
-                from PIL import Image
-
-                image_rgb = Image.open(self._avatar_source).convert("RGB")
-                image_rgb = image_rgb.resize(
-                    (self.grid_width, self.grid_height), Image.Resampling.LANCZOS
-                )
-                rgb = np.flipud(np.asarray(image_rgb, dtype=np.float32) / 255.0)
-            else:
+            rgb = (
+                self._load_display_portrait_rgb()
+                if self._avatar_source is not None
+                else None
+            )
+            if rgb is None:
                 rgb = np.clip(self._read_world()[..., 8:11], 0.0, 1.0)
-            rgba = np.empty((self.grid_height, self.grid_width, 4), dtype=np.float32)
+            rgba = np.empty((*rgb.shape[:2], 4), dtype=np.float32)
             rgba[..., :3] = rgb
             rgba[..., 3] = 0.1  # everything reads as static face
             self._use_parts = False
 
-        texture = self.ctx.texture(
-            (self.grid_width, self.grid_height),
+        # Photo texture at display resolution (same registered crop as seed).
+        photo_rgb = self._load_display_portrait_rgb()
+        if photo_rgb is None or (
+            photo_rgb.shape[0] <= rgba.shape[0] and photo_rgb.shape[1] <= rgba.shape[1]
+        ):
+            photo_rgb = np.asarray(rgba[..., :3], dtype=np.float32)
+        else:
+            print(
+                f"Avatar base texture: {photo_rgb.shape[1]}x{photo_rgb.shape[0]} "
+                f"display res (field grid stays {self.grid_width}x{self.grid_height})"
+            )
+        photo = np.empty((*photo_rgb.shape[:2], 4), dtype=np.uint8)
+        photo[..., :3] = np.rint(np.clip(photo_rgb, 0.0, 1.0) * 255.0)
+        photo[..., 3] = 255
+        photo_texture = self.ctx.texture(
+            (photo.shape[1], photo.shape[0]),
             components=4,
-            data=np.ascontiguousarray(rgba, dtype=np.float32).tobytes(),
-            dtype="f4",
+            data=np.ascontiguousarray(photo).tobytes(),
+            dtype="f1",
         )
-        # Nearest keeps discrete part IDs in alpha intact (linear would blend IDs).
-        texture.filter = (moderngl.NEAREST, moderngl.NEAREST)
-        texture.repeat_x = False
-        texture.repeat_y = False
-        return texture
+        photo_texture.build_mipmaps()
+        # Mipmapped minification: crisp when magnified, cache-friendly when
+        # the window shows the 1024² photo smaller than native.
+        photo_texture.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+        photo_texture.repeat_x = False
+        photo_texture.repeat_y = False
+
+        # Part ids stay grid-sized, NEAREST, un-mipmapped — discrete labels.
+        ids = np.ascontiguousarray(
+            np.rint(np.clip(rgba[..., 3], 0.0, 1.0) * 255.0), dtype=np.uint8
+        )
+        parts_texture = self.ctx.texture(
+            (ids.shape[1], ids.shape[0]),
+            components=1,
+            data=ids.tobytes(),
+            dtype="f1",
+        )
+        parts_texture.filter = (moderngl.NEAREST, moderngl.NEAREST)
+        parts_texture.repeat_x = False
+        parts_texture.repeat_y = False
+        return photo_texture, parts_texture
+
+    def _load_display_portrait_rgb(self) -> np.ndarray | None:
+        """``source_face.png`` at capture resolution (≤ cap), world y-up."""
+        if self._avatar_source is None:
+            return None
+        try:
+            from PIL import Image
+
+            image_rgb = Image.open(self._avatar_source).convert("RGB")
+        except (OSError, ValueError) as exc:
+            print(f"warning: display-res portrait unavailable ({exc})")
+            return None
+        if max(image_rgb.size) > MAX_DISPLAY_TEXTURE:
+            scale = MAX_DISPLAY_TEXTURE / max(image_rgb.size)
+            image_rgb = image_rgb.resize(
+                (
+                    max(round(image_rgb.size[0] * scale), 1),
+                    max(round(image_rgb.size[1] * scale), 1),
+                ),
+                Image.Resampling.LANCZOS,
+            )
+        return np.flipud(np.asarray(image_rgb, dtype=np.float32) / 255.0)
 
     def _create_tissue_texture(self) -> moderngl.Texture:
         """Load or bake the per-cell deformation maps the warp reads."""
@@ -1036,9 +1142,17 @@ class AvatarFaceApp(FieldRuntime):
             from PIL import Image
 
             image = Image.open(path).convert("RGBA")
-            image = image.resize(
-                (self.grid_width, self.grid_height), Image.Resampling.LANCZOS
-            )
+            # AMIN step 11: keep capture resolution — the shader samples by
+            # UV, so plates no longer get crushed to the 256² cell grid.
+            if max(image.size) > MAX_DISPLAY_TEXTURE:
+                scale = MAX_DISPLAY_TEXTURE / max(image.size)
+                image = image.resize(
+                    (
+                        max(round(image.size[0] * scale), 1),
+                        max(round(image.size[1] * scale), 1),
+                    ),
+                    Image.Resampling.LANCZOS,
+                )
             # Match photo_at orientation (world y up → flip for texture).
             rgba = np.flipud(np.asarray(image, dtype=np.float32) / 255.0)
             return np.ascontiguousarray(rgba, dtype=np.float32)
@@ -1047,13 +1161,20 @@ class AvatarFaceApp(FieldRuntime):
             return None
 
     def _upload_rgba_texture(self, rgba: np.ndarray) -> moderngl.Texture:
+        # Plates are photographs — 8-bit normalized keeps hi-res display
+        # textures inside integrated-GPU bandwidth (f4 was 4× the bytes).
+        data = np.clip(rgba, 0.0, 1.0)
+        data = np.ascontiguousarray(np.rint(data * 255.0), dtype=np.uint8)
         texture = self.ctx.texture(
-            (self.grid_width, self.grid_height),
+            (rgba.shape[1], rgba.shape[0]),
             components=4,
-            data=np.ascontiguousarray(rgba, dtype=np.float32).tobytes(),
-            dtype="f4",
+            data=data.tobytes(),
+            dtype="f1",
         )
-        texture.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        # Mipmaps keep hi-res plates cheap when minified (integrated GPUs
+        # thrash their texture cache on un-mipped 1024² lookups).
+        texture.build_mipmaps()
+        texture.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
         texture.repeat_x = False
         texture.repeat_y = False
         return texture
@@ -1264,6 +1385,8 @@ class AvatarFaceApp(FieldRuntime):
 
         self._avatar_base_texture.use(location=2)
         program["avatar_base_color"].value = 2
+        self._avatar_parts_texture.use(location=9)
+        program["avatar_part_ids"].value = 9
         self._avatar_tissue_texture.use(location=3)
         program["avatar_tissue"].value = 3
         self._avatar_open_plate_texture.use(location=4)
@@ -1329,6 +1452,15 @@ class AvatarFaceApp(FieldRuntime):
         )
         # Digested GPU display recipe knobs (same contract at train and play).
         program["avatar_recipe"].value = self._display_recipe.shader_knobs
+        # NWR field warp: validated ±4 impulses integrated on the GPU move
+        # unlocked tissue directly (steps 1–3 close the loop at the pixels).
+        program["avatar_field_gain"].value = float(
+            self._display_recipe.field_warp_gain
+        )
+        # Step 12: plate snap — commit toward the nearest captured mouth shape.
+        program["avatar_plate_sharpness"].value = float(
+            self._display_recipe.plate_sharpness
+        )
         program["avatar_lock_overlay"].value = 1.0 if self._show_locks else 0.0
         program["avatar_breath_phase"].value = float(state.breath_phase)
         program["avatar_debug_view"].value = int(self._debug_view)
@@ -2110,11 +2242,13 @@ class AvatarFaceApp(FieldRuntime):
         self._cpu_frame_ms = (time.perf_counter() - cpu_started) * 1000.0
 
     def _sample_mouth_telemetry(self) -> None:
-        grid = self._read_world()
+        # Hot path: read back only the mouth row band (~35 rows ≈ 1.1 MB), not
+        # the whole 8 MB world — BDS/NWR state belongs on the GPU.
         cx, cy = int(self._mouth_center[0]), int(self._mouth_center[1])
         radius = int(MOUTH_RADIUS) + 2
-        patch = grid[
-            max(cy - radius, 0) : min(cy + radius + 1, self.grid_height),
+        rows = self._read_world_rows(cy - radius, cy + radius + 1)
+        patch = rows[
+            :,
             max(cx - radius, 0) : min(cx + radius + 1, self.grid_width),
         ]
         speed = np.hypot(patch[..., 0], patch[..., 1])
@@ -2366,6 +2500,7 @@ class AvatarFaceApp(FieldRuntime):
             self._audio.close()
             self._audio = None
         self._avatar_base_texture.release()
+        self._avatar_parts_texture.release()
         self._avatar_tissue_texture.release()
         self._avatar_open_plate_texture.release()
         self._avatar_smile_plate_texture.release()

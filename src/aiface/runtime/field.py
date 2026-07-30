@@ -199,6 +199,25 @@ class FieldRuntime(mglw.WindowConfig):
             (self.grid_height, self.grid_width, VECTOR_DIMENSIONS)
         )
 
+    def _read_world_rows(self, y0: int, y1: int) -> np.ndarray:
+        """Read only rows ``[y0, y1)`` of the field back to the CPU.
+
+        NWR keeps the world GPU-resident; periodic telemetry must not haul the
+        whole buffer (8 MB at 256²×32) across the bus every few frames. Rows
+        are contiguous in the SSBO, so a row band is a single ranged read.
+        """
+        y0 = max(int(y0), 0)
+        y1 = min(int(y1), self.grid_height)
+        if y1 <= y0:
+            return np.empty((0, self.grid_width, VECTOR_DIMENSIONS), dtype="<f4")
+        row_bytes = self.grid_width * VECTOR_DIMENSIONS * 4
+        payload = self.world_buffers[self.current_buffer].read(
+            size=(y1 - y0) * row_bytes, offset=y0 * row_bytes
+        )
+        return np.frombuffer(payload, dtype="<f4").reshape(
+            (y1 - y0, self.grid_width, VECTOR_DIMENSIONS)
+        )
+
     def _persistable_world(self) -> np.ndarray:
         """The live field as a rest pose, ready to become a seed again.
 

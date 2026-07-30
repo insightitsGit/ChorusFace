@@ -29,6 +29,10 @@ CAPTURE_META_NAME: Final = "capture_meta.json"
 QA_CONTACT_NAME: Final = "capture_qa.png"
 
 DEFAULT_SAMPLE_FPS: Final = 6.0
+#: AMIN step 11 — display plates are re-cut from the source at this square
+#: resolution. Analysis/registration stays at the grid size; the field never
+#: grows. The face crop is deterministic per frame, so both stay registered.
+DISPLAY_SIZE: Final = 1024
 MIN_SHARPNESS: Final = 18.0
 MIN_SHARPNESS_SOFT: Final = 10.0
 MIN_LANDMARK_QUALITY: Final = 0.35
@@ -627,6 +631,53 @@ def iter_video_frames(
     return frames
 
 
+def resample_frames_hires(
+    video: str | Path,
+    samples: Sequence[FrameSample],
+    *,
+    size: int = DISPLAY_SIZE,
+) -> dict[int, FrameSample]:
+    """Re-cut already-accepted frames at display resolution (AMIN step 11).
+
+    Selection and registration happen on the grid-sized pass; only the pixels
+    that become display plates are re-cropped from the source video at high
+    resolution. Sharpness gating is skipped — the frame already passed QA.
+    Frames that fail re-detection simply keep their grid-sized version.
+    """
+    cv2 = _cv2()
+    wanted = sorted({int(sample.index) for sample in samples})
+    if not wanted:
+        return {}
+    capture = cv2.VideoCapture(str(Path(video)))
+    if not capture.isOpened():
+        return {}
+    by_index = {int(sample.index): sample for sample in samples}
+    hires: dict[int, FrameSample] = {}
+    try:
+        for index in wanted:
+            capture.set(cv2.CAP_PROP_POS_FRAMES, index)
+            ok, frame = capture.read()
+            if not ok:
+                continue
+            sample = analyze_frame(
+                frame,
+                index=index,
+                time_seconds=by_index[index].time_seconds,
+                width=size,
+                height=size,
+                min_sharpness=0.0,
+            )
+            if sample is not None:
+                hires[index] = sample
+    finally:
+        capture.release()
+    print(
+        f"capture: {len(hires)}/{len(wanted)} display frames re-cut at {size}px "
+        "(grid registration unchanged)"
+    )
+    return hires
+
+
 def load_still_as_sample(
     path: str | Path,
     *,
@@ -1073,6 +1124,7 @@ def _write_plate_atlas(
     frames: Sequence[FrameSample],
     *,
     source_label: str,
+    hires: dict[int, FrameSample] | None = None,
 ) -> list[Path]:
     from aiface.plates import (
         AtlasPlate,
@@ -1093,17 +1145,20 @@ def _write_plate_atlas(
     records: list[AtlasPlate] = []
     paths: list[Path] = []
     for index, frame in enumerate(chosen):
+        # AMIN step 11: write the display pixels from the hi-res re-cut when
+        # available; selection metrics stay from the grid-sized analysis pass.
+        plate = (hires or {}).get(int(frame.index), frame)
         # Tight oral matte — wide cheek mattes were stamping smile corners onto
         # the face even when the plate was "closed".
         alpha = build_mouth_interior_matte(
-            frame.image_bgr.shape[0],
-            frame.image_bgr.shape[1],
-            frame.face,
-            frame.landmarks_meta,
+            plate.image_bgr.shape[0],
+            plate.image_bgr.shape[1],
+            plate.face,
+            plate.landmarks_meta,
             openness=max(float(frame.metrics.mouth_open), 0.04),
         )
         rel = f"plates/plate_{index:02d}.png"
-        path = write_expression_plate(destination.parent / rel, frame.image_bgr, alpha)
+        path = write_expression_plate(destination.parent / rel, plate.image_bgr, alpha)
         paths.append(path)
         records.append(
             AtlasPlate(
@@ -1229,9 +1284,14 @@ def write_capture_bundle(
     preview: bool = True,
     reject_report: RejectReport | None = None,
     atlas_frames: Sequence[FrameSample] | None = None,
+    hires: dict[int, FrameSample] | None = None,
 ) -> CaptureResult:
     """Seed from rest, write plates + expression catalog + atlas, meta, QA."""
     from aiface.seed import build_avatar_seed, write_seed_bundle
+
+    def display(frame: FrameSample) -> FrameSample:
+        """Hi-res re-cut of the same source frame, or the frame itself."""
+        return (hires or {}).get(int(frame.index), frame)
 
     if selection.rest.metrics.teeth > 0.12:
         print(
@@ -1255,21 +1315,33 @@ def write_capture_bundle(
         if rest_path.is_file():
             rest_path.unlink(missing_ok=True)
 
-    h, w = selection.smile.image_bgr.shape[:2]
+    # AMIN step 11: the .bds seeded from the grid-sized rest above; the
+    # renderer's photo is the same frame re-cut at display resolution.
+    rest_display = display(selection.rest)
+    if rest_display is not selection.rest and "portrait" in written:
+        written["portrait"] = write_portrait(
+            written["portrait"], rest_display.image_bgr
+        )
+
+    smile_display = display(selection.smile)
+    open_display = display(selection.open)
     smile_alpha = build_expression_region_matte(
-        h, w, selection.smile.face, selection.smile.landmarks_meta
+        smile_display.image_bgr.shape[0],
+        smile_display.image_bgr.shape[1],
+        smile_display.face,
+        smile_display.landmarks_meta,
     )
     open_alpha = build_expression_region_matte(
-        selection.open.image_bgr.shape[0],
-        selection.open.image_bgr.shape[1],
-        selection.open.face,
-        selection.open.landmarks_meta,
+        open_display.image_bgr.shape[0],
+        open_display.image_bgr.shape[1],
+        open_display.face,
+        open_display.landmarks_meta,
     )
     smile_path = write_expression_plate(
-        default_smile_plate_path(destination), selection.smile.image_bgr, smile_alpha
+        default_smile_plate_path(destination), smile_display.image_bgr, smile_alpha
     )
     open_path = write_expression_plate(
-        default_open_plate_path(destination), selection.open.image_bgr, open_alpha
+        default_open_plate_path(destination), open_display.image_bgr, open_alpha
     )
     written["smile"] = smile_path
     written["open"] = open_path
@@ -1281,15 +1353,16 @@ def write_capture_bundle(
             rest=selection.rest,
         )
         selection.surprise = surprise
+    surprise_display = display(surprise)
     surprise_alpha = build_upper_face_matte(
-        surprise.image_bgr.shape[0],
-        surprise.image_bgr.shape[1],
-        surprise.face,
-        surprise.landmarks_meta,
+        surprise_display.image_bgr.shape[0],
+        surprise_display.image_bgr.shape[1],
+        surprise_display.face,
+        surprise_display.landmarks_meta,
     )
     surprise_path = write_expression_plate(
         default_surprise_plate_path(destination),
-        surprise.image_bgr,
+        surprise_display.image_bgr,
         surprise_alpha,
     )
     written["surprise"] = surprise_path
@@ -1303,7 +1376,9 @@ def write_capture_bundle(
             surprise,
             *selection.talk_frames,
         ]
-    atlas_paths = _write_plate_atlas(destination, bank, source_label=source_label)
+    atlas_paths = _write_plate_atlas(
+        destination, bank, source_label=source_label, hires=hires
+    )
     written["plate_atlas"] = destination.with_name("plate_atlas.json")
     for path in atlas_paths:
         written[path.name] = path
@@ -1394,6 +1469,22 @@ def run_capture_from_video(
     )
     selection = select_expression_frames(frames)
     priors = compute_travel_priors(selection.talk_frames)
+    # Pre-pick surprise so its hi-res re-cut is available to the bundle too.
+    if selection.surprise is None:
+        selection.surprise = _pick_surprise(
+            [selection.rest, selection.smile, selection.open, *selection.talk_frames],
+            rest=selection.rest,
+        )
+    from aiface.plates import select_atlas_frames
+
+    display_targets: list[FrameSample] = [
+        selection.rest,
+        selection.smile,
+        selection.open,
+        *([selection.surprise] if selection.surprise is not None else []),
+        *select_atlas_frames(frames),
+    ]
+    hires = resample_frames_hires(video, display_targets)
     return write_capture_bundle(
         selection,
         output=output,
@@ -1402,6 +1493,7 @@ def run_capture_from_video(
         preview=preview,
         reject_report=report,
         atlas_frames=frames,
+        hires=hires,
     )
 
 
@@ -1467,6 +1559,29 @@ def run_capture_from_stills(
     if validate:
         validate_selection(selection, stills=True)
     priors = compute_travel_priors(selection.talk_frames)
+    # AMIN step 11: stills are already on disk — reload each at display res.
+    hires: dict[int, FrameSample] = {}
+    for tag_index, (still, role) in enumerate(
+        ((rest, "rest"), (smile, "smile"), (open_image, "open"))
+    ):
+        try:
+            sample = load_still_as_sample(
+                still,
+                role=role,
+                width=DISPLAY_SIZE,
+                height=DISPLAY_SIZE,
+                allow_soft=True,
+            )
+        except (CaptureError, AvatarSeedError):
+            continue
+        hires[tag_index] = FrameSample(
+            index=tag_index,
+            time_seconds=float(tag_index),
+            image_bgr=sample.image_bgr,
+            face=sample.face,
+            landmarks_meta=sample.landmarks_meta,
+            metrics=sample.metrics,
+        )
     return write_capture_bundle(
         selection,
         output=output,
@@ -1474,6 +1589,7 @@ def run_capture_from_stills(
         source_label="stills",
         preview=preview,
         reject_report=report,
+        hires=hires,
     )
 
 

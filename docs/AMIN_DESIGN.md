@@ -65,8 +65,8 @@ flowchart LR
 
 | | |
 | --- | --- |
-| **Design** | Commands are validated (speed/radius/grid). Neighbors define region connectivity (Moore / 4-connected). |
-| **Code** | `amin_loop.control` → `PaintCommand` (±4 velocity), `neighbor_offsets` |
+| **Design** | Commands are validated (speed/radius/grid). Neighbors define region connectivity (Moore / 4-connected). The integrated field velocity (ch 0/1) must reach the pixels, not stay telemetry. |
+| **Code** | `amin_loop.control` → `PaintCommand` (±4 velocity), `neighbor_offsets`; render: `avatar.frag field_displacement` × `field_warp_gain` (recipe) |
 | **Docs** | `Architecture.md` command path |
 
 ### Step 4 — Digest image/video → regions
@@ -99,8 +99,8 @@ flowchart LR
 
 | | |
 | --- | --- |
-| **Design** | Per region: mean of 32 channels, lock fraction, z-signal, cell count. Full grid stays in `.bds` (not duplicated in JSON). |
-| **Code** | `amin_loop.regions.digest_regions_from_grid` |
+| **Design** | Per region: mean of 32 channels, lock fraction, z-signal, cell count. Full grid stays in `.bds` (not duplicated in JSON). The mouth **object** is the seed's high-permeability motion flesh — "not Master-Locked" alone is not an address (background and cheeks are unlocked too, and clustering on lock state merged the mouth into a half-grid blob). |
+| **Code** | `amin_loop.regions.digest_regions_from_grid` (`identity` / `mouth_unlocked` = unlocked ∧ permeability ≥ 0.5 / `unlocked_other`); runtime feeds impulses at that object's centroid via `app._mouth_center_from_regions` — the address survives digest → play. |
 | **Store** | See `AMIN_DATA_STORE.md` |
 
 ### Step 8 — GPU display recipe (the catch)
@@ -145,6 +145,46 @@ aiface --demo --tts --world output/worlds/avatar/avatar_face.bds
 
 ---
 
+## Realism track — steps 11–14 (11, 12 + data-verification built)
+
+Steps 1–10 make the loop *correct*; they say nothing about the *fidelity* of
+the looks. Today the whole display chain is pinned to the 256² cell grid
+(`analyze_frame` normalizes to `GRID_WIDTH×GRID_HEIGHT`, plates and
+`source_face.png` are saved at 256², `app.py` uploads at grid size), so a
+1280×720 take renders through 256² textures on a 1024² window. That — plus
+plate cross-fades that mix two mouth photos at 50/50 — is the mouth blur.
+
+### Step 11 — Native-resolution display plane
+
+| | |
+| --- | --- |
+| **Design** | The field stays 256×256×32 (physics + Master Lock authority). Display textures (photo, open/smile/surprise, atlas plates) are captured and uploaded at native face-crop resolution (1024²), registered to the same face box so grid-space warp coordinates are unchanged. |
+| **Code** | **Built.** `aiface.capture.resample_frames_hires` (re-cuts selected frames at `DISPLAY_SIZE=1024` via stored `frame_index`; the deterministic face-square crop keeps registration), `write_capture_bundle(hires=...)` (hi-res portrait + plates), `aiface.app` uploads at native size — photo mipmapped 8-bit, part ids split into a grid-res NEAREST `avatar_part_ids` texture (ids in the photo's alpha forced NEAREST + no mips on both). |
+| **Rule** | Still real pixels only. Never a neural upscaler on the face (non-goal: generative RGB). |
+
+### Step 12 — Plate compositing sharpness
+
+| | |
+| --- | --- |
+| **Design** | A 50/50 blend of two mouth photos looks like motion blur. Atlas selects the **nearest** real shape (snap) instead of cross-fading pairs; open/smile drives get a sharpness curve so plates are mostly-off or mostly-on. |
+| **Code** | **Built.** `DisplayRecipe.plate_sharpness` (default 0.6) → `avatar_plate_sharpness` uniform; `avatar.frag` steepens open/smile drives (`smoothstep(0.18, 0.82)`) and biases the atlas `mix_ab` toward the nearest plate (`smoothstep(0.35, 0.65)`). |
+
+### Step 13 — Denser viseme plate bank
+
+| | |
+| --- | --- |
+| **Design** | One real keyframe per canonical viseme, chosen by landmark match from the take — every sound shows the actual video mouth, not an interpolation between 8 openness bins. |
+| **Code** | `aiface.capture` atlas selection, `aiface.plates`, viseme→plate map in `condition_maps.json`. |
+
+### Step 14 — Ground-truth playback check
+
+| | |
+| --- | --- |
+| **Design** | "Looks like the exact video" must be measured: re-render the training script, compare mouth landmarks / SSIM around the mouth against the source frames, report a score per viseme. Tune recipe knobs against the score, not by eye. |
+| **Code** | **Data half built:** `scripts/verify_world.py` scores every digested artifact PASS/WARN/FAIL — capture selection contrast (smile/open vs rest), display resolution, plate atlas coverage, Master Lock layout, mouth-object address vs seed, live-vector dataset (label spans, audio↔openness correlation), model vs baseline, condition maps, recipe schema. Playback half (re-render + landmark/SSIM) still open: `scripts/verify_playback.py`. |
+
+---
+
 ## Runtime authority (who drives what)
 
 | Signal | Authority | Must not |
@@ -153,6 +193,7 @@ aiface --demo --tts --world output/worlds/avatar/avatar_face.bds
 | Open look | Viseme openness → `open.png` overlay | Stay invisible behind gap gate |
 | Smile look | HAPPY and/or live `width_n` → `smile.png` | Zero for all NEUTRAL forever |
 | Unknown sounds | Live-vector ML cover | Rewrite identity albedo |
+| Field tissue motion | NWR velocity ch 0/1 × `field_warp_gain` (lock-gated) | Stay telemetry-only |
 | Identity cells | Master Lock ch 31 | Path A ownership seals |
 
 ---

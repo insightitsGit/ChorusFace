@@ -164,9 +164,9 @@ when `AIFACE_BRIDGE_TOKEN` is set).
 | Schema + Master Lock (NWR docs) | **Yes** |
 | AIFace constraint-only vs full physics | **Yes** |
 | What speech is allowed to write | **Yes** (velocity on unlocked cells) |
-| What actually moves pixels today | **Yes** (muscle warp + jaw; plates gated) |
+| What actually moves pixels today | **Yes** (muscle warp + jaw + NWR field velocity warp; plates on top) |
 | Who owns the mouth each frame | **Yes** — `mouth_owner` + `/probe` |
-| Channel-by-channel mouth use in product | **Partial** — velocity/intent underused |
+| Channel-by-channel mouth use in product | **Partial** — velocity (ch 0/1) now warps unlocked tissue at render (`field_warp_gain`); intent channels still sparse |
 | ML training loop on video | **Designed above; not built** |
 
 Next build choice, when you want it: **ML control predictor** trained on

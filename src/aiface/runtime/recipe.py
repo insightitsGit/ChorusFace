@@ -37,6 +37,8 @@ UNIFORM_MAP: Final[dict[str, str]] = {
     "avatar_expr_state.z": "surprise.png blend (upper face)",
     "avatar_recipe": "shader knobs: open_jaw_full, smile_open_overlap, "
     "atlas_strength, cavity_strength",
+    "avatar_field_gain": "NWR field velocity (ch 0/1) -> tissue warp gain",
+    "avatar_plate_sharpness": "plate snap: commit to nearest captured shape",
     "avatar_open_plate / avatar_smile_plate": "capture look textures",
     "avatar_plate_a / avatar_plate_b": "atlas plate pair",
     "avatar_expr_plate": "upper-face expression texture",
@@ -76,6 +78,12 @@ class DisplayRecipe:
       openness_plate_boost plate openness -> shader mouth-openness boost
       plate_open_floor     eased openness where plates start to fade in
       plate_open_full      eased openness where plates are fully on
+      field_warp_gain      grid cells of tissue travel per unit of NWR field
+                           velocity (channels 0/1) — the validated ±4 impulse
+                           result the constraint pass integrates on the GPU
+      plate_sharpness      AMIN step 12 — 0 keeps linear plate cross-fades,
+                           1 commits each drive to the nearest captured mouth
+                           shape (mid-blends of two photos read as blur)
     """
 
     open_jaw_full: float = 0.40
@@ -89,6 +97,8 @@ class DisplayRecipe:
     openness_plate_boost: float = 12.0
     plate_open_floor: float = 0.04
     plate_open_full: float = 0.32
+    field_warp_gain: float = 0.35
+    plate_sharpness: float = 0.60
 
     @property
     def shader_knobs(self) -> tuple[float, float, float, float]:

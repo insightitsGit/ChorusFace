@@ -75,3 +75,41 @@ def test_shader_reads_recipe_uniform() -> None:
     for component in ("avatar_recipe.x", "avatar_recipe.y",
                       "avatar_recipe.z", "avatar_recipe.w"):
         assert component in source, f"shader must use {component}"
+
+
+def test_shader_warps_from_nwr_field() -> None:
+    """AMIN steps 1-3: the GPU field's 2D velocity vectors must move pixels."""
+    source = SHADER.read_text(encoding="utf-8")
+    assert "uniform float avatar_field_gain;" in source
+    assert "field_displacement" in source
+    # The field term must be part of the visible deformation, not debug-only.
+    total = source.split("vec2 total_displacement", 1)[1].split("}", 1)[0]
+    assert "field_displacement" in total
+    assert "muscles + jaw + field" in total
+    assert DisplayRecipe().field_warp_gain > 0.0
+
+
+def test_shader_snaps_plates_with_recipe_knob() -> None:
+    """AMIN step 12: the plate-snap knob is a real uniform used by the blend."""
+    source = SHADER.read_text(encoding="utf-8")
+    assert "uniform float avatar_plate_sharpness;" in source
+    assert source.count("avatar_plate_sharpness") >= 3, (
+        "sharpness must steepen the drive curves AND the atlas mix"
+    )
+    recipe = DisplayRecipe()
+    assert 0.0 < recipe.plate_sharpness <= 1.0
+    # The knob rides the same serialized contract as every other knob.
+    restored = DisplayRecipe.from_payload(
+        DisplayRecipe(plate_sharpness=0.9).to_payload()
+    )
+    assert restored.plate_sharpness == 0.9
+
+
+def test_capture_exposes_display_resolution() -> None:
+    """AMIN step 11: display plates are re-cut above the 256² field grid."""
+    from aiface.capture import DISPLAY_SIZE, resample_frames_hires
+    from aiface.runtime.bds import GRID_HEIGHT
+
+    assert DISPLAY_SIZE >= 4 * GRID_HEIGHT
+    # No frames → no work, no crash (worlds captured before step 11 keep 256).
+    assert resample_frames_hires("missing.mp4", []) == {}

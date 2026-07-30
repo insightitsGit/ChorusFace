@@ -82,13 +82,21 @@ def digest_regions_from_grid(
         raise ValueError(f"expected HxWx32 grid, got {grid.shape}")
     opacity = grid[..., 11]
     hard = grid[..., 24]
+    permeability = grid[..., 25]
     lock = grid[..., HUMAN_LOCK_CHANNEL]
     # Soft tissue / visible face matter (not empty void).
     matter = (opacity > 0.05) | (hard > 0.05)
-    # Split by Master Lock so identity and unlocked mouth are distinct objects.
+    unlocked = lock < 0.5
+    # The seed marks the deliberate motion flesh (mouth cavity + lips) with
+    # high permeability and locks identity at 0. "Not locked" alone is NOT an
+    # address — background and cheeks are unlocked too, so clustering on lock
+    # state merged the mouth into a half-grid blob and the object address was
+    # lost. Permeability is the fingerprint of the cells impulses may feed.
+    mouth_motion = unlocked & (permeability >= 0.5)
     masks = (
-        ("identity", matter & (lock >= 0.5)),
-        ("mouth_unlocked", matter & (lock < 0.5)),
+        ("identity", matter & ~unlocked),
+        ("mouth_unlocked", mouth_motion),
+        ("unlocked_other", matter & unlocked & ~mouth_motion),
     )
     regions: list[Region] = []
     region_id = 0

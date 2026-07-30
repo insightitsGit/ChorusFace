@@ -29,8 +29,10 @@ uniform vec2 viewport_size;
 // face above the chat panel without stretching the photograph.
 uniform vec4 avatar_frame;
 
-// RGB = photograph, A = part-id / PART_SCALE
+// RGB = photograph at display resolution (mipmapped; AMIN step 11).
 uniform sampler2D avatar_base_color;
+// R = part-id / PART_SCALE at grid resolution (NEAREST — discrete labels).
+uniform sampler2D avatar_part_ids;
 // R = mobility, G = mouth-line side, B = mouth slit, A = eye aperture
 uniform sampler2D avatar_tissue;
 // Real expression plates from aiface-capture (same UV as source_face).
@@ -78,6 +80,11 @@ uniform int avatar_deform;
 // x = jaw angle at full open.png drive, y = smile suppression under open plate,
 // z = atlas plate strength, w = cavity fill strength.
 uniform vec4 avatar_recipe;
+// Grid cells of tissue travel per unit of NWR field velocity (channels 0/1).
+uniform float avatar_field_gain;
+// AMIN step 12 — plate snap. 0 keeps linear cross-fades; 1 commits each drive
+// to the nearest captured mouth shape so mid-blends stop reading as blur.
+uniform float avatar_plate_sharpness;
 
 in vec2 uv;
 layout(location = 0) out vec4 fragment_color;
@@ -137,7 +144,7 @@ vec3 photo_at(vec2 grid_position) {
 }
 
 int part_at(vec2 grid_position) {
-    return int(round(texture(avatar_base_color, to_uv(grid_position)).a * PART_SCALE));
+    return int(round(texture(avatar_part_ids, to_uv(grid_position)).r * PART_SCALE));
 }
 
 // Wendland C2 kernel. Unlike a Gaussian it reaches exactly zero at q = 1 with a
@@ -215,12 +222,41 @@ vec2 jaw_displacement(vec2 grid_position, float side, float slit) {
     return vec2(0.0, -travel * sin(angle) * lip_gate(-1.0, side, slit) * lateral);
 }
 
-// Articulation is muscles + jaw only. MouthPose lip bias was removed: it opened
-// a billboard hole and fought the photograph warp.
+// NWR field warp (AMIN steps 1–3): speech proposes ±4 velocity impulses, the
+// constraint pass validates them and integrates the result into channels 0/1
+// of every unlocked cell. Sampling that "no rules" 2D vector back into the
+// tissue warp closes the loop — the GPU field itself moves pixels instead of
+// being telemetry-only next to the analytic muscle/jaw model.
+vec2 field_velocity(ivec2 cell) {
+    float locked = step(0.5, state_at(cell, HUMAN_LOCK_CHANNEL));
+    return vec2(state_at(cell, 0), state_at(cell, 1)) * (1.0 - locked);
+}
+
+// Bilinear so the per-cell vector stays smooth enough for the fixed-point
+// inverse warp to converge.
+vec2 field_displacement(vec2 grid_position) {
+    if (avatar_field_gain <= 0.0) {
+        return vec2(0.0);
+    }
+    vec2 base = grid_position - vec2(0.5);
+    ivec2 cell = ivec2(floor(base));
+    vec2 f = fract(base);
+    vec2 lower = mix(field_velocity(cell), field_velocity(cell + ivec2(1, 0)), f.x);
+    vec2 upper = mix(
+        field_velocity(cell + ivec2(0, 1)),
+        field_velocity(cell + ivec2(1, 1)),
+        f.x
+    );
+    return mix(lower, upper, f.y) * avatar_field_gain;
+}
+
+// Articulation is muscles + jaw + the NWR field. MouthPose lip bias was
+// removed: it opened a billboard hole and fought the photograph warp.
 vec2 total_displacement(vec2 grid_position) {
     vec4 tissue = tissue_at(grid_position);
     vec2 muscles = muscle_displacement(grid_position, tissue.g, tissue.b) * tissue.r;
     vec2 jaw = jaw_displacement(grid_position, tissue.g, tissue.b);
+    vec2 field = field_displacement(grid_position) * tissue.r;
     // BUGFIX: never damp jaw. An older path multiplied the whole mouth
     // displacement by ~0.18 whenever plate memory was on, which left the lips
     // looking zipped while cheeks still twitched.
@@ -237,7 +273,7 @@ vec2 total_displacement(vec2 grid_position) {
         distance(grid_position, avatar_mouth_line.xy)
     );
     muscles *= mix(1.0, 0.55, smile_damp * mouth_prox);
-    return muscles + jaw;
+    return muscles + jaw + field;
 }
 
 // Sampling the tissue maps at the candidate source rather than at the fragment
@@ -258,9 +294,12 @@ vec2 mouth_gap(float column_x) {
     vec4 tissue = tissue_at(at_line);
     float mobility = tissue.r;
     float slit = tissue.b;
-    float upper = muscle_displacement(at_line, 1.0, slit).y * mobility;
+    // Field warp shifts both lip edges together so the cavity tracks the
+    // NWR-driven tissue instead of lagging behind it.
+    float field_y = field_displacement(at_line).y * mobility;
+    float upper = muscle_displacement(at_line, 1.0, slit).y * mobility + field_y;
     float lower = muscle_displacement(at_line, 0.0, slit).y * mobility
-        + jaw_displacement(at_line, 0.0, slit).y;
+        + jaw_displacement(at_line, 0.0, slit).y + field_y;
     return vec2(avatar_mouth_line.y + lower, avatar_mouth_line.y + upper);
 }
 
@@ -413,6 +452,11 @@ void main() {
                 clamp(avatar_jaw.z / max(avatar_recipe.x, 1e-3), 0.0, 1.0)
             );
             float smile_drive = clamp(avatar_mouth_pose.w, 0.0, 1.0);
+            // Step 12: steepen the drive curves — a 50/50 ghost of two photos
+            // reads as motion blur, so commit toward one plate sooner.
+            float snap = clamp(avatar_plate_sharpness, 0.0, 1.0);
+            open_drive = mix(open_drive, smoothstep(0.18, 0.82, open_drive), snap);
+            smile_drive = mix(smile_drive, smoothstep(0.18, 0.82, smile_drive), snap);
             float open_w = open_drive * open_s.a;
             float smile_w = smile_drive * smile_s.a * (1.0 - open_w * avatar_recipe.y);
             color = mix(color, smile_s.rgb, smile_w);
@@ -440,6 +484,13 @@ void main() {
             vec4 pa = texture(avatar_plate_a, plate_uv);
             vec4 pb = texture(avatar_plate_b, plate_uv);
             float mix_ab = clamp(avatar_plate_blend.x, 0.0, 1.0);
+            // Step 12: bias toward the nearest real captured shape instead of
+            // an even cross-fade of two different mouths.
+            mix_ab = mix(
+                mix_ab,
+                smoothstep(0.35, 0.65, mix_ab),
+                clamp(avatar_plate_sharpness, 0.0, 1.0)
+            );
             vec3 plate_rgb = mix(pa.rgb, pb.rgb, mix_ab);
             // Keep atlas lighter than capture open/smile so it cannot hide them.
             float plate_a = max(pa.a, pb.a)
