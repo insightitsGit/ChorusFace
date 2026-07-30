@@ -1,0 +1,116 @@
+#version 430
+
+//#prelude
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly restrict buffer SourceWorld {
+    Cell cells[];
+} source_world;
+
+layout(std430, binding = 1) writeonly restrict buffer DestinationWorld {
+    Cell cells[];
+} destination_world;
+
+uniform uvec2 grid_size;
+
+const float MATERIAL_BLEND = 0.025;
+const float INTENT_BLEND = 0.015;
+const float INTENT_DECAY = 0.9995;
+
+uint cell_index(uvec2 position) {
+    return position.y * grid_size.x + position.x;
+}
+
+void main() {
+    uvec2 position = gl_GlobalInvocationID.xy;
+    if (position.x >= grid_size.x || position.y >= grid_size.y) {
+        return;
+    }
+
+    uint index = cell_index(position);
+    float state[CHANNELS];
+    for (int channel = 0; channel < CHANNELS; ++channel) {
+        state[channel] = source_world.cells[index].value[channel];
+    }
+
+    // Keep authored/video structural boundaries stable.
+    if (!is_locked(state) && state[24] < 0.5) {
+        float accumulated[24];
+        for (int channel = 8; channel < 24; ++channel) {
+            accumulated[channel] = state[channel];
+        }
+        float total_weight = 1.0;
+
+        float self_norm_squared = 0.0;
+        for (int channel = 8; channel < 24; ++channel) {
+            self_norm_squared += state[channel] * state[channel];
+        }
+        float self_norm = sqrt(self_norm_squared);
+
+        for (int offset_y = -1; offset_y <= 1; ++offset_y) {
+            for (int offset_x = -1; offset_x <= 1; ++offset_x) {
+                if (offset_x == 0 && offset_y == 0) {
+                    continue;
+                }
+                ivec2 neighbor_position = ivec2(position) + ivec2(offset_x, offset_y);
+                if (
+                    neighbor_position.x < 0
+                    || neighbor_position.y < 0
+                    || neighbor_position.x >= int(grid_size.x)
+                    || neighbor_position.y >= int(grid_size.y)
+                ) {
+                    continue;
+                }
+
+                uint neighbor = cell_index(uvec2(neighbor_position));
+                if (
+                    is_locked(source_world.cells[neighbor].value)
+                    || source_world.cells[neighbor].value[24] >= 0.5
+                ) {
+                    continue;
+                }
+                float dot_product = 0.0;
+                float neighbor_norm_squared = 0.0;
+                for (int channel = 8; channel < 24; ++channel) {
+                    float neighbor_value = source_world.cells[neighbor].value[channel];
+                    dot_product += state[channel] * neighbor_value;
+                    neighbor_norm_squared += neighbor_value * neighbor_value;
+                }
+                float neighbor_norm = sqrt(neighbor_norm_squared);
+                if (neighbor_norm < 1e-6) {
+                    continue;
+                }
+                float magnitude_scale = min(neighbor_norm * 0.25, 1.0);
+                float weight;
+                if (self_norm < 1e-6) {
+                    weight = 0.2 * magnitude_scale;
+                } else {
+                    float similarity = dot_product / max(self_norm * neighbor_norm, 1e-6);
+                    weight = max(similarity, 0.0) * magnitude_scale;
+                }
+                if (weight <= 0.0) {
+                    continue;
+                }
+                for (int channel = 8; channel < 24; ++channel) {
+                    accumulated[channel] +=
+                        source_world.cells[neighbor].value[channel] * weight;
+                }
+                total_weight += weight;
+            }
+        }
+
+        for (int channel = 8; channel < 24; ++channel) {
+            float mean = accumulated[channel] / total_weight;
+            float blend = channel < 16 ? MATERIAL_BLEND : INTENT_BLEND;
+            state[channel] = mix(state[channel], mean, blend);
+        }
+        for (int channel = 16; channel < 24; ++channel) {
+            state[channel] *= INTENT_DECAY;
+        }
+    }
+
+    for (int channel = 0; channel < CHANNELS; ++channel) {
+        destination_world.cells[index].value[channel] = state[channel];
+    }
+}

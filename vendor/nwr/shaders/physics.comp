@@ -1,0 +1,222 @@
+#version 430
+
+//#prelude
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly restrict buffer SourceWorld {
+    Cell cells[];
+} source_world;
+
+layout(std430, binding = 1) writeonly restrict buffer DestinationWorld {
+    Cell cells[];
+} destination_world;
+
+uniform uvec2 grid_size;
+
+const float VELOCITY_BLEND = 0.04;
+const float KINEMATIC_BLEND = 0.02;
+const float VELOCITY_DAMPING = 0.998;
+
+// Cells travelled per tick by a unit velocity. Kept well below 1 so the
+// backward trace always lands inside the eight-neighbour stencil.
+const float ADVECTION_SCALE = 0.5;
+// Fraction of the wall-normal speed retained when motion bounces. 1.0 would be
+// perfectly elastic; the deficit is the collision loss.
+const float RESTITUTION = 0.85;
+// Channels 24..31 carry rules and authority, so barriers never move.
+const int TRANSPORTED = 24;
+
+uint cell_index(uvec2 position) {
+    return position.y * grid_size.x + position.x;
+}
+
+// Human locks, video-derived hard surfaces, and the world edge are all walls.
+bool is_barrier(ivec2 position) {
+    if (
+        position.x < 0
+        || position.y < 0
+        || position.x >= int(grid_size.x)
+        || position.y >= int(grid_size.y)
+    ) {
+        return true;
+    }
+    uint neighbor = cell_index(uvec2(position));
+    return is_locked(source_world.cells[neighbor].value)
+        || source_world.cells[neighbor].value[24] >= 0.5;
+}
+
+// Outward surface normal, from the gradient of the barrier mask. Diagonal
+// neighbours contribute less so a flat wall yields an axis-aligned normal.
+vec2 barrier_normal(ivec2 position) {
+    vec2 gradient = vec2(0.0);
+    for (int offset_y = -1; offset_y <= 1; ++offset_y) {
+        for (int offset_x = -1; offset_x <= 1; ++offset_x) {
+            if (offset_x == 0 && offset_y == 0) {
+                continue;
+            }
+            if (!is_barrier(position + ivec2(offset_x, offset_y))) {
+                continue;
+            }
+            vec2 offset = vec2(float(offset_x), float(offset_y));
+            gradient += offset / dot(offset, offset);
+        }
+    }
+    if (dot(gradient, gradient) < 1e-12) {
+        return vec2(0.0);
+    }
+    return -normalize(gradient);
+}
+
+// Semi-Lagrangian transport: pull the cell's contents from where they were one
+// tick ago. Corners inside a barrier are dropped so nothing crosses a wall.
+void advect(uvec2 position, inout float state[CHANNELS]) {
+    vec2 velocity = vec2(state[0], state[1]);
+    if (dot(velocity, velocity) < 1e-12) {
+        return;
+    }
+    vec2 origin = vec2(position) + vec2(0.5) - velocity * ADVECTION_SCALE;
+    vec2 base = floor(origin - vec2(0.5));
+    vec2 fraction = origin - vec2(0.5) - base;
+
+    float sampled[TRANSPORTED];
+    for (int channel = 0; channel < TRANSPORTED; ++channel) {
+        sampled[channel] = 0.0;
+    }
+    float total_weight = 0.0;
+    for (int corner_y = 0; corner_y <= 1; ++corner_y) {
+        for (int corner_x = 0; corner_x <= 1; ++corner_x) {
+            float weight =
+                (corner_x == 0 ? 1.0 - fraction.x : fraction.x)
+                * (corner_y == 0 ? 1.0 - fraction.y : fraction.y);
+            ivec2 corner = ivec2(base) + ivec2(corner_x, corner_y);
+            if (weight <= 0.0 || is_barrier(corner)) {
+                continue;
+            }
+            uint neighbor = cell_index(uvec2(corner));
+            for (int channel = 0; channel < TRANSPORTED; ++channel) {
+                sampled[channel] +=
+                    source_world.cells[neighbor].value[channel] * weight;
+            }
+            total_weight += weight;
+        }
+    }
+    if (total_weight < 1e-6) {
+        return;
+    }
+    for (int channel = 0; channel < TRANSPORTED; ++channel) {
+        state[channel] = sampled[channel] / total_weight;
+    }
+}
+
+// Specular reflection of the velocity field off a wall. This is the boundary
+// condition that makes motion visibly bounce instead of stalling.
+void reflect(uvec2 position, inout float state[CHANNELS]) {
+    vec2 normal = barrier_normal(ivec2(position));
+    if (dot(normal, normal) < 0.5) {
+        return;
+    }
+    vec2 velocity = vec2(state[0], state[1]);
+    float approach = dot(velocity, normal);
+    if (approach >= 0.0) {
+        return;
+    }
+    vec2 reflected = velocity - (1.0 + RESTITUTION) * approach * normal;
+    state[0] = reflected.x;
+    state[1] = reflected.y;
+}
+
+float coupling_weight(float state[CHANNELS], uint neighbor, float self_norm) {
+    float dot_product = 0.0;
+    float neighbor_norm_squared = 0.0;
+    for (int channel = 8; channel < 24; ++channel) {
+        float neighbor_value = source_world.cells[neighbor].value[channel];
+        dot_product += state[channel] * neighbor_value;
+        neighbor_norm_squared += neighbor_value * neighbor_value;
+    }
+    float neighbor_norm = sqrt(neighbor_norm_squared);
+    if (neighbor_norm < 1e-6) {
+        return 0.0;
+    }
+    float magnitude_scale = min(neighbor_norm * 0.25, 1.0);
+    if (self_norm < 1e-6) {
+        return 0.2 * magnitude_scale;
+    }
+    float similarity = dot_product / max(self_norm * neighbor_norm, 1e-6);
+    return max(similarity, 0.0) * magnitude_scale;
+}
+
+void main() {
+    uvec2 position = gl_GlobalInvocationID.xy;
+    if (position.x >= grid_size.x || position.y >= grid_size.y) {
+        return;
+    }
+
+    uint index = cell_index(position);
+    float state[CHANNELS];
+    for (int channel = 0; channel < CHANNELS; ++channel) {
+        state[channel] = source_world.cells[index].value[channel];
+    }
+
+    // Human locks and video-derived hard surfaces are immovable barriers.
+    if (!is_locked(state) && state[24] < 0.5) {
+        advect(position, state);
+
+        float accumulated[8];
+        for (int channel = 0; channel < 8; ++channel) {
+            accumulated[channel] = state[channel];
+        }
+        float total_weight = 1.0;
+
+        float self_norm_squared = 0.0;
+        for (int channel = 8; channel < 24; ++channel) {
+            self_norm_squared += state[channel] * state[channel];
+        }
+        float self_norm = sqrt(self_norm_squared);
+
+        for (int offset_y = -1; offset_y <= 1; ++offset_y) {
+            for (int offset_x = -1; offset_x <= 1; ++offset_x) {
+                if (offset_x == 0 && offset_y == 0) {
+                    continue;
+                }
+                ivec2 neighbor_position = ivec2(position) + ivec2(offset_x, offset_y);
+                if (
+                    neighbor_position.x < 0
+                    || neighbor_position.y < 0
+                    || neighbor_position.x >= int(grid_size.x)
+                    || neighbor_position.y >= int(grid_size.y)
+                ) {
+                    continue;
+                }
+                if (is_barrier(neighbor_position)) {
+                    continue;
+                }
+                uint neighbor = cell_index(uvec2(neighbor_position));
+                float weight = coupling_weight(state, neighbor, self_norm);
+                if (weight <= 0.0) {
+                    continue;
+                }
+                for (int channel = 0; channel < 8; ++channel) {
+                    accumulated[channel] +=
+                        source_world.cells[neighbor].value[channel] * weight;
+                }
+                total_weight += weight;
+            }
+        }
+
+        for (int channel = 0; channel < 8; ++channel) {
+            float mean = accumulated[channel] / total_weight;
+            float blend = channel < 3 ? VELOCITY_BLEND : KINEMATIC_BLEND;
+            state[channel] = mix(state[channel], mean, blend);
+        }
+        for (int channel = 0; channel < 3; ++channel) {
+            state[channel] *= VELOCITY_DAMPING;
+        }
+
+        reflect(position, state);
+    }
+
+    for (int channel = 0; channel < CHANNELS; ++channel) {
+        destination_world.cells[index].value[channel] = state[channel];
+    }
+}
