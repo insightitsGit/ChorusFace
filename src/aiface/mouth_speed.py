@@ -1,4 +1,4 @@
-"""User-selectable mouth motion speed (60 Hz easing / hold presets)."""
+"""User-selectable mouth motion speed + realtime hold scale (0..1)."""
 
 from __future__ import annotations
 
@@ -23,6 +23,31 @@ class MouthSpeedPreset:
     jaw_mass: float
     jaw_damping: float
     jaw_elasticity: float
+    # 0..1 slider position that drives GPU layer dwell / bridge.
+    hold_scale: float
+
+
+# Realtime "Mouth hold" slider → layer timeline seconds.
+HOLD_SCALE_DEFAULT: Final = 0.45
+_DWELL_LO: Final = 0.04
+_DWELL_HI: Final = 0.42
+_BRIDGE_LO: Final = 0.08
+_BRIDGE_HI: Final = 0.42
+_MUSCLE_LO: Final = 0.16
+_MUSCLE_HI: Final = 0.58
+
+
+def clamp_hold_scale(scale: float) -> float:
+    return max(0.0, min(1.0, float(scale)))
+
+
+def hold_scale_to_params(scale: float) -> tuple[float, float, float]:
+    """Map slider 0..1 → (layer_dwell_s, bridge_gap_s, muscle_hold_s)."""
+    s = clamp_hold_scale(scale)
+    dwell = _DWELL_LO + s * (_DWELL_HI - _DWELL_LO)
+    bridge = _BRIDGE_LO + s * (_BRIDGE_HI - _BRIDGE_LO)
+    muscle = _MUSCLE_LO + s * (_MUSCLE_HI - _MUSCLE_LO)
+    return dwell, bridge, muscle
 
 
 MOUTH_SPEED_PRESETS: Final[tuple[MouthSpeedPreset, ...]] = (
@@ -36,6 +61,7 @@ MOUTH_SPEED_PRESETS: Final[tuple[MouthSpeedPreset, ...]] = (
         jaw_mass=1.45,
         jaw_damping=6.8,
         jaw_elasticity=16.0,
+        hold_scale=0.78,
     ),
     MouthSpeedPreset(
         key="normal",
@@ -48,6 +74,7 @@ MOUTH_SPEED_PRESETS: Final[tuple[MouthSpeedPreset, ...]] = (
         jaw_mass=1.20,
         jaw_damping=6.0,
         jaw_elasticity=24.0,
+        hold_scale=HOLD_SCALE_DEFAULT,
     ),
     MouthSpeedPreset(
         key="fast",
@@ -59,6 +86,7 @@ MOUTH_SPEED_PRESETS: Final[tuple[MouthSpeedPreset, ...]] = (
         jaw_mass=0.88,
         jaw_damping=4.8,
         jaw_elasticity=36.0,
+        hold_scale=0.18,
     ),
 )
 
@@ -85,8 +113,11 @@ def next_preset_key(key: str) -> str:
 
 __all__ = [
     "DEFAULT_MOUTH_SPEED",
+    "HOLD_SCALE_DEFAULT",
     "MOUTH_SPEED_PRESETS",
     "MouthSpeedPreset",
+    "clamp_hold_scale",
+    "hold_scale_to_params",
     "next_preset_key",
     "preset_by_key",
 ]

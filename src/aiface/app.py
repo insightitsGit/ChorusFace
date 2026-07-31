@@ -72,7 +72,10 @@ from aiface.mouth_owner import (
 from aiface.live_vector import LiveVectorDriver
 from aiface.mouth_speed import (
     DEFAULT_MOUTH_SPEED,
+    HOLD_SCALE_DEFAULT,
     MOUTH_SPEED_PRESETS,
+    clamp_hold_scale,
+    hold_scale_to_params,
     next_preset_key,
     preset_by_key,
 )
@@ -103,6 +106,7 @@ from aiface.skinning import (
     pack_muscle_uniforms,
     save_tissue_maps,
 )
+from aiface.mouth_timeline import LayerCommand, MouthLayerTimeline
 from aiface.speech import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
@@ -463,6 +467,17 @@ class AvatarFaceApp(FieldRuntime):
         self._plate_openness_current = 0.0
         self._plate_pair = (0, 0)
         self._held_speech_viseme = "REST"
+        self._mouth_timeline = MouthLayerTimeline()
+        self._layer_command = LayerCommand(
+            phoneme="REST",
+            atlas_viseme="REST",
+            open_amount=0.0,
+            smile_amount=0.0,
+            jaw_target=0.0,
+            plate_openness=0.0,
+            source="timeline-rest",
+            active_until=0.0,
+        )
         self._expression_catalog = None
         self._expr_eye_widen = 0.0
         self._expr_brow_raise = 0.0
@@ -548,6 +563,8 @@ class AvatarFaceApp(FieldRuntime):
         self._panel_fonts: tuple[object, object] | None = None
         self._ui_hits: dict[str, tuple[int, int, int, int]] = {}
         self._mouth_menu_open = False
+        self._mouth_hold_dragging = False
+        self._mouth_hold_scale = float(HOLD_SCALE_DEFAULT)
         self._mouth_speed = preset_by_key(DEFAULT_MOUTH_SPEED)
         self._apply_mouth_speed_preset(self._mouth_speed, announce=False)
         self._relayout_frame()
@@ -558,8 +575,8 @@ class AvatarFaceApp(FieldRuntime):
                 self.wnd.exit_key = None
             self._chatbox.add(
                 SPEAKER_SYSTEM,
-                "Type and press Enter. Mouth speed: use the Mouth dropdown "
-                "(or press M when not typing).",
+                "Type and press Enter. Drag Hold slider to keep teeth/plates "
+                "on longer; Mouth dropdown or M cycles Slow/Normal/Fast.",
             )
 
         self._capture_directory = getattr(self.argv, "capture", None)
@@ -1052,7 +1069,7 @@ class AvatarFaceApp(FieldRuntime):
         )
 
     def _sync_plate_blend_from_phoneme(self) -> None:
-        """Drive plate memory from the active viseme (hard snap when sharp)."""
+        """Upload atlas pair + open amount from the viseme-clock LayerCommand."""
         atlas = self._plate_atlas
         if atlas is None or not self._atlas_textures:
             self._plate_blend = (0.0, 0.0)
@@ -1061,50 +1078,31 @@ class AvatarFaceApp(FieldRuntime):
             self._plate_pair = (0, 0)
             self._held_speech_viseme = "REST"
             return
-        from aiface.mouth_owner import (
-            CLOSED_VISEMES,
-            hold_speech_viseme,
-            plate_amount_for_openness,
-        )
         from aiface.plates import HARD_SNAP_THRESHOLD
-        from aiface.speech import canonical_viseme
 
-        raw = canonical_viseme(self._render_state.last_phoneme or "REST")
-        phoneme, self._held_speech_viseme = hold_speech_viseme(
-            raw,
-            getattr(self, "_held_speech_viseme", "REST"),
-            open_n=float(self._plate_openness_current),
-            jaw_n=float(getattr(self, "_ml_jaw", 0.0)),
-        )
+        cmd = self._layer_command
+        phoneme = cmd.atlas_viseme
+        self._held_speech_viseme = phoneme
         hard = float(self._display_recipe.plate_sharpness) >= HARD_SNAP_THRESHOLD
         if hard:
-            # Step 12/13: one real plate per viseme — never mid-blend ghosts.
             ia, ib, mix = atlas.pair_for_viseme(phoneme, hard_snap=True)
         else:
             ia, ib, mix = atlas.pair_for_openness(
-                self._plate_openness_current, hard_snap=False
+                float(cmd.plate_openness), hard_snap=False
             )
         ia = max(0, min(ia, len(self._atlas_textures) - 1))
         ib = max(0, min(ib, len(self._atlas_textures) - 1))
         self._plate_pair = (ia, ib)
-        if phoneme in CLOSED_VISEMES or raw in CLOSED_VISEMES:
-            # Tight lips: atlas may show PP, but open.png amount must be zero.
-            amount = 0.0
-            self._plate_openness_current = 0.0
-        else:
-            amount = plate_amount_for_openness(
-                self._plate_openness_current,
-                floor=self._display_recipe.plate_open_floor,
-                full=self._display_recipe.plate_open_full,
-                hard_snap=hard,
-            )
+        amount = float(cmd.open_amount)
+        self._plate_openness_current = float(cmd.plate_openness)
         self._plate_blend = (float(mix), amount)
         self._plate_blend_current = (float(mix), amount)
 
     def _update_open_close_ml(self, frame_time: float) -> None:
-        """LiveVectorDriver → jaw + plate openness on the existing GPU recipe."""
-        from aiface.speech import canonical_viseme
+        """Viseme timeline owns layers; LiveVector is width/cover only."""
+        del frame_time  # Layer visibility snaps; no openness ease clock.
         from aiface.biomechanics.intent import PHONEME_JAW_TARGET
+        from aiface.plates import HARD_SNAP_THRESHOLD
 
         envelope = self._open_close_envelope
         start = self._open_close_start
@@ -1119,115 +1117,41 @@ class AvatarFaceApp(FieldRuntime):
         elif not self._live_vector.has_history:
             self._live_vector.push_rms(0.0)
 
-        from aiface.mouth_owner import (
-            CLOSED_VISEMES,
-            mute_smile_under_open,
-            snap_smile_drive,
-        )
-        from aiface.plates import HARD_SNAP_THRESHOLD
-
-        phoneme = canonical_viseme(self._render_state.last_phoneme or "REST")
-        # Known words come from the digested condition map when present
-        # (AMIN Step 6); the built-in table is the per-viseme fallback.
+        # Resolve ML cover against the *timeline* phoneme (same-frame fire).
+        phoneme = self._mouth_timeline.phoneme
         phoneme_jaw = float(
             self._condition_jaw.get(
                 phoneme, PHONEME_JAW_TARGET.get(phoneme, 0.1)
             )
         )
-        speaking = bool(self._render_state.speaking) or bool(self._visemes)
         controls = self._live_vector.resolve(
             phoneme=phoneme, phoneme_jaw=phoneme_jaw
         )
-        # Viseme table owns jaw timing (words). Capture open.png is driven by
-        # plate openness — must follow the word, not a suppressed ML fraction.
-        atlas_open = 0.0
-        if self._plate_atlas is not None:
-            atlas_open = float(self._plate_atlas.target_openness(phoneme))
-        tight_lips = phoneme in CLOSED_VISEMES
-        if speaking and not tight_lips and phoneme != "REST":
-            jaw_target = float(phoneme_jaw)
-            target = max(float(phoneme_jaw), atlas_open, float(controls.openness_n))
-            self._open_close_source = "viseme"
-        elif speaking and tight_lips:
-            # Lip-tighten (hmm / PP / MM): clear open timeline immediately.
-            jaw_target = 0.0
-            target = 0.0
-            self._open_close_source = "viseme-closed"
-        elif speaking:
-            jaw_target = 0.0
-            target = min(
-                max(float(phoneme_jaw), atlas_open),
-                float(self._display_recipe.closed_openness_cap),
-            )
-            self._open_close_source = "viseme-closed"
-        else:
-            jaw_target = 0.0
-            target = 0.0
-            self._open_close_source = "rest"
-
-        self._ml_openness = target
-        self._ml_jaw = jaw_target
-        self._ml_width = float(controls.width_n)
-        self._ml_plate_gate = float(controls.plate_gate)
-        # Smile look from capture: HAPPY emotion or live width (video smile).
         recipe = self._display_recipe
         hard = float(recipe.plate_sharpness) >= HARD_SNAP_THRESHOLD
-        mood = (self._telemetry.last_emotion or "NEUTRAL").upper()
-        smile_amt = 0.0
-        if tight_lips:
-            # Tight lips own the mouth — no smile veil over closing PP/MM.
-            smile_amt = 0.0
-        else:
-            # Smile plate only from real width (and optional HAPPY floor).
-            # A non-zero floor with no width parked smile.png's huge soft matte
-            # as the dark blur rectangle over closed lips.
-            width_smile = max(
-                0.0,
-                min(
-                    1.0,
-                    (float(controls.width_n) - float(recipe.smile_width_start))
-                    / max(float(recipe.smile_width_span), 1e-6),
-                ),
-            )
-            floor = float(recipe.smile_happy_floor) if mood == "HAPPY" else 0.0
-            smile_amt = max(floor, width_smile)
-        # Sticky HAPPY floor at mid-open washes smile+open into a soft veil.
-        open_for_mute = max(
-            float(self._plate_openness_current),
-            float(target),
-            float(jaw_target),
+        upcoming_due, upcoming_phoneme = self._upcoming_viseme()
+        cmd = self._mouth_timeline.tick(
+            now,
+            width_n=float(controls.width_n),
+            jaw_table=self._condition_jaw,
+            smile_width_start=float(recipe.smile_width_start),
+            smile_width_span=float(recipe.smile_width_span),
+            smile_happy_floor=float(recipe.smile_happy_floor),
+            hard_snap=hard,
+            upcoming_due_at=upcoming_due,
+            upcoming_phoneme=upcoming_phoneme,
         )
-        smile_amt = mute_smile_under_open(smile_amt, open_for_mute)
-        # Closed mouth + smile.png = the dark soft rectangle in screenshots.
-        # That plate's matte is a wide lower-face ellipse; never park it on REST.
-        closed_mouth = (
-            phoneme in {"REST", *CLOSED_VISEMES}
-            and float(self._plate_openness_current) < 0.10
-            and float(target) < 0.10
-            and float(jaw_target) < 0.08
-        )
-        if closed_mouth:
-            smile_amt = 0.0
-        self._ml_smile = snap_smile_drive(smile_amt, hard_snap=hard)
-
-        if tight_lips:
-            # Do not ease open.png out — snap off so the layer cannot linger.
-            self._plate_openness_current = 0.0
-            self._held_speech_viseme = phoneme
-        else:
-            attack = float(getattr(self, "_plate_ease_rate", 7.0))
-            # Hard snap: release almost as fast as attack so mid-amount veils die.
-            release_scale = 0.85 if hard else float(
-                getattr(self, "_plate_release_scale", 0.35)
-            )
-            release = attack * release_scale
-            rate = attack if target >= self._plate_openness_current else release
-            amount = 1.0 - math.exp(-max(frame_time, 0.0) * rate)
-            self._plate_openness_current += (
-                target - self._plate_openness_current
-            ) * amount
-
-        self._biomech.jaw.set_speech_target(jaw_target)
+        self._layer_command = cmd
+        self._ml_openness = float(cmd.plate_openness)
+        self._ml_jaw = float(cmd.jaw_target)
+        self._ml_width = float(controls.width_n)
+        self._ml_plate_gate = float(controls.plate_gate)
+        self._ml_smile = float(cmd.smile_amount)
+        self._plate_openness_current = float(cmd.plate_openness)
+        self._held_speech_viseme = cmd.atlas_viseme
+        self._open_close_source = cmd.source
+        # Jaw spring may lag visually; plate amounts already snapped above.
+        self._biomech.jaw.set_speech_target(float(cmd.jaw_target))
 
     def _ease_plate_blend(self, frame_time: float) -> None:
         """Refresh plate texture pair from the eased ML openness."""
@@ -1679,11 +1603,83 @@ class AvatarFaceApp(FieldRuntime):
             self._biomech.jaw.mass = float(preset.jaw_mass)
             self._biomech.jaw.damping = float(preset.jaw_damping)
             self._biomech.jaw.elasticity = float(preset.jaw_elasticity)
+        self._set_mouth_hold_scale(float(preset.hold_scale), announce=False)
         self._mouth_menu_open = False
         self._overlay_dirty = True
         if announce:
-            print(f"Mouth speed: {preset.label}", flush=True)
-            self._chatbox.add(SPEAKER_SYSTEM, f"Mouth speed: {preset.label}")
+            dwell_ms = int(self._mouth_timeline.min_dwell_s * 1000)
+            print(
+                f"Mouth speed: {preset.label} (hold {dwell_ms}ms)",
+                flush=True,
+            )
+            self._chatbox.add(
+                SPEAKER_SYSTEM,
+                f"Mouth speed: {preset.label} — plate hold {dwell_ms}ms",
+            )
+
+    def _set_mouth_hold_scale(self, scale: float, *, announce: bool = False) -> None:
+        """Realtime scrollbar: how long open/teeth plates stay painted."""
+        self._mouth_hold_scale = clamp_hold_scale(scale)
+        dwell, bridge, muscle = hold_scale_to_params(self._mouth_hold_scale)
+        self._mouth_timeline.set_hold_timing(
+            min_dwell_s=dwell, max_bridge_s=bridge
+        )
+        self._mouth_hold_min = float(muscle)
+        self._overlay_dirty = True
+        if announce:
+            print(
+                f"Mouth hold: {int(dwell * 1000)}ms "
+                f"(bridge {int(bridge * 1000)}ms)",
+                flush=True,
+            )
+
+    def _mouth_hold_scale_from_x(self, overlay_x: int) -> float | None:
+        """Map overlay X onto the painted track (hit rect includes a pad)."""
+        track = self._ui_hits.get("mouth_hold_track")
+        if track is None:
+            return None
+        tx, _ty, tw, _th = track
+        # chatbox pads the hit box by 8px on each side — undo for value.
+        pad = 8
+        visual_x = float(tx + pad)
+        visual_w = float(max(tw - pad * 2, 1))
+        return clamp_hold_scale((float(overlay_x) - visual_x) / visual_w)
+
+    def _overlay_mouse(self, x: int, y: int) -> list[tuple[int, int]]:
+        """Map window mouse coords → overlay pixel candidates.
+
+        moderngl_window (pyglet) already reports **top-down** window pixels
+        (y=0 at the top). The HUD is painted in framebuffer pixels, which
+        can differ under DPI scaling. Prefer top-down; also try a Y flip
+        for backends that leave mouse Y bottom-up.
+        """
+        buf_w, buf_h = self._scene_size()
+        win_w = max(int(getattr(self.wnd, "width", buf_w) or buf_w), 1)
+        win_h = max(int(getattr(self.wnd, "height", buf_h) or buf_h), 1)
+        ox = int(round(float(x) * float(buf_w) / float(win_w)))
+        oy_top = int(round(float(y) * float(buf_h) / float(win_h)))
+        oy_flip = int(buf_h) - oy_top - 1
+        points = [(ox, oy_top), (ox, oy_flip)]
+        out: list[tuple[int, int]] = []
+        for point in points:
+            if point not in out:
+                out.append(point)
+        return out
+
+    def _hit_ui(self, x: int, y: int) -> tuple[str | None, int, int]:
+        """Return (control_id, overlay_x, overlay_y) for a window mouse point."""
+        for ox, oy in self._overlay_mouse(int(x), int(y)):
+            # Slider first — its hit pad can overlap the Mouth: button edge.
+            track = self._ui_hits.get("mouth_hold_track")
+            if track is not None:
+                tx, ty, tw, th = track
+                if tx <= ox < tx + tw and ty <= oy < ty + th:
+                    return "mouth_hold_track", ox, oy
+            control = hit_test(self._ui_hits, ox, oy)
+            if control is not None:
+                return control, ox, oy
+        ox, oy = self._overlay_mouse(int(x), int(y))[0]
+        return None, ox, oy
 
     def _set_mouth_speed_key(self, key: str) -> None:
         self._apply_mouth_speed_preset(preset_by_key(key), announce=True)
@@ -1698,6 +1694,7 @@ class AvatarFaceApp(FieldRuntime):
         if fonts is None:
             return
         body, title = fonts
+        dwell_ms = int(float(self._mouth_timeline.min_dwell_s) * 1000.0)
         self._ui_hits = paint_panel(
             draw,
             self._chatbox,
@@ -1709,6 +1706,8 @@ class AvatarFaceApp(FieldRuntime):
             mouth_speed_label=self._mouth_speed.label,
             mouth_menu_open=self._mouth_menu_open,
             mouth_options=tuple(preset.label for preset in MOUTH_SPEED_PRESETS),
+            mouth_hold_scale=float(self._mouth_hold_scale),
+            mouth_hold_ms=dwell_ms,
         )
 
     def _submit_chat_line(self) -> None:
@@ -1876,6 +1875,7 @@ class AvatarFaceApp(FieldRuntime):
         # The voice is authoritative. Anything still queued belongs to a line
         # that is no longer being spoken.
         self._visemes.clear()
+        self._mouth_timeline.clear()
         events = schedule_spans(speech.span_tuples(), emotion, start_at=start_at)
         events.append(
             VisemeEvent(
@@ -1891,6 +1891,8 @@ class AvatarFaceApp(FieldRuntime):
 
     def _schedule_text(self, phonemes: Sequence[str], emotion: str) -> list[VisemeEvent]:
         """Estimate timing from the written words when there is no audio."""
+        self._visemes.clear()
+        self._mouth_timeline.clear()
         events = schedule_visemes(
             phonemes,
             emotion,
@@ -2250,6 +2252,7 @@ class AvatarFaceApp(FieldRuntime):
         no longer holds.
         """
         self._visemes.clear()
+        self._mouth_timeline.clear()
         self._biomech.reset()
         self._mouth_pose = mouth_pose("REST", "NEUTRAL")
         self._target_mouth_pose = self._mouth_pose
@@ -2266,13 +2269,27 @@ class AvatarFaceApp(FieldRuntime):
     # ------------------------------------------------------------- impulses
 
     def _fire_impulse(
-        self, phoneme: str, emotion: str, *, duration: float = 0.14
+        self,
+        phoneme: str,
+        emotion: str,
+        *,
+        duration: float = 0.14,
+        next_due_at: float | None = None,
     ) -> None:
         """Speech does not write geometry. It injects muscle impulses."""
         started = time.perf_counter()
         from aiface.plates import OPEN_TOOTH_VISEMES
         from aiface.speech import canonical_viseme
 
+        now = time.perf_counter() - self._clock0
+        # GPU layers follow the *schedule* span; muscle hold may last longer.
+        self._mouth_timeline.fire(
+            phoneme,
+            now=now,
+            duration=float(duration),
+            emotion=emotion,
+            next_due_at=next_due_at,
+        )
         hold_floor = float(getattr(self, "_mouth_hold_min", 0.36))
         key = canonical_viseme(phoneme)
         if key in OPEN_TOOTH_VISEMES:
@@ -2293,9 +2310,27 @@ class AvatarFaceApp(FieldRuntime):
         now = time.perf_counter() - self._clock0
         while self._visemes and self._visemes[0].due_at <= now:
             event = self._visemes.popleft()
+            next_due, _next_ph = self._upcoming_viseme()
             self._fire_impulse(
-                event.phoneme, event.emotion, duration=event.duration
+                event.phoneme,
+                event.emotion,
+                duration=event.duration,
+                next_due_at=next_due,
             )
+
+    def _upcoming_viseme(self) -> tuple[float | None, str | None]:
+        """Peek the next *speech* event for timeline bridging (skip REST)."""
+        from aiface.mouth_owner import CLOSED_VISEMES
+        from aiface.speech import canonical_viseme
+
+        for nxt in self._visemes:
+            key = canonical_viseme(nxt.phoneme)
+            if key == "REST":
+                continue
+            # Closed lips are real speech events — bridge to them so open
+            # clears on schedule, but open-plate bridging uses speech≠REST.
+            return float(nxt.due_at), key
+        return None, None
 
     def _refresh_mouth_ownership(self) -> MouthOwnership:
         """Resolve Path-A ownership from eased openness + emotion + phoneme."""
@@ -2483,25 +2518,25 @@ class AvatarFaceApp(FieldRuntime):
         self._gpu_log_last_tick = tick
         from aiface.speech import canonical_viseme
 
-        phoneme = canonical_viseme(self._render_state.last_phoneme or "REST")
-        plate_viseme = canonical_viseme(
-            getattr(self, "_held_speech_viseme", phoneme) or phoneme
-        )
+        cmd = self._layer_command
+        phoneme = canonical_viseme(cmd.phoneme or "REST")
+        plate_viseme = canonical_viseme(cmd.atlas_viseme or phoneme)
         ia, ib = self._plate_pair
         mix, amount = self._plate_blend_current
         jaw = float(getattr(self._render_state, "jaw_angle", 0.0))
         line = (
             f"gpu@60 t={tick} viseme={phoneme} plate={plate_viseme} "
             f"jaw={jaw:.3f} "
-            f"open={float(self._plate_openness_current):.3f} "
-            f"smile={float(self._ml_smile):.3f} "
+            f"open={float(cmd.plate_openness):.3f} "
+            f"smile={float(cmd.smile_amount):.3f} "
             f"mouth_obj={int(self._mouth_object_cells)}"
             f"@({self._mouth_center[0]:.1f},{self._mouth_center[1]:.1f}) "
-            f"plates=open:{amount:.2f} smile:{float(self._ml_smile):.2f} "
+            f"plates=open:{amount:.2f} smile:{float(cmd.smile_amount):.2f} "
             f"atlas={ia}/{ib} mix={mix:.2f} "
             f"muscles={int(self._active_muscle_count)} "
             f"recipe=on warp_gain={float(self._display_recipe.field_warp_gain):.2f} "
-            f"sharpness={float(self._display_recipe.plate_sharpness):.2f}"
+            f"sharpness={float(self._display_recipe.plate_sharpness):.2f} "
+            f"src={cmd.source} until={cmd.active_until:.2f}"
         )
         if self._gpu_log_handle is not None:
             self._gpu_log_handle.write(line + "\n")
@@ -2629,17 +2664,21 @@ class AvatarFaceApp(FieldRuntime):
         super().on_key_event(key, action, modifiers)
 
     def on_mouse_press_event(self, x: int, y: int, button: int) -> None:
-        """Mouth-speed dropdown in the chat panel."""
+        """Mouth hold slider + speed dropdown in the chat panel."""
         if not self._chat_box_visible:
             return
-        # Overlay pixels are top-down; moderngl_window mouse is often bottom-up.
-        height = int(self._scene_size()[1])
-        overlay_y = height - int(y) - 1
-        control = hit_test(self._ui_hits, int(x), overlay_y)
+        control, ox, _oy = self._hit_ui(int(x), int(y))
         if control is None:
+            self._mouth_hold_dragging = False
             if self._mouth_menu_open:
                 self._mouth_menu_open = False
                 self._overlay_dirty = True
+            return
+        if control == "mouth_hold_track":
+            self._mouth_hold_dragging = True
+            scale = self._mouth_hold_scale_from_x(ox)
+            if scale is not None:
+                self._set_mouth_hold_scale(scale, announce=False)
             return
         if control == "mouth_button":
             self._mouth_menu_open = not self._mouth_menu_open
@@ -2651,6 +2690,32 @@ class AvatarFaceApp(FieldRuntime):
                 if preset.label == label:
                     self._apply_mouth_speed_preset(preset, announce=True)
                     break
+
+    def on_mouse_drag_event(self, x: int, y: int, dx: int, dy: int) -> None:
+        del y, dx, dy
+        if not self._mouth_hold_dragging:
+            return
+        _control, ox, _oy = self._hit_ui(int(x), int(y))
+        scale = self._mouth_hold_scale_from_x(ox)
+        if scale is not None:
+            self._set_mouth_hold_scale(scale, announce=False)
+
+    def on_mouse_position_event(self, x: int, y: int, dx: int, dy: int) -> None:
+        """Some backends skip drag events — keep sliding while pressed."""
+        del dx, dy
+        if not self._mouth_hold_dragging:
+            return
+        _control, ox, _oy = self._hit_ui(int(x), int(y))
+        scale = self._mouth_hold_scale_from_x(ox)
+        if scale is not None:
+            self._set_mouth_hold_scale(scale, announce=False)
+
+    def on_mouse_release_event(self, x: int, y: int, button: int) -> None:
+        del x, y, button
+        if self._mouth_hold_dragging:
+            self._mouth_hold_dragging = False
+            dwell_ms = int(self._mouth_timeline.min_dwell_s * 1000)
+            print(f"Mouth hold: {dwell_ms}ms", flush=True)
 
     def on_close(self) -> None:
         self._shutdown.set()

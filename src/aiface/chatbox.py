@@ -280,12 +280,14 @@ def paint_panel(
     mouth_speed_label: str | None = None,
     mouth_menu_open: bool = False,
     mouth_options: tuple[str, ...] = (),
+    mouth_hold_scale: float | None = None,
+    mouth_hold_ms: int | None = None,
 ) -> dict[str, tuple[int, int, int, int]]:
     """Draw the chat frame into an RGBA overlay.
 
     ``rect`` is ``(x, y, width, height)`` in top-down overlay pixels, matching
     the HUD texture's orientation. Returns hit rectangles for UI controls
-    (``mouth_button`` and ``mouth_opt_<label>``) in the same pixel space.
+    (``mouth_button``, ``mouth_hold_track``, ``mouth_opt_<label>``).
     """
     hits: dict[str, tuple[int, int, int, int]] = {}
     x, y, width, height = (int(value) for value in rect)
@@ -303,17 +305,34 @@ def paint_panel(
     draw.text((x + padding, y + 6), header, fill=TITLE_COLOR, font=title_font)
     header_height = _line_height(title_font) + 8
 
+    mouth_btn_left: int | None = None
     if mouth_speed_label:
+        mouth_hits = _paint_mouth_speed_dropdown(
+            draw,
+            panel_x=x,
+            panel_y=y,
+            panel_width=width,
+            font=title_font,
+            label=mouth_speed_label,
+            open_menu=mouth_menu_open,
+            options=mouth_options,
+            padding=padding,
+        )
+        hits.update(mouth_hits)
+        btn = mouth_hits.get("mouth_button")
+        if btn is not None:
+            mouth_btn_left = int(btn[0])
+
+    if mouth_hold_scale is not None and mouth_btn_left is not None:
         hits.update(
-            _paint_mouth_speed_dropdown(
+            _paint_mouth_hold_slider(
                 draw,
                 panel_x=x,
                 panel_y=y,
-                panel_width=width,
                 font=title_font,
-                label=mouth_speed_label,
-                open_menu=mouth_menu_open,
-                options=mouth_options,
+                scale=float(mouth_hold_scale),
+                hold_ms=int(mouth_hold_ms or 0),
+                right_limit=mouth_btn_left - 8,
                 padding=padding,
             )
         )
@@ -405,6 +424,74 @@ def _paint_mouth_speed_dropdown(
                 font=font,
             )
             hits[f"mouth_opt_{name}"] = (menu_x, oy, menu_w, row_h)
+    return hits
+
+
+def _paint_mouth_hold_slider(
+    draw: Any,
+    *,
+    panel_x: int,
+    panel_y: int,
+    font: Any,
+    scale: float,
+    hold_ms: int,
+    right_limit: int,
+    padding: int,
+) -> dict[str, tuple[int, int, int, int]]:
+    """Realtime scrollbar: how long open/teeth plates stay on screen."""
+    hits: dict[str, tuple[int, int, int, int]] = {}
+    scale = max(0.0, min(1.0, float(scale)))
+    hold_ms = max(int(hold_ms), 0)
+    label = f"Hold {hold_ms}ms"
+    label_w = _advance(font, label) + 8
+    track_h = 10
+    row_h = _line_height(font) + 4
+    # Sit left of the Mouth: dropdown. If the ms label is too wide for the
+    # header, shrink to "Hold" so the track stays draggable.
+    track_right = int(right_limit) - 4
+    track_left = panel_x + padding + label_w
+    if track_right - track_left < 80:
+        label = "Hold"
+        label_w = _advance(font, label) + 8
+        track_left = panel_x + padding + label_w
+    if track_right - track_left < 48:
+        # Last resort: park a short track just left of the Mouth button.
+        track_right = max(int(right_limit) - 4, panel_x + padding + 96)
+        track_left = max(panel_x + padding, track_right - 96)
+    track_w = max(track_right - track_left, 48)
+    track_y = panel_y + 4 + (row_h - track_h) // 2
+    label_y = panel_y + 6
+    draw.text((panel_x + padding, label_y), label, fill=CONTROL_TEXT, font=font)
+    draw.rectangle(
+        (track_left, track_y, track_left + track_w, track_y + track_h),
+        fill=(28, 40, 52, 230),
+        outline=CONTROL_EDGE,
+    )
+    fill_w = max(int(track_w * scale), 2)
+    draw.rectangle(
+        (track_left, track_y, track_left + fill_w, track_y + track_h),
+        fill=CONTROL_ACTIVE,
+    )
+    knob_x = track_left + fill_w
+    knob_r = 7
+    draw.ellipse(
+        (
+            knob_x - knob_r,
+            track_y + track_h // 2 - knob_r,
+            knob_x + knob_r,
+            track_y + track_h // 2 + knob_r,
+        ),
+        fill=(230, 244, 255, 255),
+        outline=CONTROL_EDGE,
+    )
+    # Tall hit pad — easy to grab on HiDPI / imprecise clicks.
+    # Pad must stay in sync with AvatarFaceApp._mouth_hold_scale_from_x.
+    hits["mouth_hold_track"] = (
+        track_left - 8,
+        panel_y,
+        track_w + 16,
+        max(row_h + 12, 28),
+    )
     return hits
 
 

@@ -352,6 +352,23 @@ vec3 part_debug_color(int part) {
     return vec3(0.05);
 }
 
+// Capture mattes are soft ellipses (mean alpha ~0.3 over a wide lower-face
+// region). At full drive that still reads as a washed veil / motion blur.
+// Steepen the alpha so only the real oral interior commits.
+float harden_matte(float alpha, float snap) {
+    float a = clamp(alpha, 0.0, 1.0);
+    return mix(a, smoothstep(0.22, 0.78, a), clamp(snap, 0.0, 1.0));
+}
+
+// Atlas speech ownership in [0,1]. When high under hard snap, open.png must
+// not also stamp — both share avatar_plate_blend.y today.
+float atlas_own_amount() {
+    if (avatar_plates_ready != 1) {
+        return 0.0;
+    }
+    return clamp(avatar_plate_blend.y, 0.0, 1.0) * clamp(avatar_recipe.z, 0.0, 1.0);
+}
+
 void main() {
     // Everything below works in portrait UV, so map the window into the frame
     // first and hand the surrounding matte back immediately. Keeping the frame
@@ -439,7 +456,14 @@ void main() {
 
     float mouth_inside = 0.0;
     if (avatar_deform == 1) {
+        float snap = clamp(avatar_plate_sharpness, 0.0, 1.0);
+        float atlas_own = atlas_own_amount();
+        // Committed speech plate is a rest-UV billboard. Keep the photo under
+        // it near rest-frame too — warping the identity while stamping a
+        // static plate double-images the lips (the residual "blur").
+        float plate_commit = mix(0.0, smoothstep(0.40, 0.88, atlas_own), snap);
         vec2 source = inverse_warp(grid_position);
+        source = mix(source, grid_position, plate_commit * 0.90);
         color = photo_at(source);
         face_alpha = smoothstep(0.02, 0.12, max(color.r, max(color.g, color.b)));
 
@@ -462,7 +486,6 @@ void main() {
             float smile_drive = clamp(avatar_mouth_pose.w, 0.0, 1.0);
             // Step 12: steepen the drive curves — a 50/50 ghost of two photos
             // reads as motion blur, so commit toward one plate sooner.
-            float snap = clamp(avatar_plate_sharpness, 0.0, 1.0);
             float open_drive = mix(
                 max(open_from_plate, open_from_jaw),
                 open_from_plate,
@@ -470,8 +493,15 @@ void main() {
             );
             open_drive = mix(open_drive, smoothstep(0.18, 0.82, open_drive), snap);
             smile_drive = mix(smile_drive, smoothstep(0.18, 0.82, smile_drive), snap);
-            float open_w = open_drive * open_s.a;
-            float smile_w = smile_drive * smile_s.a * (1.0 - open_w * avatar_recipe.y);
+            // Atlas already carries the speech mouth. open.png uses a much
+            // wider soft matte (~11% of the frame); stacking it under the
+            // atlas is the soft rectangle users still see.
+            float capture_mute = mix(0.0, smoothstep(0.35, 0.80, atlas_own), snap);
+            open_drive *= (1.0 - capture_mute);
+            smile_drive *= (1.0 - capture_mute);
+            float open_w = open_drive * harden_matte(open_s.a, snap);
+            float smile_w = smile_drive * harden_matte(smile_s.a, snap)
+                * (1.0 - open_w * avatar_recipe.y);
             color = mix(color, smile_s.rgb, smile_w);
             color = mix(color, open_s.rgb, open_w);
             face_alpha = max(face_alpha, max(open_w, smile_w));
@@ -531,11 +561,10 @@ void main() {
             mix_ab = mix(
                 mix_ab,
                 smoothstep(0.35, 0.65, mix_ab),
-                clamp(avatar_plate_sharpness, 0.0, 1.0)
+                snap
             );
             vec3 plate_rgb = mix(pa.rgb, pb.rgb, mix_ab);
-            // Keep atlas lighter than capture open/smile so it cannot hide them.
-            float plate_a = max(pa.a, pb.a)
+            float plate_a = harden_matte(max(pa.a, pb.a), snap)
                 * clamp(avatar_plate_blend.y, 0.0, 1.0) * avatar_recipe.z;
             color = mix(color, plate_rgb, plate_a);
             face_alpha = max(face_alpha, plate_a);

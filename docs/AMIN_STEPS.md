@@ -54,6 +54,20 @@ The residual "blurry mouth" was compositing, not resolution:
   `smile.png` (wide soft matte) at full strength while REST; cavity could still
   tint a slit. Fixed: floor default **0**, smile from width only; cavity gated
   off when jaw/open ≈ 0.
+- **Wrong appear/disappear timing**: open/smile/atlas followed ease + hold +
+  jaw lag, not the viseme schedule. Fixed: `MouthLayerTimeline` snaps GPU
+  layers to each span (`due_at`→`duration`); muscle hold may lag, plates do not.
+  Polish: **min speech dwell** + **bridge gaps** so AH→REST→OH flashes stop.
+  Realtime **Hold** scrollbar in the chat panel (and Mouth Slow/Normal/Fast)
+  retunes dwell/bridge live — drag right to keep teeth/plates on longer.
+  Hold is **visual plate time only** (not TTS audio).
+- **Wide soft open.png under atlas** (residual blur after hard-snap amounts):
+  GPU log showed open/smile/mix already 0 or 1 — no ghost drive. Blur came
+  from stacking `open.png` (soft ellipse over ~11% of the frame, mean α≈0.36)
+  under the tighter atlas, plus warping the identity photo under a static
+  plate (double-image lips). Fixed in `avatar.frag`: mute capture open/smile
+  when atlas owns speech, harden matte alphas, rest-align photo under a
+  committed speech plate.
 
 ## Runtime addressing + CPU discipline (same audit)
 

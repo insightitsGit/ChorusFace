@@ -31,7 +31,7 @@ DISPLAY_PATH: Final[tuple[str, ...]] = (
 # What actually drives each look at playback (uniform contract).
 UNIFORM_MAP: Final[dict[str, str]] = {
     "avatar_jaw.z": "jaw angle from viseme table (words own jaw timing)",
-    "avatar_plate_blend.y": "open.png / atlas amount from eased plate openness",
+    "avatar_plate_blend.y": "atlas/open amount; under hard snap atlas mutes wide open.png",
     "avatar_mouth_pose.w": "smile.png drive from HAPPY emotion or live width_n",
     "avatar_mouth_pose.y": "mouth openness for cavity weighting",
     "avatar_expr_state.z": "surprise.png blend (upper face)",
