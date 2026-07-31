@@ -168,11 +168,37 @@ def check_plate_atlas(report: Report, world_dir: Path) -> None:
         return
     openness = sorted(float(p.get("openness", 0.0)) for p in atlas["plates"])
     span = openness[-1] - openness[0]
-    detail = f"{len(openness)} plates, openness {openness[0]:.2f}–{openness[-1]:.2f}"
-    if len(openness) < 4 or span < 0.15:
-        report.add(WARN, "plate-atlas", f"sparse viseme coverage — {detail}")
+    mapping = atlas.get("viseme_to_plate") or {}
+    detail = (
+        f"{len(openness)} plates, openness {openness[0]:.2f}–{openness[-1]:.2f}, "
+        f"{len(mapping)} viseme→plate"
+    )
+    if not mapping:
+        report.add(
+            WARN,
+            "plate-atlas",
+            f"missing viseme_to_plate (step 13) — {detail}",
+        )
+    elif len(openness) < 4:
+        report.add(WARN, "plate-atlas", f"sparse plate bank — {detail}")
     else:
         report.add(PASS, "plate-atlas", detail)
+
+    recipe = load_json(world_dir / "gpu_display_recipe.json") or {}
+    knobs = recipe.get("knobs") or {}
+    sharpness = float(knobs.get("plate_sharpness", 0.0))
+    if sharpness >= 0.75:
+        report.add(
+            PASS,
+            "plate-hard-snap",
+            f"plate_sharpness={sharpness:.2f} (≥0.75 hard snap)",
+        )
+    else:
+        report.add(
+            WARN,
+            "plate-hard-snap",
+            f"plate_sharpness={sharpness:.2f} — mid-blend ghosts likely",
+        )
 
 
 def check_world_and_regions(report: Report, world_dir: Path) -> None:

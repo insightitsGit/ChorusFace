@@ -1,28 +1,26 @@
 """Expression plate atlas — memory of captured mouth shapes for speech.
 
-Plates are real frames from ``aiface-capture``. At runtime the current viseme
-picks two neighbours by openness and the shader shows/blends them over the
-mouth region. This is not generative fill and not NWR terrain conversion.
+AMIN step 13: one real video keyframe per canonical viseme (landmark-matched).
+Hard snap (step 12): speech shows a single plate, not a 50/50 ghost blend.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Mapping, Sequence
 
 import numpy as np
-import numpy.typing as npt
 
 from aiface.speech import CANONICAL_VISEMES, canonical_viseme
 
 PLATE_ATLAS_DIR: Final = "plates"
 PLATE_ATLAS_META: Final = "plate_atlas.json"
-MAX_ATLAS_PLATES: Final = 8
+MAX_ATLAS_PLATES: Final = 16
+HARD_SNAP_THRESHOLD: Final = 0.75
 
 # Target mouth openness [0,1] per viseme — indexes into the captured atlas.
-# Spaced so neighbouring speech sounds land on distinct plates.
 VISEME_OPENNESS: Final[dict[str, float]] = {
     "REST": 0.00,
     "CLOSED": 0.00,
@@ -44,7 +42,28 @@ VISEME_OPENNESS: Final[dict[str, float]] = {
     "AH": 1.00,
 }
 
-#: Visemes that must dwell on the open/teeth end of the atlas.
+# Relative smile width target in the capture's observed smile range [0,1].
+VISEME_SMILE: Final[dict[str, float]] = {
+    "REST": 0.15,
+    "CLOSED": 0.10,
+    "PP": 0.10,
+    "FF": 0.20,
+    "TH": 0.25,
+    "DD": 0.25,
+    "KK": 0.25,
+    "CH": 0.30,
+    "SS": 0.35,
+    "NN": 0.25,
+    "RR": 0.30,
+    "IH": 0.45,
+    "EH": 0.50,
+    "EE": 0.85,
+    "OH": 0.35,
+    "OU": 0.30,
+    "AA": 0.40,
+    "AH": 0.40,
+}
+
 OPEN_TOOTH_VISEMES: Final[frozenset[str]] = frozenset(
     {"AA", "AH", "OH", "OU", "EH", "EE", "IH"}
 )
@@ -58,18 +77,33 @@ class AtlasPlate:
     smile_width: float
     frame_index: int
     time_seconds: float
+    viseme: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class PlateAtlas:
     plates: tuple[AtlasPlate, ...]
     viseme_openness: dict[str, float]
+    viseme_to_plate: dict[str, int] = field(default_factory=dict)
 
     def target_openness(self, viseme: str) -> float:
         key = canonical_viseme(viseme)
         return float(self.viseme_openness.get(key, VISEME_OPENNESS.get(key, 0.0)))
 
-    def pair_for_openness(self, target: float) -> tuple[int, int, float]:
+    def plate_index_for_viseme(self, viseme: str) -> int | None:
+        key = canonical_viseme(viseme)
+        if key in self.viseme_to_plate:
+            idx = int(self.viseme_to_plate[key])
+            if 0 <= idx < len(self.plates):
+                return idx
+        return None
+
+    def pair_for_openness(
+        self,
+        target: float,
+        *,
+        hard_snap: bool = False,
+    ) -> tuple[int, int, float]:
         """Return (index_a, index_b, mix) for a 0..1 openness target."""
         if not self.plates:
             return 0, 0, 0.0
@@ -77,7 +111,6 @@ class PlateAtlas:
         lo = min(opens)
         hi = max(opens)
         span = max(hi - lo, 1e-6)
-        # Map atlas openness into 0..1 using the captured range.
         norm = [(o - lo) / span for o in opens]
         goal = float(np.clip(target, 0.0, 1.0))
         if goal <= norm[0]:
@@ -88,13 +121,27 @@ class PlateAtlas:
         for i in range(len(norm) - 1):
             if norm[i] <= goal <= norm[i + 1]:
                 local = (goal - norm[i]) / max(norm[i + 1] - norm[i], 1e-6)
+                if hard_snap:
+                    nearest = i if local < 0.5 else i + 1
+                    return nearest, nearest, 0.0
                 return i, i + 1, float(local)
         last = len(self.plates) - 1
         return last, last, 0.0
 
-    def pair_for_viseme(self, viseme: str) -> tuple[int, int, float]:
-        """Return (index_a, index_b, mix) for the current viseme."""
-        return self.pair_for_openness(self.target_openness(viseme))
+    def pair_for_viseme(
+        self,
+        viseme: str,
+        *,
+        hard_snap: bool = True,
+    ) -> tuple[int, int, float]:
+        """Viseme → plate pair. Hard snap uses assigned bank index (mix=0)."""
+        assigned = self.plate_index_for_viseme(viseme)
+        if assigned is not None and hard_snap:
+            return assigned, assigned, 0.0
+        ia, ib, mix = self.pair_for_openness(
+            self.target_openness(viseme), hard_snap=hard_snap
+        )
+        return ia, ib, mix
 
 
 def default_atlas_dir(world: str | Path) -> Path:
@@ -106,7 +153,7 @@ def default_atlas_meta_path(world: str | Path) -> Path:
 
 
 def teeth_visibility_score(
-    image_bgr: npt.NDArray[np.uint8],
+    image_bgr: Any,
     mouth_xy: tuple[float, float],
     face_width: float,
     face_height: float,
@@ -131,106 +178,147 @@ def teeth_visibility_score(
     return float(np.mean(teeth.astype(np.float32)))
 
 
+def _normalized_metrics(frames: Sequence[Any]) -> tuple[float, float, float, float]:
+    opens = [float(f.metrics.mouth_open) for f in frames]
+    smiles = [float(f.metrics.smile_width) for f in frames]
+    return (
+        min(opens),
+        max(opens),
+        min(smiles),
+        max(smiles),
+    )
+
+
+def score_frame_for_viseme(
+    frame: Any,
+    viseme: str,
+    *,
+    open_lo: float,
+    open_hi: float,
+    smile_lo: float,
+    smile_hi: float,
+) -> float:
+    """Lower is better — landmark distance to the viseme's target look."""
+    key = canonical_viseme(viseme)
+    open_span = max(open_hi - open_lo, 1e-6)
+    smile_span = max(smile_hi - smile_lo, 1e-6)
+    open_n = (float(frame.metrics.mouth_open) - open_lo) / open_span
+    smile_n = (float(frame.metrics.smile_width) - smile_lo) / smile_span
+    open_n = float(np.clip(open_n, 0.0, 1.0))
+    smile_n = float(np.clip(smile_n, 0.0, 1.0))
+    target_o = float(VISEME_OPENNESS.get(key, 0.35))
+    target_s = float(VISEME_SMILE.get(key, 0.3))
+    teeth = float(getattr(frame.metrics, "teeth", 0.0))
+    sharp = float(getattr(frame.metrics, "sharpness", 0.0))
+    teeth_bonus = 0.0
+    if key in OPEN_TOOTH_VISEMES:
+        teeth_bonus = -0.08 * teeth
+    # Prefer non-smiling closed frames for REST/PP.
+    smile_penalty = 0.0
+    if key in {"REST", "CLOSED", "PP"} and smile_n > 0.55:
+        smile_penalty = 0.35 * (smile_n - 0.55)
+    return (
+        abs(open_n - target_o) * 1.35
+        + abs(smile_n - target_s) * 0.85
+        + smile_penalty
+        + teeth_bonus
+        - 0.0005 * sharp
+    )
+
+
+def match_visemes_to_frames(
+    frames: Sequence[Any],
+) -> dict[str, Any]:
+    """Best landmark-matched frame per canonical viseme (may reuse frames)."""
+    if not frames:
+        return {}
+    open_lo, open_hi, smile_lo, smile_hi = _normalized_metrics(frames)
+    mapping: dict[str, Any] = {}
+    for viseme in sorted(CANONICAL_VISEMES):
+        best = min(
+            frames,
+            key=lambda f, v=viseme: score_frame_for_viseme(
+                f,
+                v,
+                open_lo=open_lo,
+                open_hi=open_hi,
+                smile_lo=smile_lo,
+                smile_hi=smile_hi,
+            ),
+        )
+        mapping[viseme] = best
+    return mapping
+
+
+def select_viseme_atlas_frames(
+    frames: Sequence[Any],
+    *,
+    max_plates: int = MAX_ATLAS_PLATES,
+) -> tuple[list[Any], dict[str, int]]:
+    """AMIN step 13: unique frames for visemes, capped, with viseme→index map."""
+    matched = match_visemes_to_frames(frames)
+    if not matched:
+        return [], {}
+
+    # Prefer unique frames ordered by openness; keep REST/closed first.
+    by_index: dict[int, Any] = {}
+    for viseme, frame in matched.items():
+        by_index.setdefault(int(frame.index), frame)
+
+    unique = sorted(
+        by_index.values(),
+        key=lambda f: (f.metrics.mouth_open, f.metrics.smile_width),
+    )
+    if len(unique) > max_plates:
+        # Keep extremes + evenly spaced middles.
+        keep = {unique[0].index, unique[-1].index}
+        for i in range(max_plates - 2):
+            t = (i + 1) / (max_plates - 1)
+            keep.add(unique[int(round(t * (len(unique) - 1)))].index)
+        unique = [f for f in unique if f.index in keep][:max_plates]
+        unique = sorted(unique, key=lambda f: f.metrics.mouth_open)
+
+    index_by_frame = {int(f.index): i for i, f in enumerate(unique)}
+    # Remap each viseme to nearest kept plate by openness if its frame was dropped.
+    open_lo, open_hi, smile_lo, smile_hi = _normalized_metrics(frames)
+    viseme_to_plate: dict[str, int] = {}
+    for viseme, frame in matched.items():
+        if int(frame.index) in index_by_frame:
+            viseme_to_plate[viseme] = index_by_frame[int(frame.index)]
+            continue
+        # Nearest remaining plate by score.
+        best_i = min(
+            range(len(unique)),
+            key=lambda i: score_frame_for_viseme(
+                unique[i],
+                viseme,
+                open_lo=open_lo,
+                open_hi=open_hi,
+                smile_lo=smile_lo,
+                smile_hi=smile_hi,
+            ),
+        )
+        viseme_to_plate[viseme] = best_i
+    return unique, viseme_to_plate
+
+
 def select_atlas_frames(
     frames: Sequence[Any],
     *,
     count: int = MAX_ATLAS_PLATES,
 ) -> list[Any]:
-    """Pick diverse openness samples; keep closed + toothy open extremes.
-
-    Closed slots prefer low smile_width so the atlas does not bake a smirk into
-    every phoneme. Open slots prefer teeth / jaw drop over smile width.
-    """
+    """Legacy openness-bin picker; prefer ``select_viseme_atlas_frames``."""
+    chosen, _mapping = select_viseme_atlas_frames(frames, max_plates=count)
+    if chosen:
+        return chosen
     if not frames:
         return []
-    ordered = sorted(
-        frames,
-        key=lambda f: (f.metrics.mouth_open, getattr(f.metrics, "teeth", 0.0)),
-    )
-    if len(ordered) <= count:
-        # Still demote smiling closed frames to later indices when possible.
-        closed = [f for f in ordered if f.metrics.mouth_open <= 0.04]
-        if closed:
-            best_closed = min(
-                closed,
-                key=lambda f: (
-                    f.metrics.smile_width,
-                    f.metrics.teeth,
-                    -f.metrics.sharpness,
-                ),
-            )
-            rest = [f for f in ordered if f.index != best_closed.index]
-            ordered = [best_closed, *rest]
-        return list(ordered)
-
-    picks: list[Any] = []
-    used: set[int] = set()
-
-    def take(frame: Any) -> None:
-        if frame.index in used:
-            return
-        picks.append(frame)
-        used.add(frame.index)
-
-    # Most neutral closed mouth (not the widest "closed smile").
-    closed_pool = [f for f in ordered if f.metrics.mouth_open <= 0.04] or ordered[:3]
-    take(
-        min(
-            closed_pool,
-            key=lambda f: (
-                f.metrics.smile_width,
-                f.metrics.teeth,
-                -f.metrics.sharpness,
-            ),
-        )
-    )
-    take(ordered[-1])  # most open
-    # Highest teeth among the open half — enamel, not a smile beat.
-    open_half = ordered[len(ordered) // 2 :]
-    toothy = max(
-        open_half,
-        key=lambda f: (
-            getattr(f.metrics, "teeth", 0.0),
-            f.metrics.mouth_open,
-            -f.metrics.smile_width,
-        ),
-    )
-    take(toothy)
-
-    for i in range(count):
-        if len(picks) >= count:
-            break
-        t = i / max(count - 1, 1)
-        idx = int(round(t * (len(ordered) - 1)))
-        candidate = ordered[idx]
-        # Skip smile-heavy closed frames when filling mid slots.
-        if (
-            candidate.metrics.mouth_open <= 0.04
-            and candidate.metrics.smile_width > 0.42
-            and len(picks) < count - 1
-        ):
-            continue
-        take(candidate)
-
-    for frame in ordered:
-        if len(picks) >= count:
-            break
-        if frame.metrics.mouth_open <= 0.04 and frame.metrics.smile_width > 0.45:
-            continue
-        take(frame)
-
-    # Last resort fill.
-    for frame in ordered:
-        if len(picks) >= count:
-            break
-        take(frame)
-
-    return sorted(picks, key=lambda f: f.metrics.mouth_open)
+    ordered = sorted(frames, key=lambda f: f.metrics.mouth_open)
+    return list(ordered[:count])
 
 
 def build_viseme_openness_table() -> dict[str, float]:
-    table = {name: VISEME_OPENNESS.get(name, 0.35) for name in sorted(CANONICAL_VISEMES)}
-    return table
+    return {name: VISEME_OPENNESS.get(name, 0.35) for name in sorted(CANONICAL_VISEMES)}
 
 
 def write_plate_atlas_meta(
@@ -238,10 +326,21 @@ def write_plate_atlas_meta(
     plates: Sequence[AtlasPlate],
     *,
     source: str,
+    viseme_to_plate: Mapping[str, int] | None = None,
 ) -> Path:
     destination = Path(path)
+    mapping = (
+        {str(k): int(v) for k, v in viseme_to_plate.items()}
+        if viseme_to_plate is not None
+        else {}
+    )
+    if not mapping and plates:
+        # Infer from plate.viseme tags when provided.
+        for plate in plates:
+            if plate.viseme:
+                mapping[canonical_viseme(plate.viseme)] = int(plate.index)
     payload: dict[str, Any] = {
-        "version": "plate-atlas-1.0",
+        "version": "plate-atlas-1.1",
         "source": source,
         "plates": [
             {
@@ -251,10 +350,12 @@ def write_plate_atlas_meta(
                 "smile_width": plate.smile_width,
                 "frame_index": plate.frame_index,
                 "time_seconds": plate.time_seconds,
+                "viseme": plate.viseme,
             }
             for plate in plates
         ],
         "viseme_openness": build_viseme_openness_table(),
+        "viseme_to_plate": mapping,
     }
     destination.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return destination
@@ -281,6 +382,7 @@ def load_plate_atlas(world: str | Path) -> PlateAtlas | None:
                 smile_width=float(item.get("smile_width", 0.0)),
                 frame_index=int(item.get("frame_index", 0)),
                 time_seconds=float(item.get("time_seconds", 0.0)),
+                viseme=str(item.get("viseme", "") or ""),
             )
         )
     if not plates:
@@ -291,22 +393,39 @@ def load_plate_atlas(world: str | Path) -> PlateAtlas | None:
         if isinstance(viseme, Mapping)
         else build_viseme_openness_table()
     )
-    return PlateAtlas(plates=tuple(plates), viseme_openness=table)
+    raw_map = payload.get("viseme_to_plate") or {}
+    viseme_to_plate: dict[str, int] = {}
+    if isinstance(raw_map, Mapping):
+        for key, value in raw_map.items():
+            try:
+                viseme_to_plate[canonical_viseme(str(key))] = int(value)
+            except (TypeError, ValueError):
+                continue
+    return PlateAtlas(
+        plates=tuple(plates),
+        viseme_openness=table,
+        viseme_to_plate=viseme_to_plate,
+    )
 
 
 __all__ = [
+    "HARD_SNAP_THRESHOLD",
     "MAX_ATLAS_PLATES",
     "OPEN_TOOTH_VISEMES",
     "PLATE_ATLAS_DIR",
     "PLATE_ATLAS_META",
     "VISEME_OPENNESS",
+    "VISEME_SMILE",
     "AtlasPlate",
     "PlateAtlas",
     "build_viseme_openness_table",
     "default_atlas_dir",
     "default_atlas_meta_path",
     "load_plate_atlas",
+    "match_visemes_to_frames",
+    "score_frame_for_viseme",
     "select_atlas_frames",
+    "select_viseme_atlas_frames",
     "teeth_visibility_score",
     "write_plate_atlas_meta",
 ]

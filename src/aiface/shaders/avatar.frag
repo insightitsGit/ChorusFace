@@ -101,9 +101,10 @@ const int PART_UPPER_LIP = 7;
 const int PART_LOWER_LIP = 8;
 const int PART_MOUTH_CAVITY = 9;
 
-// Fixed-point iterations for inverting the forward displacement. Two would
-// suffice for small warps; three keeps a wide-open jaw registered.
-const int WARP_ITERATIONS = 3;
+// Fixed-point iterations for inverting the forward displacement. Two suffice
+// for small warps; a wide-open jaw needs more or the achieved warp undershoots
+// the forward prediction and the cavity paints skin below the visible lips.
+const int WARP_ITERATIONS = 6;
 // Below this mobility a fragment is background rather than skin.
 const float FACE_PRESENCE_EDGE = 0.08;
 
@@ -300,6 +301,9 @@ vec2 mouth_gap(float column_x) {
     float upper = muscle_displacement(at_line, 1.0, slit).y * mobility + field_y;
     float lower = muscle_displacement(at_line, 0.0, slit).y * mobility
         + jaw_displacement(at_line, 0.0, slit).y + field_y;
+    // Anatomical cap: a hole taller than ~0.85× the mouth half-width is warp
+    // prediction overshoot, not a real opening — don't paint chin skin dark.
+    lower = max(lower, upper - avatar_mouth_line.z * 0.85);
     return vec2(avatar_mouth_line.y + lower, avatar_mouth_line.y + upper);
 }
 
@@ -443,18 +447,27 @@ void main() {
         // the mouth matte. BUGFIX: these used to appear only inside a jaw-gap
         // that never opened, so smile/open from the training video were invisible
         // even when the PNGs differed strongly from the rest photo.
+        float open_plate_w = 0.0;
+        float open_drive_g = 0.0;
         if (avatar_plates_ready == 1) {
             vec2 capture_uv = to_uv(grid_position);
             vec4 open_s = texture(avatar_open_plate, capture_uv);
             vec4 smile_s = texture(avatar_smile_plate, capture_uv);
-            float open_drive = max(
-                clamp(avatar_plate_blend.y, 0.0, 1.0),
-                clamp(avatar_jaw.z / max(avatar_recipe.x, 1e-3), 0.0, 1.0)
+            // Plate amount owns open.png under hard snap. Jaw lag used to keep
+            // open.png full after PP/CLOSED (tight lips + stuck open layer).
+            float open_from_plate = clamp(avatar_plate_blend.y, 0.0, 1.0);
+            float open_from_jaw = clamp(
+                avatar_jaw.z / max(avatar_recipe.x, 1e-3), 0.0, 1.0
             );
             float smile_drive = clamp(avatar_mouth_pose.w, 0.0, 1.0);
             // Step 12: steepen the drive curves — a 50/50 ghost of two photos
             // reads as motion blur, so commit toward one plate sooner.
             float snap = clamp(avatar_plate_sharpness, 0.0, 1.0);
+            float open_drive = mix(
+                max(open_from_plate, open_from_jaw),
+                open_from_plate,
+                snap
+            );
             open_drive = mix(open_drive, smoothstep(0.18, 0.82, open_drive), snap);
             smile_drive = mix(smile_drive, smoothstep(0.18, 0.82, smile_drive), snap);
             float open_w = open_drive * open_s.a;
@@ -462,20 +475,49 @@ void main() {
             color = mix(color, smile_s.rgb, smile_w);
             color = mix(color, open_s.rgb, open_w);
             face_alpha = max(face_alpha, max(open_w, smile_w));
+            open_plate_w = open_w;
+            open_drive_g = open_drive;
         }
 
         // Optional cavity fill when the jaw actually parts (still real plates).
         vec2 gap = mouth_gap(grid_position.x);
         float slit = tissue_at(vec2(grid_position.x, avatar_mouth_line.y)).b;
         float span = gap.y - gap.x;
-        mouth_inside = slit
-            * smoothstep(0.6, 2.2, span)
-            * smoothstep(gap.x, gap.x + 0.45, grid_position.y)
-            * (1.0 - smoothstep(gap.y - 0.45, gap.y, grid_position.y));
+        // A real hole, not lip contact: painting sub-cell separations dark put
+        // a translucent gray film on lips that were visibly still closed.
+        float hole = smoothstep(1.5, 3.2, span);
+        // Radial falloff around the mouth centre. mouth_gap predicts lip travel
+        // with the FORWARD displacement while the fixed-point inverse warp
+        // undershoots big jaw drops, so the predicted hole can reach into chin
+        // skin — it stamped a hard dark rectangle below the visible lips.
+        float near_mouth = 1.0 - smoothstep(
+            avatar_mouth_line.z * 1.0,
+            avatar_mouth_line.z * 1.8,
+            distance(grid_position, avatar_mouth_line.xy)
+        );
+        // Feather scales with the opening so edges never read as 2-px lines.
+        float feather = max(span * 0.22, 0.45);
+        mouth_inside = slit * hole * near_mouth
+            * smoothstep(gap.x, gap.x + feather, grid_position.y)
+            * (1.0 - smoothstep(gap.y - feather, gap.y, grid_position.y));
+        // Real pixels beat synthetic shadow (`dark_cavity: Never` owns the
+        // mouth): as soon as the jaw meaningfully opens, the captured open
+        // plate takes over and the synthetic cavity bows out — the predicted
+        // hole leads the visible pixel warp during transitions, and painting
+        // it dark stamped a translucent box below still-closed lips.
+        float plate_takeover = smoothstep(0.15, 0.55, open_drive_g);
+        // Closed / lip-tighten: never paint cavity — a residual slit+span still
+        // stamped a dark soft rectangle over visibly closed lips ("the blur").
+        float cavity_gate = smoothstep(
+            0.04, 0.14, max(clamp(avatar_jaw.z, 0.0, 1.0), open_drive_g)
+        );
         color = mix(
             color,
             cavity_color(grid_position.y, gap, grid_position.x),
             clamp(mouth_inside, 0.0, 1.0) * avatar_recipe.w
+                * (1.0 - plate_takeover)
+                * (1.0 - open_plate_w)
+                * cavity_gate
         );
 
         // Atlas plate memory (finer viseme shapes) on top when amount > 0.

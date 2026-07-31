@@ -420,6 +420,46 @@ def build_upper_face_matte(
     return np.where(radial <= 1.0, alpha, 0.0).astype(np.float32)
 
 
+def match_plate_to_reference(
+    plate_bgr: npt.NDArray[np.uint8],
+    reference_bgr: npt.NDArray[np.uint8],
+    alpha: npt.NDArray[np.float32],
+) -> npt.NDArray[np.uint8]:
+    """Affine color-transfer a plate onto the rest frame's lighting.
+
+    Plates come from different video frames than the identity photo, so their
+    exposure differs slightly; at partial blend the whole matte then reads as
+    a washed veil over the skin (perceived as mouth blur). Matching per-channel
+    mean/std over the matte's feather ring — where both frames show the same
+    skin — makes mid-blends invisible everywhere except the actual mouth.
+    """
+    cv2 = _cv2()
+    if reference_bgr.shape[:2] != plate_bgr.shape[:2]:
+        reference_bgr = cv2.resize(
+            reference_bgr,
+            (plate_bgr.shape[1], plate_bgr.shape[0]),
+            interpolation=cv2.INTER_AREA,
+        )
+    ring = (alpha > 0.03) & (alpha < 0.55)
+    if int(ring.sum()) < 256:
+        ring = alpha > 0.03
+    if int(ring.sum()) < 256:
+        return plate_bgr
+    plate = plate_bgr.astype(np.float32)
+    matched = plate.copy()
+    for channel in range(3):
+        p = plate[..., channel][ring]
+        r = reference_bgr[..., channel][ring].astype(np.float32)
+        p_std = float(p.std())
+        if p_std < 1e-3:
+            continue
+        gain = float(np.clip(r.std() / p_std, 0.6, 1.6))
+        matched[..., channel] = (plate[..., channel] - float(p.mean())) * gain + float(
+            r.mean()
+        )
+    return np.clip(matched, 0.0, 255.0).astype(np.uint8)
+
+
 def write_expression_plate(
     path: str | Path,
     image_bgr: npt.NDArray[np.uint8],
@@ -1125,12 +1165,13 @@ def _write_plate_atlas(
     *,
     source_label: str,
     hires: dict[int, FrameSample] | None = None,
+    reference: FrameSample | None = None,
 ) -> list[Path]:
     from aiface.plates import (
         AtlasPlate,
         default_atlas_dir,
         default_atlas_meta_path,
-        select_atlas_frames,
+        select_viseme_atlas_frames,
         write_plate_atlas_meta,
     )
 
@@ -1141,7 +1182,11 @@ def _write_plate_atlas(
     else:
         atlas_dir.mkdir(parents=True, exist_ok=True)
 
-    chosen = select_atlas_frames(frames)
+    # AMIN step 13: landmark-match one real frame per viseme (unique plates).
+    chosen, viseme_to_plate = select_viseme_atlas_frames(frames)
+    plate_visemes: dict[int, str] = {}
+    for viseme, idx in viseme_to_plate.items():
+        plate_visemes.setdefault(int(idx), viseme)
     records: list[AtlasPlate] = []
     paths: list[Path] = []
     for index, frame in enumerate(chosen):
@@ -1157,8 +1202,11 @@ def _write_plate_atlas(
             plate.landmarks_meta,
             openness=max(float(frame.metrics.mouth_open), 0.04),
         )
+        pixels = plate.image_bgr
+        if reference is not None:
+            pixels = match_plate_to_reference(pixels, reference.image_bgr, alpha)
         rel = f"plates/plate_{index:02d}.png"
-        path = write_expression_plate(destination.parent / rel, plate.image_bgr, alpha)
+        path = write_expression_plate(destination.parent / rel, pixels, alpha)
         paths.append(path)
         records.append(
             AtlasPlate(
@@ -1168,10 +1216,19 @@ def _write_plate_atlas(
                 smile_width=float(frame.metrics.smile_width),
                 frame_index=int(frame.index),
                 time_seconds=float(frame.time_seconds),
+                viseme=plate_visemes.get(index, ""),
             )
         )
     write_plate_atlas_meta(
-        default_atlas_meta_path(destination), records, source=source_label
+        default_atlas_meta_path(destination),
+        records,
+        source=source_label,
+        viseme_to_plate=viseme_to_plate,
+    )
+    print(
+        f"Plate atlas step 13: {len(records)} shapes, "
+        f"{len(viseme_to_plate)} viseme->plate bindings",
+        flush=True,
     )
     return paths
 
@@ -1338,10 +1395,18 @@ def write_capture_bundle(
         open_display.landmarks_meta,
     )
     smile_path = write_expression_plate(
-        default_smile_plate_path(destination), smile_display.image_bgr, smile_alpha
+        default_smile_plate_path(destination),
+        match_plate_to_reference(
+            smile_display.image_bgr, rest_display.image_bgr, smile_alpha
+        ),
+        smile_alpha,
     )
     open_path = write_expression_plate(
-        default_open_plate_path(destination), open_display.image_bgr, open_alpha
+        default_open_plate_path(destination),
+        match_plate_to_reference(
+            open_display.image_bgr, rest_display.image_bgr, open_alpha
+        ),
+        open_alpha,
     )
     written["smile"] = smile_path
     written["open"] = open_path
@@ -1362,7 +1427,9 @@ def write_capture_bundle(
     )
     surprise_path = write_expression_plate(
         default_surprise_plate_path(destination),
-        surprise_display.image_bgr,
+        match_plate_to_reference(
+            surprise_display.image_bgr, rest_display.image_bgr, surprise_alpha
+        ),
         surprise_alpha,
     )
     written["surprise"] = surprise_path
@@ -1377,7 +1444,11 @@ def write_capture_bundle(
             *selection.talk_frames,
         ]
     atlas_paths = _write_plate_atlas(
-        destination, bank, source_label=source_label, hires=hires
+        destination,
+        bank,
+        source_label=source_label,
+        hires=hires,
+        reference=rest_display,
     )
     written["plate_atlas"] = destination.with_name("plate_atlas.json")
     for path in atlas_paths:
@@ -1475,14 +1546,15 @@ def run_capture_from_video(
             [selection.rest, selection.smile, selection.open, *selection.talk_frames],
             rest=selection.rest,
         )
-    from aiface.plates import select_atlas_frames
+    from aiface.plates import select_viseme_atlas_frames
 
+    atlas_frames, _viseme_map = select_viseme_atlas_frames(frames)
     display_targets: list[FrameSample] = [
         selection.rest,
         selection.smile,
         selection.open,
         *([selection.surprise] if selection.surprise is not None else []),
-        *select_atlas_frames(frames),
+        *atlas_frames,
     ]
     hires = resample_frames_hires(video, display_targets)
     return write_capture_bundle(

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from aiface.mouth_owner import (
+    hold_speech_viseme,
+    mute_smile_under_open,
     plate_amount_for_openness,
     resolve_mouth_ownership,
+    snap_smile_drive,
 )
 
 
@@ -48,3 +51,40 @@ def test_plate_amount_ramp() -> None:
     mid = plate_amount_for_openness(0.25)
     assert 0.0 < mid < 1.0
     assert plate_amount_for_openness(0.5) == 1.0
+
+
+def test_plate_amount_hard_snap_is_binary() -> None:
+    assert plate_amount_for_openness(0.05, hard_snap=True) == 0.0
+    assert plate_amount_for_openness(0.25, hard_snap=True) == 1.0
+    assert plate_amount_for_openness(0.5, hard_snap=True) == 1.0
+
+
+def test_mute_smile_under_open() -> None:
+    assert mute_smile_under_open(0.55, 0.0) == 0.55
+    assert mute_smile_under_open(0.55, 0.12) == 0.55
+    assert mute_smile_under_open(0.55, 0.32) == 0.0
+    mid = mute_smile_under_open(0.55, 0.22)
+    assert 0.0 < mid < 0.55
+
+
+def test_hold_speech_viseme_while_open() -> None:
+    viseme, held = hold_speech_viseme("AH", "REST", open_n=0.8, jaw_n=0.4)
+    assert viseme == "AH" and held == "AH"
+    viseme, held = hold_speech_viseme("REST", "AH", open_n=0.8, jaw_n=0.4)
+    assert viseme == "AH" and held == "AH"
+    viseme, held = hold_speech_viseme("REST", "AH", open_n=0.0, jaw_n=0.0)
+    assert viseme == "REST" and held == "REST"
+
+
+def test_tight_lips_cancel_open_hold() -> None:
+    """CLOSED/PP must not keep OH parked over closing lips."""
+    viseme, held = hold_speech_viseme("CLOSED", "OH", open_n=0.8, jaw_n=0.4)
+    assert viseme == "CLOSED" and held == "CLOSED"
+    viseme, held = hold_speech_viseme("PP", "OH", open_n=0.8, jaw_n=0.4)
+    assert viseme == "PP" and held == "PP"
+
+
+def test_snap_smile_drive_binary() -> None:
+    assert snap_smile_drive(0.55, hard_snap=True) == 1.0
+    assert snap_smile_drive(0.4, hard_snap=True) == 0.0
+    assert snap_smile_drive(0.55, hard_snap=False) == 0.55

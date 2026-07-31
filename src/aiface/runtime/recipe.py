@@ -87,18 +87,21 @@ class DisplayRecipe:
     """
 
     open_jaw_full: float = 0.40
-    smile_open_overlap: float = 0.55
-    atlas_strength: float = 0.65
+    # Full open must kill smile.png — mid overlap left a washed double mouth.
+    smile_open_overlap: float = 1.0
+    atlas_strength: float = 0.85
     cavity_strength: float = 0.85
-    smile_happy_floor: float = 0.55
+    # No permanent HAPPY smile overlay — floor>0 parked smile.png's wide soft
+    # matte as a dark blur rectangle over closed lips (see gpu smile=1.00@REST).
+    smile_happy_floor: float = 0.0
     smile_width_start: float = 0.12
     smile_width_span: float = 0.35
     closed_openness_cap: float = 0.15
     openness_plate_boost: float = 12.0
     plate_open_floor: float = 0.04
-    plate_open_full: float = 0.32
+    plate_open_full: float = 0.28
     field_warp_gain: float = 0.35
-    plate_sharpness: float = 0.60
+    plate_sharpness: float = 0.90
 
     @property
     def shader_knobs(self) -> tuple[float, float, float, float]:

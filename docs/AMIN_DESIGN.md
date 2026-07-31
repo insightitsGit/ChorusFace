@@ -166,15 +166,16 @@ plate cross-fades that mix two mouth photos at 50/50 — is the mouth blur.
 
 | | |
 | --- | --- |
-| **Design** | A 50/50 blend of two mouth photos looks like motion blur. Atlas selects the **nearest** real shape (snap) instead of cross-fading pairs; open/smile drives get a sharpness curve so plates are mostly-off or mostly-on. |
-| **Code** | **Built.** `DisplayRecipe.plate_sharpness` (default 0.6) → `avatar_plate_sharpness` uniform; `avatar.frag` steepens open/smile drives (`smoothstep(0.18, 0.82)`) and biases the atlas `mix_ab` toward the nearest plate (`smoothstep(0.35, 0.65)`). |
+| **Design** | A 50/50 blend of two mouth photos looks like motion blur. At high sharpness, speech snaps to a **single** plate (`mix=0`); open/smile drives stay mostly-off or mostly-on. |
+| **Code** | **Built.** `DisplayRecipe.plate_sharpness` (default **0.90**) → hard snap when ≥0.75 via `PlateAtlas.pair_for_viseme` / `pair_for_openness`; shader still steepens open/smile drives. |
+| **Compositing fixes** | Color-match at digest; cavity bows out to the open plate (6 warp iters). Residual soft veil: mute smile under open, `smile_open_overlap=1.0`, hard-snap plate *amount*, hold last speaking viseme while jaw/open elevated, atlas strength → 1.0 when speaking, plate textures LINEAR without mipmaps. |
 
 ### Step 13 — Denser viseme plate bank
 
 | | |
 | --- | --- |
-| **Design** | One real keyframe per canonical viseme, chosen by landmark match from the take — every sound shows the actual video mouth, not an interpolation between 8 openness bins. |
-| **Code** | `aiface.capture` atlas selection, `aiface.plates`, viseme→plate map in `condition_maps.json`. |
+| **Design** | One real keyframe per canonical viseme, chosen by landmark match from the take — every sound shows the actual video mouth, not an interpolation between 8 openness bins. Take openness span still bounds how wide the jaw can look. |
+| **Code** | **Built.** `aiface.plates.select_viseme_atlas_frames` → `viseme_to_plate` in `plate_atlas.json` (up to 16 unique plates at `DISPLAY_SIZE=1024`); runtime prefers viseme→plate over eased openness. |
 
 ### Step 14 — Ground-truth playback check
 

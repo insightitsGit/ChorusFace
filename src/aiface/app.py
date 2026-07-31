@@ -225,6 +225,20 @@ class AvatarFaceApp(FieldRuntime):
             help="Play a built-in phoneme loop without waiting for chat",
         )
         parser.add_argument(
+            "--gpu-log",
+            action="store_true",
+            default=_environment_flag("AIFACE_GPU_LOG"),
+            help=(
+                "Log GPU recipe objects once per 60 Hz simulation tick "
+                "(mouth object, plates, jaw, viseme). Also AIFACE_GPU_LOG=1"
+            ),
+        )
+        parser.add_argument(
+            "--gpu-log-verbose",
+            action="store_true",
+            help="Print every tick to stdout (default: file + 5 Hz summary)",
+        )
+        parser.add_argument(
             "--no-chat",
             action="store_true",
             help="Disable the stdin chat thread (window + demo only)",
@@ -448,6 +462,7 @@ class AvatarFaceApp(FieldRuntime):
         self._plate_blend_current = (0.0, 0.0)
         self._plate_openness_current = 0.0
         self._plate_pair = (0, 0)
+        self._held_speech_viseme = "REST"
         self._expression_catalog = None
         self._expr_eye_widen = 0.0
         self._expr_brow_raise = 0.0
@@ -477,6 +492,19 @@ class AvatarFaceApp(FieldRuntime):
         self._ml_smile = 0.0
         self._ml_plate_gate = 0.0
         self._open_close_source = "heuristic"
+        self._mouth_object_cells = 0
+        self._gpu_log = bool(getattr(self.argv, "gpu_log", False))
+        self._gpu_log_verbose = bool(getattr(self.argv, "gpu_log_verbose", False))
+        self._gpu_log_last_tick = -1
+        self._gpu_log_path: Path | None = None
+        self._gpu_log_handle = None
+        if self._gpu_log:
+            from aiface.paths import PREVIEWS, ensure_output_tree
+
+            ensure_output_tree()
+            self._gpu_log_path = PREVIEWS / "gpu_tick.log"
+            self._gpu_log_handle = self._gpu_log_path.open("w", encoding="utf-8")
+            print(f"GPU tick log (60 Hz): {self._gpu_log_path}")
         # Muscle anchors are authored in face-box UV, so the box has to be
         # known before any texture or uniform derived from it is built.
         self._face_box = self._load_face_box(world)
@@ -643,6 +671,7 @@ class AvatarFaceApp(FieldRuntime):
         ys = np.asarray([cell[1] for cell in best_cells], dtype=np.float64)
         x = float(xs.mean()) + 0.5
         y = float(ys.mean()) + 0.5
+        self._mouth_object_cells = int(best_count)
         print(
             f"Mouth object address from region catalog: {best_count} cells "
             f"@ ({x:.1f}, {y:.1f})"
@@ -1023,26 +1052,52 @@ class AvatarFaceApp(FieldRuntime):
         )
 
     def _sync_plate_blend_from_phoneme(self) -> None:
-        """Drive plate memory from eased openness (updated every 60 Hz frame)."""
+        """Drive plate memory from the active viseme (hard snap when sharp)."""
         atlas = self._plate_atlas
         if atlas is None or not self._atlas_textures:
             self._plate_blend = (0.0, 0.0)
             self._plate_blend_current = (0.0, 0.0)
             self._plate_openness_current = 0.0
             self._plate_pair = (0, 0)
+            self._held_speech_viseme = "REST"
             return
-        ia, ib, mix = atlas.pair_for_openness(self._plate_openness_current)
+        from aiface.mouth_owner import (
+            CLOSED_VISEMES,
+            hold_speech_viseme,
+            plate_amount_for_openness,
+        )
+        from aiface.plates import HARD_SNAP_THRESHOLD
+        from aiface.speech import canonical_viseme
+
+        raw = canonical_viseme(self._render_state.last_phoneme or "REST")
+        phoneme, self._held_speech_viseme = hold_speech_viseme(
+            raw,
+            getattr(self, "_held_speech_viseme", "REST"),
+            open_n=float(self._plate_openness_current),
+            jaw_n=float(getattr(self, "_ml_jaw", 0.0)),
+        )
+        hard = float(self._display_recipe.plate_sharpness) >= HARD_SNAP_THRESHOLD
+        if hard:
+            # Step 12/13: one real plate per viseme — never mid-blend ghosts.
+            ia, ib, mix = atlas.pair_for_viseme(phoneme, hard_snap=True)
+        else:
+            ia, ib, mix = atlas.pair_for_openness(
+                self._plate_openness_current, hard_snap=False
+            )
         ia = max(0, min(ia, len(self._atlas_textures) - 1))
         ib = max(0, min(ib, len(self._atlas_textures) - 1))
         self._plate_pair = (ia, ib)
-        # NWR-first: plate amount follows openness (no Path A seal).
-        from aiface.mouth_owner import plate_amount_for_openness
-
-        amount = plate_amount_for_openness(
-            self._plate_openness_current,
-            floor=self._display_recipe.plate_open_floor,
-            full=self._display_recipe.plate_open_full,
-        )
+        if phoneme in CLOSED_VISEMES or raw in CLOSED_VISEMES:
+            # Tight lips: atlas may show PP, but open.png amount must be zero.
+            amount = 0.0
+            self._plate_openness_current = 0.0
+        else:
+            amount = plate_amount_for_openness(
+                self._plate_openness_current,
+                floor=self._display_recipe.plate_open_floor,
+                full=self._display_recipe.plate_open_full,
+                hard_snap=hard,
+            )
         self._plate_blend = (float(mix), amount)
         self._plate_blend_current = (float(mix), amount)
 
@@ -1064,6 +1119,13 @@ class AvatarFaceApp(FieldRuntime):
         elif not self._live_vector.has_history:
             self._live_vector.push_rms(0.0)
 
+        from aiface.mouth_owner import (
+            CLOSED_VISEMES,
+            mute_smile_under_open,
+            snap_smile_drive,
+        )
+        from aiface.plates import HARD_SNAP_THRESHOLD
+
         phoneme = canonical_viseme(self._render_state.last_phoneme or "REST")
         # Known words come from the digested condition map when present
         # (AMIN Step 6); the built-in table is the per-viseme fallback.
@@ -1081,10 +1143,16 @@ class AvatarFaceApp(FieldRuntime):
         atlas_open = 0.0
         if self._plate_atlas is not None:
             atlas_open = float(self._plate_atlas.target_openness(phoneme))
-        if speaking and phoneme not in {"REST", "CLOSED", "PP", "MM"}:
+        tight_lips = phoneme in CLOSED_VISEMES
+        if speaking and not tight_lips and phoneme != "REST":
             jaw_target = float(phoneme_jaw)
             target = max(float(phoneme_jaw), atlas_open, float(controls.openness_n))
             self._open_close_source = "viseme"
+        elif speaking and tight_lips:
+            # Lip-tighten (hmm / PP / MM): clear open timeline immediately.
+            jaw_target = 0.0
+            target = 0.0
+            self._open_close_source = "viseme-closed"
         elif speaking:
             jaw_target = 0.0
             target = min(
@@ -1103,13 +1171,17 @@ class AvatarFaceApp(FieldRuntime):
         self._ml_plate_gate = float(controls.plate_gate)
         # Smile look from capture: HAPPY emotion or live width (video smile).
         recipe = self._display_recipe
+        hard = float(recipe.plate_sharpness) >= HARD_SNAP_THRESHOLD
         mood = (self._telemetry.last_emotion or "NEUTRAL").upper()
         smile_amt = 0.0
-        if mood == "HAPPY":
-            smile_amt = max(float(recipe.smile_happy_floor), float(controls.width_n))
+        if tight_lips:
+            # Tight lips own the mouth — no smile veil over closing PP/MM.
+            smile_amt = 0.0
         else:
-            # Normalized smile width from the take — show smile.png when wide.
-            smile_amt = max(
+            # Smile plate only from real width (and optional HAPPY floor).
+            # A non-zero floor with no width parked smile.png's huge soft matte
+            # as the dark blur rectangle over closed lips.
+            width_smile = max(
                 0.0,
                 min(
                     1.0,
@@ -1117,15 +1189,43 @@ class AvatarFaceApp(FieldRuntime):
                     / max(float(recipe.smile_width_span), 1e-6),
                 ),
             )
-        self._ml_smile = smile_amt
+            floor = float(recipe.smile_happy_floor) if mood == "HAPPY" else 0.0
+            smile_amt = max(floor, width_smile)
+        # Sticky HAPPY floor at mid-open washes smile+open into a soft veil.
+        open_for_mute = max(
+            float(self._plate_openness_current),
+            float(target),
+            float(jaw_target),
+        )
+        smile_amt = mute_smile_under_open(smile_amt, open_for_mute)
+        # Closed mouth + smile.png = the dark soft rectangle in screenshots.
+        # That plate's matte is a wide lower-face ellipse; never park it on REST.
+        closed_mouth = (
+            phoneme in {"REST", *CLOSED_VISEMES}
+            and float(self._plate_openness_current) < 0.10
+            and float(target) < 0.10
+            and float(jaw_target) < 0.08
+        )
+        if closed_mouth:
+            smile_amt = 0.0
+        self._ml_smile = snap_smile_drive(smile_amt, hard_snap=hard)
 
-        attack = float(getattr(self, "_plate_ease_rate", 7.0))
-        release = attack * float(getattr(self, "_plate_release_scale", 0.35))
-        rate = attack if target >= self._plate_openness_current else release
-        amount = 1.0 - math.exp(-max(frame_time, 0.0) * rate)
-        self._plate_openness_current += (
-            target - self._plate_openness_current
-        ) * amount
+        if tight_lips:
+            # Do not ease open.png out — snap off so the layer cannot linger.
+            self._plate_openness_current = 0.0
+            self._held_speech_viseme = phoneme
+        else:
+            attack = float(getattr(self, "_plate_ease_rate", 7.0))
+            # Hard snap: release almost as fast as attack so mid-amount veils die.
+            release_scale = 0.85 if hard else float(
+                getattr(self, "_plate_release_scale", 0.35)
+            )
+            release = attack * release_scale
+            rate = attack if target >= self._plate_openness_current else release
+            amount = 1.0 - math.exp(-max(frame_time, 0.0) * rate)
+            self._plate_openness_current += (
+                target - self._plate_openness_current
+            ) * amount
 
         self._biomech.jaw.set_speech_target(jaw_target)
 
@@ -1160,9 +1260,14 @@ class AvatarFaceApp(FieldRuntime):
             print(f"warning: could not load expression plate {path.name} ({exc})")
             return None
 
-    def _upload_rgba_texture(self, rgba: np.ndarray) -> moderngl.Texture:
+    def _upload_rgba_texture(
+        self, rgba: np.ndarray, *, mipmaps: bool = False
+    ) -> moderngl.Texture:
         # Plates are photographs — 8-bit normalized keeps hi-res display
         # textures inside integrated-GPU bandwidth (f4 was 4× the bytes).
+        # Default: LINEAR without mipmaps so lip edges stay sharp (mips were
+        # a residual soft-focus source on open/smile/atlas). Photo base keeps
+        # its own mipmapped upload path.
         data = np.clip(rgba, 0.0, 1.0)
         data = np.ascontiguousarray(np.rint(data * 255.0), dtype=np.uint8)
         texture = self.ctx.texture(
@@ -1171,10 +1276,11 @@ class AvatarFaceApp(FieldRuntime):
             data=data.tobytes(),
             dtype="f1",
         )
-        # Mipmaps keep hi-res plates cheap when minified (integrated GPUs
-        # thrash their texture cache on un-mipped 1024² lookups).
-        texture.build_mipmaps()
-        texture.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+        if mipmaps:
+            texture.build_mipmaps()
+            texture.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+        else:
+            texture.filter = (moderngl.LINEAR, moderngl.LINEAR)
         texture.repeat_x = False
         texture.repeat_y = False
         return texture
@@ -1451,7 +1557,24 @@ class AvatarFaceApp(FieldRuntime):
             pose.expression,
         )
         # Digested GPU display recipe knobs (same contract at train and play).
-        program["avatar_recipe"].value = self._display_recipe.shader_knobs
+        from aiface.plates import HARD_SNAP_THRESHOLD
+
+        knobs = list(self._display_recipe.shader_knobs)
+        held = str(getattr(self, "_held_speech_viseme", "REST") or "REST")
+        speaking_plate = (
+            float(self._plate_blend_current[1]) > 0.45
+            and held not in {"REST", "CLOSED", ""}
+            and float(self._display_recipe.plate_sharpness) >= HARD_SNAP_THRESHOLD
+        )
+        if speaking_plate:
+            # Atlas must fully own the mouth while a speech plate is active.
+            knobs[2] = max(float(knobs[2]), 1.0)
+        program["avatar_recipe"].value = (
+            float(knobs[0]),
+            float(knobs[1]),
+            float(knobs[2]),
+            float(knobs[3]),
+        )
         # NWR field warp: validated ±4 impulses integrated on the GPU move
         # unlocked tissue directly (steps 1–3 close the loop at the pixels).
         program["avatar_field_gain"].value = float(
@@ -2337,6 +2460,7 @@ class AvatarFaceApp(FieldRuntime):
         self._sync_plate_blend_from_phoneme()
         self._update_avatar_uniforms()
         super().on_render(time_value, frame_time)
+        self._emit_gpu_tick_log()
         # GPU latency: wait for the submitted work to land, then sample.
         self.ctx.finish()
         self._gpu_times.append((time.perf_counter() - frame_started) * 1000.0)
@@ -2348,6 +2472,43 @@ class AvatarFaceApp(FieldRuntime):
             self._telemetry_age = 0
             self._sample_mouth_telemetry()
         self._write_capture_frame()
+
+    def _emit_gpu_tick_log(self) -> None:
+        """Log GPU recipe object drives once per 60 Hz simulation tick."""
+        if not self._gpu_log:
+            return
+        tick = int(self.tick)
+        if tick == self._gpu_log_last_tick:
+            return
+        self._gpu_log_last_tick = tick
+        from aiface.speech import canonical_viseme
+
+        phoneme = canonical_viseme(self._render_state.last_phoneme or "REST")
+        plate_viseme = canonical_viseme(
+            getattr(self, "_held_speech_viseme", phoneme) or phoneme
+        )
+        ia, ib = self._plate_pair
+        mix, amount = self._plate_blend_current
+        jaw = float(getattr(self._render_state, "jaw_angle", 0.0))
+        line = (
+            f"gpu@60 t={tick} viseme={phoneme} plate={plate_viseme} "
+            f"jaw={jaw:.3f} "
+            f"open={float(self._plate_openness_current):.3f} "
+            f"smile={float(self._ml_smile):.3f} "
+            f"mouth_obj={int(self._mouth_object_cells)}"
+            f"@({self._mouth_center[0]:.1f},{self._mouth_center[1]:.1f}) "
+            f"plates=open:{amount:.2f} smile:{float(self._ml_smile):.2f} "
+            f"atlas={ia}/{ib} mix={mix:.2f} "
+            f"muscles={int(self._active_muscle_count)} "
+            f"recipe=on warp_gain={float(self._display_recipe.field_warp_gain):.2f} "
+            f"sharpness={float(self._display_recipe.plate_sharpness):.2f}"
+        )
+        if self._gpu_log_handle is not None:
+            self._gpu_log_handle.write(line + "\n")
+            if tick % 12 == 0:
+                self._gpu_log_handle.flush()
+        if self._gpu_log_verbose or tick % 12 == 0:
+            print(line, flush=True)
 
     def _write_capture_frame(self) -> None:
         if self._capture_directory is None:
@@ -2493,6 +2654,11 @@ class AvatarFaceApp(FieldRuntime):
 
     def on_close(self) -> None:
         self._shutdown.set()
+        if self._gpu_log_handle is not None:
+            with contextlib.suppress(OSError):
+                self._gpu_log_handle.flush()
+                self._gpu_log_handle.close()
+            self._gpu_log_handle = None
         if self._bridge is not None:
             self._bridge.stop()
             self._bridge = None
