@@ -12,11 +12,11 @@ Full design: [`AMIN_DESIGN.md`](AMIN_DESIGN.md) · Doc index: [`README.md`](READ
 | 6 | Looks + maps | Real plates; word/sound/emotion tables | `amin_loop.mapping`, plates |
 | 7 | Props per region | mean[32] + lock + samples | `region_catalog.json` |
 | 8 | GPU recipe | Same display path at play (L00–L11) | `gpu_recipe`, `display_layers`, `avatar.frag` |
-| 15 | Mouth groups | Retargetable lip/teeth/cavity cell plan | `mouth_groups`, `mouth_cell_plan`, `cell_cluster` |
-| 16 | Avatar adoption | Any qualifying world dir | `avatar_profile` |
-| 17 | Behavior ML | Measured transitions + retrainable fill | `behavior/`, `retrain_behavior.py` |
 | 9 | Live vectors | Video → controls → model | `aiface.live_vector` |
 | 10 | Train + play | One pipeline | `scripts/amin_train.py`, `aiface` |
+
+See also: [`DisplayLayers.md`](DisplayLayers.md) · [`MouthCellGroups.md`](MouthCellGroups.md) ·
+[`AvatarAdoption.md`](AvatarAdoption.md) · [`AvatarBehavior.md`](AvatarBehavior.md)
 
 ## Realism track (steps 11–14 — why the mouth blurs today)
 
@@ -29,6 +29,14 @@ axis — nothing in steps 1–10 fixes it, so these steps do.
 | 12 | Plate snap, not ghost | Sharpen open/smile drive; at `plate_sharpness≥0.75` speech uses a **single** plate (mix=0) so mid-blends cannot ghost | **Built** — default sharpness **0.90** |
 | 13 | Denser viseme bank | Landmark-match one real video keyframe per canonical viseme → `viseme_to_plate` in `plate_atlas.json` (up to 16 unique plates) | **Built** — `select_viseme_atlas_frames` |
 | 14 | Ground-truth check | Score the pipeline against the source: data half checks capture selection, plates, regions, dataset, model (`scripts/verify_world.py` — 12 checks); playback half (re-render + landmark/SSIM score) still open | **Data half built** |
+
+## Adoption + cell plan + behavior (steps 15–17)
+
+| # | Step | Design idea | Status |
+| --- | --- | --- | --- |
+| 15 | Mouth groups | Retargetable lip/teeth/cavity cell plan (L03) | **Built** — `mouth_groups`, `mouth_cell_plan`, `cell_cluster` |
+| 16 | Avatar adoption | Any qualifying world dir → same GPU path | **Built** — `avatar_profile` / `open_avatar` |
+| 17 | Behavior ML | Measured transitions + retrainable fill for gaps | **Built** — `behavior/`, `scripts/retrain_behavior.py` |
 
 ## Mouth-blur root causes (fixed after steps 11–13)
 
