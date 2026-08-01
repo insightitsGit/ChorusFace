@@ -5,6 +5,9 @@ Investigation artifact after reviewing NWR design docs
 AIFace avatar with phoneme / emotion / intent signals
 (`scripts/probe_bds_motion.py` → `output/worlds/avatar/bds_motion_probe.json`).
 
+Related design: [`DisplayLayers.md`](DisplayLayers.md) (L01 field under plates) ·
+[`MouthCellGroups.md`](MouthCellGroups.md) · [`AvatarBehavior.md`](AvatarBehavior.md)
+
 ## 1. Positioning (NWR parent vs AIFace child)
 
 | Rule (from NWR) | AIFace stance |

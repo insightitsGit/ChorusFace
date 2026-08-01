@@ -11,10 +11,12 @@ with shared roles (lock, soft tissue, plate look) and relations in
 ```text
 Digest teaches cells and looks.
 Mapping teaches words / sounds / emotions.
-Runtime validates (Master Lock).
-ML covers holes.
+Video teaches live vectors + measured group transitions.
+Runtime validates (Master Lock) on L00–L11.
+ML covers holes (live-vector) and fills transition gaps (behavior).
 Identity albedo stays locked.
 Capture open/smile plates must actually paint (not gap-gated only).
+Any qualifying world dir adopts through avatar_profile.
 ```
 
 ## End-to-end data flow
@@ -25,23 +27,34 @@ flowchart TB
   digest[Digest_landmarks_and_regions]
   cells[Cell_field_bds_256x256x32]
   regions[Region_objects_cell_clusters]
+  groups[Mouth_groups_lips_teeth_cavity]
   looks[Condition_looks_rest_smile_open]
-  recipe[GPU_display_recipe]
+  recipe[GPU_display_recipe_L00_L11]
+  profile[avatar_profile]
   map[Drive_mapping_words_sounds_emotions]
-  cover[ML_cover_unknowns]
+  cover[Live_vector_ML_cover]
+  track[cell_transition_track]
+  behavior[behavior_model_ML_fill]
   runtime[Runtime_MasterLock_same_GPU_path]
 
   src --> digest
   digest --> cells
   digest --> regions
+  regions --> groups
   digest --> looks
   digest --> recipe
+  digest --> profile
+  src --> track
+  track --> behavior
   cells --> map
   regions --> map
   looks --> map
   map --> runtime
   cover --> runtime
+  behavior --> runtime
+  groups --> runtime
   recipe --> runtime
+  profile --> runtime
 ```
 
 ## Stage A — Digest
@@ -68,14 +81,28 @@ See [`BDSMotionMap.md`](BDSMotionMap.md) and [`AMIN_DESIGN.md`](AMIN_DESIGN.md) 
 ```text
 word / sound / viseme / emotion
         ↓
-  region drives + plate amounts
+  region drives + plate amounts + group cell plan
         ↓
-  same GPU recipe
+  same GPU recipe (L00–L11)
 ```
 
 - **Tables** for known visemes/emotions  
-- **ML** only for unknowns  
+- **Live-vector ML** for unknown sounds  
+- **Behavior ML** fills missing transition samples / live group motion  
 - **Jaw** follows words; plates follow open/smile drives  
+
+## Stage E — Mouth groups (L03)
+
+See [`MouthCellGroups.md`](MouthCellGroups.md). Membership is retargetable;
+recipes per viseme scale open / width / round / close per group.
+
+## Stage F — Adoption + behavior
+
+| Piece | Doc |
+| --- | --- |
+| Portable world dir | [`AvatarAdoption.md`](AvatarAdoption.md) |
+| Measured transitions + retrain | [`AvatarBehavior.md`](AvatarBehavior.md) |
+| Display order | [`DisplayLayers.md`](DisplayLayers.md) |
 
 ## Storage
 

@@ -15,8 +15,9 @@ Substrate: `vendor/nwr` (pinned in `vendor/nwr/NWR_REVISION.txt`)
 NWR world = GPU field of cells (each cell = 32 floats).
 Objects   = related cell clusters (not separate meshes).
 Digest    = learn cell properties + how the GPU displays that look.
-Video     = already has motion truth → convert to live control vectors.
-Runtime   = same GPU recipe, driven by words/tables + ML cover.
+Video     = motion truth → live vectors + measured group transitions.
+Runtime   = same GPU recipe (L00–L11), tables + ML cover + ML fill for gaps.
+Adopt     = any world dir that meets requirements plugs into one path.
 Identity  = immutable photo + Master Lock (ch 31). Never invent face RGB / teeth.
 ```
 
@@ -26,12 +27,17 @@ flowchart LR
   Digest --> BDS[".bds 256x256x32"]
   Digest --> Looks[Condition_looks]
   Digest --> Recipe[GPU_display_recipe]
+  Digest --> Profile[avatar_profile]
   Video --> Vectors[Live_control_vectors]
+  Video --> Track[cell_transition_track]
+  Track --> BehaviorML[behavior_model_retrainable]
   Looks --> Maps[Word_sound_emotion_maps]
   Vectors --> Maps
-  Maps --> Runtime[Validate_then_GPU]
+  Maps --> Runtime[Validate_then_GPU_L00_L11]
   Recipe --> Runtime
   BDS --> Runtime
+  Profile --> Runtime
+  BehaviorML --> Runtime
 ```
 
 ---
@@ -111,14 +117,16 @@ flowchart LR
 | **Code** | `aiface.runtime.recipe` (single source of truth), `amin_loop.gpu_recipe` (serialize), `aiface/shaders/avatar.frag` (`avatar_recipe` uniform), `aiface.app._update_avatar_uniforms` (load + drive) |
 | **Artifacts** | `gpu_display_recipe.json` (real knobs — loaded back at play, not prose) |
 
-Display path (order matters):
+Display path (order matters) — coded as **L00–L11** in
+[`DisplayLayers.md`](DisplayLayers.md) / `aiface.display_layers`:
 
-1. Identity photo + tissue warp (muscles + jaw)  
-2. **Capture plates** `open.png` / `smile.png` over mouth matte (must be visible — not gap-gated only)  
-3. Optional cavity fill when jaw actually parts  
-4. Atlas plate memory (finer visemes)  
-5. Upper-face expression plate (surprise)  
-6. Master Lock rejects illegal cell writes  
+| Plane | Layers |
+| --- | --- |
+| FIELD | L00 identity lock → L01 field velocity → L02 muscle/jaw → L03 cell groups |
+| LOOK | L04 smile → L05 open → L06 cavity → L07 atlas → L08 expr |
+| PRESENTATION | L09 eyes → L10 brow → L11 HUD |
+
+Do not reorder Plane B without a deliberate shader change (blur / gap regressions).
 
 ### Step 9 — Video → live control vectors
 
@@ -141,6 +149,38 @@ Display path (order matters):
 pip install -e ".[ml,voice]"
 python scripts/amin_train.py --video assets/avatar_video_inputs/YOUR.mp4
 aiface --demo --tts --world output/worlds/avatar/avatar_face.bds
+```
+
+### Step 15 — Mouth cell groups + word-timed cell plan
+
+| | |
+| --- | --- |
+| **Design** | Mouth is not one disc. Named groups (`upper_lip`, `lower_lip`, `lip_corners`, `teeth`, `cavity`) are retargetable; the word clock plans cell→neighbor ±4 drives (L03 → L01). |
+| **Code** | `aiface.mouth_groups`, `aiface.mouth_cell_plan`, `aiface.cell_cluster`; bridge `GET /cells`, `POST /cells/drive` |
+| **Docs** | [`MouthCellGroups.md`](MouthCellGroups.md) |
+
+### Step 16 — Avatar adoption (any qualifying face)
+
+| | |
+| --- | --- |
+| **Design** | Digestion learns cell↔GPU coupling per upload. Runtime must not hard-code one world path. A world dir that meets requirements (`.bds`, identity, open/smile, `mouth_unlocked`) opens through one adapter. |
+| **Code** | `aiface.avatar_profile` (`open_avatar`, `write_avatar_profile`, `list_avatars`) |
+| **Artifacts** | `avatar_profile.json` |
+| **Docs** | [`AvatarAdoption.md`](AvatarAdoption.md) |
+
+### Step 17 — Measured transitions + retrainable behavior ML
+
+| | |
+| --- | --- |
+| **Design** | Between capture seconds, per-cell ms paths were lost. Store **measured** mouth-group transitions + deltas from the upload; train an ML model to **fill gaps** and live speech. New upload → replace model in that world dir. |
+| **Authority** | measured track → ML fill → viseme table (existing live-vector / plates stay when present) |
+| **Code** | `aiface.behavior` (`extract_transition_track`, `fit_behavior_model`, `BehaviorDriver`); `scripts/retrain_behavior.py`; `amin_train --behavior-only` |
+| **Artifacts** | `cell_transition_track.npz/json`, `behavior_dataset.npz`, `behavior_model.joblib` |
+| **Docs** | [`AvatarBehavior.md`](AvatarBehavior.md) |
+
+```powershell
+# Retrain only (user uploaded a new take for the same face)
+python scripts/retrain_behavior.py --video NEW_TAKE.mp4 --world-dir output/worlds/avatar
 ```
 
 ---
@@ -194,6 +234,9 @@ plate cross-fades that mix two mouth photos at 50/50 — is the mouth blur.
 | Open look | Viseme openness → `open.png` overlay | Stay invisible behind gap gate |
 | Smile look | HAPPY and/or live `width_n` → `smile.png` | Zero for all NEUTRAL forever |
 | Unknown sounds | Live-vector ML cover | Rewrite identity albedo |
+| Gap / live group motion | Measured track → **behavior ML fill** → table | Invent optical flow / face RGB |
+| Cell group membership | Digest geometry + `retarget_group` | Hard-code one disc forever |
+| Display composite order | `display_layers` L00–L11 | Mid-stack reorder of Plane B |
 | Field tissue motion | NWR velocity ch 0/1 × `field_warp_gain` (lock-gated) | Stay telemetry-only |
 | Identity cells | Master Lock ch 31 | Path A ownership seals |
 
@@ -205,9 +248,11 @@ Full detail: [`AMIN_DATA_STORE.md`](AMIN_DATA_STORE.md).
 
 | Store once | Compact side-cars |
 | --- | --- |
-| `.bds` ≈ 8 MB (all cells × 32 floats) | region means, condition maps, GPU recipe, live vectors, plates |
+| `.bds` ≈ 8 MB (all cells × 32 floats) | region means, condition maps, GPU recipe, live vectors, plates, transition track, behavior model, avatar profile |
 
-We do **not** save a full grid per video frame.
+We do **not** save a full grid per video frame. Transitions are **group-level**
+samples + deltas (see [`AvatarBehavior.md`](AvatarBehavior.md)), not per-cell
+optical flow.
 
 ---
 
@@ -223,16 +268,23 @@ src/amin_loop/
   mapping.py                Step 6
   gpu_recipe.py             Step 8
   live_vectors.py           Step 9
-  pipeline.py / cli.py      Step 10
+  pipeline.py / cli.py      Step 10 (+ behavior train)
   store.py                  Data manifest
 src/aiface/
-  runtime/                  Field, .bds, commands, shaders
+  runtime/                  Field, .bds, commands, shaders, recipe
   capture.py                Digest take → plates
-  live_vector/              Extract / train / driver
+  live_vector/              Extract / train / driver (Step 9)
+  display_layers.py         L00–L11 hierarchy (Step 8+)
+  cell_cluster.py           Per-cell / neighbor ±4 (Step 15)
+  mouth_groups.py           Lip / teeth / cavity groups
+  mouth_cell_plan.py        Word-timed cell→neighbor plan
+  avatar_profile.py         Adoption contract (Step 16)
+  behavior/                 Measured track + ML fill (Step 17)
   app.py                    Window + uniforms + authority
   mouth_owner.py            NWR-first status (no Path A seals)
-  shaders/avatar.frag       GPU display recipe
+  shaders/avatar.frag       GPU display recipe (L-codes)
 scripts/amin_train.py       One-command train
+scripts/retrain_behavior.py Retrain behavior on new upload
 docs/                       This design set (see docs/README.md)
 ```
 
@@ -247,6 +299,11 @@ docs/                       This design set (see docs/README.md)
 | Open/smile only in jaw gap | Capture looks invisible | Direct plate overlay in shader |
 | Jaw from RMS energy | Jaw flaps off words | Visemes own jaw |
 | Tiny mouth mattes | Plates barely visible | Wider expression mattes |
+| Atlas mute zeroed cavity suppress | Synthetic mouth gap | Cavity follows layer/atlas amount |
+| Brow × Master Lock `unlocked` | No eyebrows | L10 brow display-only |
+| One mouth disc | No per-cell control | `CellClusterIndex` + groups + plan |
+| Lost transitions between seconds | Popping / typed lips | Measured track + behavior ML fill |
+| Hard-coded single world path | Cannot adopt other faces | `avatar_profile` / `open_avatar` |
 
 ---
 
@@ -257,9 +314,20 @@ docs/                       This design set (see docs/README.md)
 - True 3D voxel face world (Z stays a channel)  
 - Path A mouth ownership seals  
 - Per-frame full `.bds` dumps from video  
+- Invented per-cell optical flow (store measured groups; ML fills controls only)
 
 ---
 
 ## Related docs
 
 Index: [`docs/README.md`](README.md)
+
+| Area | Doc |
+| --- | --- |
+| Display stack | [`DisplayLayers.md`](DisplayLayers.md) |
+| Mouth groups | [`MouthCellGroups.md`](MouthCellGroups.md) |
+| Adopt any face | [`AvatarAdoption.md`](AvatarAdoption.md) |
+| Transitions + ML | [`AvatarBehavior.md`](AvatarBehavior.md) |
+| Capture kit | [`AvatarCapture.md`](AvatarCapture.md) |
+| Data sizes | [`AMIN_DATA_STORE.md`](AMIN_DATA_STORE.md) |
+| Live vectors | [`LiveControlVectors.md`](LiveControlVectors.md) |

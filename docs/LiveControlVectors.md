@@ -15,9 +15,13 @@ Do not invent face RGB. Do not paint a new identity into albedo.
 Digest teaches cells and looks.
 Mapping teaches words / sounds / emotions.
 Runtime validates (Master Lock).
-ML covers holes in the map.
+ML covers holes in the map (this package: open/jaw/width).
+Behavior ML fills group-transition gaps (see AvatarBehavior.md).
 Identity albedo stays locked.
 ```
+
+Related: [`AvatarBehavior.md`](AvatarBehavior.md) (retrainable group fill) ·
+[`DisplayLayers.md`](DisplayLayers.md) · [`AvatarAdoption.md`](AvatarAdoption.md)
 
 ## The catch (GPU display recipe)
 

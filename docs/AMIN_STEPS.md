@@ -11,7 +11,10 @@ Full design: [`AMIN_DESIGN.md`](AMIN_DESIGN.md) · Doc index: [`README.md`](READ
 | 5 | x,y,(z),t | 2D grid; Z = channel; t = video/speech | `amin_loop.regions` |
 | 6 | Looks + maps | Real plates; word/sound/emotion tables | `amin_loop.mapping`, plates |
 | 7 | Props per region | mean[32] + lock + samples | `region_catalog.json` |
-| 8 | GPU recipe | Same display path at play | `gpu_recipe`, `avatar.frag` |
+| 8 | GPU recipe | Same display path at play (L00–L11) | `gpu_recipe`, `display_layers`, `avatar.frag` |
+| 15 | Mouth groups | Retargetable lip/teeth/cavity cell plan | `mouth_groups`, `mouth_cell_plan`, `cell_cluster` |
+| 16 | Avatar adoption | Any qualifying world dir | `avatar_profile` |
+| 17 | Behavior ML | Measured transitions + retrainable fill | `behavior/`, `retrain_behavior.py` |
 | 9 | Live vectors | Video → controls → model | `aiface.live_vector` |
 | 10 | Train + play | One pipeline | `scripts/amin_train.py`, `aiface` |
 

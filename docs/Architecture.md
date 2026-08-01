@@ -3,6 +3,10 @@
 Amin walkthrough (design + step implementation): [`AMIN_DESIGN.md`](AMIN_DESIGN.md) ·
 Doc index: [`README.md`](README.md)
 
+New contracts: [`DisplayLayers.md`](DisplayLayers.md) ·
+[`AvatarAdoption.md`](AvatarAdoption.md) · [`AvatarBehavior.md`](AvatarBehavior.md) ·
+[`MouthCellGroups.md`](MouthCellGroups.md)
+
 AIFace is three layers with one hard rule between them: **nothing below the
 speech layer is allowed to change who the face is.**
 
@@ -18,13 +22,15 @@ aiface.speech          pure Python — visemes, mouth poses, LLM client
 aiface.biomechanics    pure Python — muscles, jaw, eyes, breathing, emotion
     │
     ├── render state (jaw angle, lid closure, gaze, brow raise, mouth pose)
+    ├── MouthCellPlan / mouth_groups (L03 cell→neighbor ±4)
+    ├── BehaviorDriver (measured track → ML fill → table)
     └── field impulse specs (velocity, radius, priority)
     │
     ▼
 aiface.runtime         GPU — constraint tick, Master Lock, continuous deform
-    │
+    │                  avatar.frag composites L00–L11 (display_layers)
     ▼
-a face
+a face   (any world opened via avatar_profile.open_avatar)
 ```
 
 Only the bottom layer needs a GPU. The two above it are ordinary, seeded,
@@ -110,7 +116,20 @@ Command rows encode their kind in the operation magnitude:
 | `±3` | Temperature delta |
 | `±4` | Velocity impulse — `(V_x, V_y)` in a disc around `segment.xy` |
 
-The avatar only ever emits `±4`.
+The avatar only ever emits `±4`. Per-cell / neighbor / cluster drives share the
+same command budget (see `aiface.cell_cluster`, bridge `/cells/drive`).
+
+### Display stack, adoption, behavior
+
+| Contract | Role |
+| --- | --- |
+| `display_layers` L00–L11 | Ordered field → look → presentation; skip idle work per tick |
+| `avatar_profile` | Any qualifying world dir → same load path |
+| `behavior` | Measured group transitions from upload; ML fills gaps; retrain on new video |
+| `mouth_groups` + `mouth_cell_plan` | Word-timed L03 drives into unlocked mouth cells |
+
+Existing live-vector + plate recipe remain authority when present; behavior /
+cell plan overlay gaps and per-cell motion without inventing face RGB.
 
 ### What is deliberately missing
 
