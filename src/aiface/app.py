@@ -70,6 +70,7 @@ from aiface.mouth_owner import (
     resolve_mouth_ownership,
 )
 from aiface.live_vector import LiveVectorDriver
+from aiface.behavior import BehaviorDriver
 from aiface.mouth_speed import (
     DEFAULT_MOUTH_SPEED,
     HOLD_SCALE_DEFAULT,
@@ -85,6 +86,7 @@ from aiface.parts import (
     load_face_part_atlas,
     save_face_part_atlas,
 )
+from aiface.avatar_profile import open_avatar
 from aiface.paths import DEFAULT_AVATAR_FACE, DEFAULT_AVATAR_SOURCE
 from aiface.runtime.bds import (
     HARD_SURFACE_CHANNEL,
@@ -96,6 +98,14 @@ from aiface.runtime.bds import (
 )
 from aiface.runtime.commands import PaintCommand
 from aiface.runtime.field import FieldRuntime
+from aiface.cell_cluster import (
+    CellClusterIndex,
+    distribute_to_nearby_cells,
+    parse_drive_request,
+    to_commands,
+)
+from aiface.mouth_cell_plan import MouthCellPlan, build_mouth_cell_plan
+from aiface.display_layers import FrameLayerState, evaluate_frame_layers
 from aiface.service import DEFAULT_HOST, DEFAULT_PORT, FaceBridge, new_token
 from aiface.skinning import (
     MAX_ACTIVE_MUSCLES,
@@ -443,6 +453,9 @@ class AvatarFaceApp(FieldRuntime):
         super().__init__(**kwargs)
 
         world = Path(getattr(self.argv, "world", DEFAULT_AVATAR_FACE))
+        # Adoption layer: any world dir that meets requirements shares this path.
+        self._avatar_bundle = open_avatar(world)
+        world = self._avatar_bundle.world_path
         self._chat_queue: queue.Queue[str] = queue.Queue()
         self._reply_queue: queue.Queue[SpokenReply] = queue.Queue()
         self._visemes: deque[VisemeEvent] = deque()
@@ -491,13 +504,11 @@ class AvatarFaceApp(FieldRuntime):
         )
         # Branch live-vector-from-video: new driver is authority (not old patches).
         self._live_vector = LiveVectorDriver.try_load(world)
-        # AMIN Step 8/10: play the SAME recipe digestion learned. The recipe
-        # and the trained condition maps are loaded from the world set and
-        # drive the shader knobs / jaw table below (defaults when absent).
-        from aiface.runtime.recipe import load_condition_jaw, load_display_recipe
-
-        self._display_recipe = load_display_recipe(world)
-        self._condition_jaw = load_condition_jaw(world)
+        # Measured transitions + ML fill for missing in-betweens / live speech.
+        self._behavior = BehaviorDriver.try_load(world)
+        # AMIN Step 8/10: recipe + jaw from the adopted avatar bundle.
+        self._display_recipe = self._avatar_bundle.recipe
+        self._condition_jaw = dict(self._avatar_bundle.condition_jaw)
         self._open_close_envelope = None
         self._open_close_start: float | None = None
         self._open_close_peak = float(self._live_vector.peak_hint)
@@ -508,6 +519,10 @@ class AvatarFaceApp(FieldRuntime):
         self._ml_plate_gate = 0.0
         self._open_close_source = "heuristic"
         self._mouth_object_cells = 0
+        self._cell_clusters: CellClusterIndex | None = None
+        self._mouth_cell_plan: MouthCellPlan | None = None
+        self._frame_layers = FrameLayerState()
+        self._pending_cell_commands: list = []
         self._gpu_log = bool(getattr(self.argv, "gpu_log", False))
         self._gpu_log_verbose = bool(getattr(self.argv, "gpu_log_verbose", False))
         self._gpu_log_last_tick = -1
@@ -541,6 +556,7 @@ class AvatarFaceApp(FieldRuntime):
         self._avatar_expr_plate_texture = self._create_expression_catalog_texture()
         # Mouth centre after part anchors load so lip pieces stay registered.
         self._mouth_center = self._estimate_mouth_center()
+        self._load_cell_clusters()
         self._derive_face_geometry()
         self._render_state = FaceRenderState()
         self._debug_view = 0
@@ -595,6 +611,18 @@ class AvatarFaceApp(FieldRuntime):
             self._start_face_bridge()
 
         print(self._avatar_help())
+        profile = self._avatar_bundle.profile
+        adopt = "OK" if self._avatar_bundle.ok else "INCOMPLETE"
+        print(
+            f"Avatar adopt [{adopt}]: id={profile.id} "
+            f"mouth_cells={profile.geometry.mouth_cell_count} "
+            f"root={self._avatar_bundle.root}"
+        )
+        if not self._avatar_bundle.ok:
+            print(
+                "  missing: "
+                + ", ".join(profile.validation.missing[:6])
+            )
         print(
             f"Mouth centre ~ ({self._mouth_center[0]:.1f}, {self._mouth_center[1]:.1f})"
         )
@@ -646,15 +674,17 @@ class AvatarFaceApp(FieldRuntime):
 
     def _resolve_avatar_source(self, world: Path) -> Path | None:
         """Prefer the original photograph so rendering never uses a mutated grid."""
+        bundle_source = getattr(self, "_avatar_bundle", None)
         candidates = [
             Path(getattr(self.argv, "face_image", "") or ""),
-            DEFAULT_AVATAR_SOURCE,
+            bundle_source.source_face if bundle_source is not None else None,
             world.with_name("source_face.png"),
             world.with_suffix(".png"),
+            DEFAULT_AVATAR_SOURCE,
         ]
         for candidate in candidates:
-            if candidate and candidate.is_file():
-                return candidate
+            if candidate and Path(candidate).is_file():
+                return Path(candidate)
         return None
 
     def _mouth_center_from_regions(self) -> tuple[float, float] | None:
@@ -697,6 +727,35 @@ class AvatarFaceApp(FieldRuntime):
             float(np.clip(x, 1.0, self.grid_width - 1.0)),
             float(np.clip(y, 1.0, self.grid_height - 1.0)),
         )
+
+    def _load_cell_clusters(self) -> None:
+        """Index every unlocked soft cell so drives can address them one-by-one."""
+        try:
+            index = CellClusterIndex.from_world(self.world_path)
+        except (OSError, ValueError, BDSFormatError) as exc:
+            print(f"Cell clusters: unavailable ({exc})")
+            self._cell_clusters = None
+            return
+        self._cell_clusters = index
+        self._mouth_cell_plan = build_mouth_cell_plan(index)
+        mouth = index.primary_mouth()
+        if mouth is not None:
+            self._mouth_object_cells = int(mouth.cell_count)
+            cx, cy = mouth.centroid()
+            detected = (
+                self._mouth_cell_plan.cell_count if self._mouth_cell_plan else 0
+            )
+            print(
+                f"Cell clusters: {len(index.clusters)} regions; "
+                f"mouth_unlocked={mouth.cell_count} cells "
+                f"@ ({cx:.1f}, {cy:.1f}) - per-cell drive armed"
+            )
+            print(
+                f"Mouth cell plan: detected {detected} cells; "
+                "word timing -> neighbor flow each tick"
+            )
+        else:
+            print(f"Cell clusters: {len(index.clusters)} regions (no mouth_unlocked)")
 
     def _estimate_mouth_center(self) -> tuple[float, float]:
         """Locate the mouth from the digested region object, seed metadata,
@@ -985,42 +1044,72 @@ class AvatarFaceApp(FieldRuntime):
         )
         return self._upload_rgba_texture(rgba)
 
+    def _active_emotion(self) -> str:
+        """Prefer a non-NEUTRAL mood; telemetry defaults to NEUTRAL (truthy)."""
+        tel = (self._telemetry.last_emotion or "").strip().upper()
+        conv = (self._conversation.last_emotion or "").strip().upper()
+        if tel and tel != "NEUTRAL":
+            return tel
+        if conv:
+            return conv
+        return tel or "NEUTRAL"
+
     def _sync_expression_from_emotion(self) -> None:
         """Drive eye widen / brow raise / upper plate from catalog + biomech."""
         catalog = self._expression_catalog
-        emotion = (
-            self._telemetry.last_emotion
-            or self._conversation.last_emotion
-            or "NEUTRAL"
-        )
+        emotion = self._active_emotion()
         role = catalog.role_for_emotion(emotion) if catalog is not None else None
         biomech_widen = float(getattr(self._render_state, "eye_widen", 0.0))
         biomech_brow = float(getattr(self._render_state, "brow_raise", 0.0))
+        phoneme = str(
+            getattr(self._mouth_timeline, "phoneme", None)
+            or getattr(self._render_state, "last_phoneme", "REST")
+            or "REST"
+        ).upper()
+        speaking = bool(getattr(self._render_state, "speaking", False)) or bool(
+            self._visemes
+        )
         if role is None:
             self._expr_target_widen = biomech_widen
             self._expr_target_brow = biomech_brow
             self._expr_target_blend = 0.0
             self._expr_role_name = "rest"
-            return
-        self._expr_role_name = role.name
-        # Catalog params are learned from video; biomech adds live muscle drive.
-        self._expr_target_widen = max(float(role.eye_widen), biomech_widen)
-        self._expr_target_brow = max(float(role.brow_raise), biomech_brow)
-        # Upper-face plate only when ownership allows (SURPRISED).
-        if role.name == "surprise" and (
-            self._mouth_ownership.upper_expr_plate
-            or (self._telemetry.last_emotion or "").upper() in {"SURPRISED", "SURPRISE"}
-        ):
-            self._expr_target_blend = max(
-                0.55, float(role.eye_widen), float(role.brow_raise)
-            )
-        elif role.name == "smile":
-            self._expr_target_blend = 0.0
-            self._expr_target_widen = max(self._expr_target_widen, 0.08)
         else:
-            self._expr_target_blend = 0.0
-        if not self._mouth_ownership.upper_expr_plate:
-            self._expr_target_blend = 0.0
+            self._expr_role_name = role.name
+            # Catalog params are learned from video; biomech adds live muscle drive.
+            self._expr_target_widen = max(float(role.eye_widen), biomech_widen)
+            self._expr_target_brow = max(float(role.brow_raise), biomech_brow)
+            # Upper-face plate only when ownership allows (SURPRISED).
+            if role.name == "surprise" and (
+                self._mouth_ownership.upper_expr_plate
+                or emotion in {"SURPRISED", "SURPRISE"}
+            ):
+                self._expr_target_blend = max(
+                    0.55, float(role.eye_widen), float(role.brow_raise)
+                )
+            elif role.name == "smile":
+                self._expr_target_blend = 0.0
+                self._expr_target_widen = max(self._expr_target_widen, 0.12)
+                # Catalog smile brow is 0 — floor so HAPPY speech lifts brows.
+                self._expr_target_brow = max(self._expr_target_brow, 0.30)
+            else:
+                self._expr_target_blend = 0.0
+            if not self._mouth_ownership.upper_expr_plate:
+                self._expr_target_blend = 0.0
+
+        # Speech / emphasis brow so NEUTRAL talk still moves the forehead.
+        open_brows = {"AH", "AA", "OH", "EH", "EE", "OU"}
+        if emotion in {"SURPRISED", "SURPRISE"}:
+            self._expr_target_brow = max(self._expr_target_brow, 0.55)
+            self._expr_target_widen = max(self._expr_target_widen, 0.50)
+        elif emotion == "HAPPY":
+            self._expr_target_brow = max(self._expr_target_brow, 0.28)
+            self._expr_target_widen = max(self._expr_target_widen, 0.10)
+        if speaking and phoneme in open_brows:
+            self._expr_target_brow = max(self._expr_target_brow, 0.24)
+            self._expr_target_widen = max(self._expr_target_widen, 0.08)
+        elif speaking and phoneme not in {"REST", "CLOSED", "PP", "MM"}:
+            self._expr_target_brow = max(self._expr_target_brow, 0.14)
 
     def _ease_expression_state(self, frame_time: float) -> None:
         rate = 4.5
@@ -1107,15 +1196,21 @@ class AvatarFaceApp(FieldRuntime):
         envelope = self._open_close_envelope
         start = self._open_close_start
         now = time.perf_counter() - self._clock0
+        speech_t: float | None = None
         if envelope is not None and start is not None:
             t = now - float(start)
+            speech_t = t
             if 0.0 <= t <= float(envelope.duration) + 0.05:
                 self._live_vector.push_from_envelope(envelope, t)
+                self._behavior.push_from_envelope(envelope, t)
             else:
                 self._live_vector.push_rms(0.0)
+                self._behavior.push_rms(0.0)
             self._open_close_peak = float(self._live_vector.peak_hint)
         elif not self._live_vector.has_history:
             self._live_vector.push_rms(0.0)
+            if not self._behavior.has_history:
+                self._behavior.push_rms(0.0)
 
         # Resolve ML cover against the *timeline* phoneme (same-frame fire).
         phoneme = self._mouth_timeline.phoneme
@@ -1127,6 +1222,20 @@ class AvatarFaceApp(FieldRuntime):
         controls = self._live_vector.resolve(
             phoneme=phoneme, phoneme_jaw=phoneme_jaw
         )
+        # Measured transitions first; ML fills gaps / live speech in-betweens.
+        behavior = self._behavior.resolve(phoneme=phoneme, video_t=None)
+        # Prefer behavior width when ML/track is richer than live-vector alone.
+        if behavior.source in ("ml_fill", "measured", "measured_lerp"):
+            from aiface.live_vector.schema import LiveControlVector
+
+            controls = LiveControlVector(
+                openness_n=max(float(controls.openness_n), float(behavior.openness_n)),
+                jaw_n=max(float(controls.jaw_n), float(behavior.jaw_n)),
+                width_n=max(float(controls.width_n), float(behavior.width_n)),
+                plate_gate=float(controls.plate_gate),
+                source=f"{controls.source}+{behavior.source}",
+            )
+        del speech_t  # reserved for capture-replay clock later
         recipe = self._display_recipe
         hard = float(recipe.plate_sharpness) >= HARD_SNAP_THRESHOLD
         upcoming_due, upcoming_phoneme = self._upcoming_viseme()
@@ -1152,6 +1261,57 @@ class AvatarFaceApp(FieldRuntime):
         self._open_close_source = cmd.source
         # Jaw spring may lag visually; plate amounts already snapped above.
         self._biomech.jaw.set_speech_target(float(cmd.jaw_target))
+        # Word clock → per-cell neighbor plan (same phoneme / until as layers).
+        if self._mouth_cell_plan is not None:
+            self._mouth_cell_plan.sync_from_timeline(
+                cmd.phoneme,
+                active_until=float(cmd.active_until),
+                now=now,
+            )
+            # Overlay measured/ML group flow so cell transitions aren't table-only.
+            if behavior.source in ("ml_fill", "measured", "measured_lerp", "heuristic"):
+                open_n, width_n, round_n = behavior.flow()
+                self._mouth_cell_plan.apply_behavior_flow(
+                    open_n, width_n, round_n, source=behavior.source
+                )
+        self._refresh_frame_layers()
+
+    def _refresh_frame_layers(self) -> FrameLayerState:
+        """Resolve L00–L11 active flags once per tick (realtime skip map)."""
+        from aiface.plates import HARD_SNAP_THRESHOLD
+        from aiface.speech import canonical_viseme
+
+        cmd = self._layer_command
+        recipe = self._display_recipe
+        plan = self._mouth_cell_plan
+        phoneme = canonical_viseme(cmd.phoneme or "REST")
+        # Heuristic budget — do not call plan_steps twice (enqueue does that).
+        cell_steps = 0
+        if (
+            plan is not None
+            and plan.cell_count > 0
+            and phoneme not in ("REST",)
+            and float(cmd.active_until) > 0.0
+        ):
+            cell_steps = min(int(plan.cell_count), 64)
+        speaking_plate = float(cmd.plate_openness) > 0.02 or bool(
+            getattr(self._render_state, "speaking", False)
+        )
+        self._frame_layers = evaluate_frame_layers(
+            phoneme=phoneme,
+            plate_open_amount=float(cmd.plate_openness),
+            smile_amount=float(cmd.smile_amount),
+            atlas_strength=float(recipe.atlas_strength),
+            cavity_strength=float(recipe.cavity_strength),
+            field_gain=float(recipe.field_warp_gain),
+            expr_blend=float(self._expr_plate_blend),
+            brow_raise=float(self._expr_brow_raise),
+            speaking_plate=speaking_plate,
+            cell_plan_steps=cell_steps,
+            hard_snap=float(recipe.plate_sharpness) >= HARD_SNAP_THRESHOLD,
+            chat_visible=bool(self._chat_box_visible),
+        )
+        return self._frame_layers
 
     def _ease_plate_blend(self, frame_time: float) -> None:
         """Refresh plate texture pair from the eased ML openness."""
@@ -1501,9 +1661,12 @@ class AvatarFaceApp(FieldRuntime):
         )
         # NWR field warp: validated ±4 impulses integrated on the GPU move
         # unlocked tissue directly (steps 1–3 close the loop at the pixels).
-        program["avatar_field_gain"].value = float(
-            self._display_recipe.field_warp_gain
-        )
+        # While a speech plate owns the mouth, keep field travel low so the
+        # unlocked disc does not smear under the static atlas billboard.
+        field_gain = float(self._display_recipe.field_warp_gain)
+        if speaking_plate:
+            field_gain *= 0.20
+        program["avatar_field_gain"].value = field_gain
         # Step 12: plate snap — commit toward the nearest captured mouth shape.
         program["avatar_plate_sharpness"].value = float(
             self._display_recipe.plate_sharpness
@@ -1869,8 +2032,11 @@ class AvatarFaceApp(FieldRuntime):
             self._open_close_envelope.noise_floor()
         )
         self._live_vector.peak_hint = float(self._open_close_envelope.peak)
+        self._behavior.noise_floor = float(self._live_vector.noise_floor)
+        self._behavior.peak_hint = float(self._live_vector.peak_hint)
         self._open_close_peak = self._live_vector.peak_hint
         self._live_vector.clear_history()
+        self._behavior.clear_history()
 
         # The voice is authoritative. Anything still queued belongs to a line
         # that is no longer being spoken.
@@ -2016,10 +2182,12 @@ class AvatarFaceApp(FieldRuntime):
                     if samples.size:
                         pcm_rms = float(np.sqrt(np.mean(np.square(samples))))
                         self._live_vector.push_rms(pcm_rms)
+                        self._behavior.push_rms(pcm_rms)
                         self._open_close_peak = max(
                             self._open_close_peak, pcm_rms
                         )
                         self._live_vector.peak_hint = self._open_close_peak
+                        self._behavior.peak_hint = self._open_close_peak
                 except Exception:
                     pass
                 return self._voice_reply(stream, spans)
@@ -2184,6 +2352,8 @@ class AvatarFaceApp(FieldRuntime):
             speak_handler=self._kick_llm,
             voice_handler=self._voice_request,
             probe_provider=self._mouth_probe_snapshot,
+            cells_provider=self._cells_snapshot,
+            cells_drive_handler=self._cells_drive,
             token=token,
             host=str(getattr(self.argv, "bridge_host", DEFAULT_HOST)),
             port=int(getattr(self.argv, "bridge_port", DEFAULT_PORT)),
@@ -2192,8 +2362,12 @@ class AvatarFaceApp(FieldRuntime):
         self._bridge.start()
         print(f"Face bridge: {self._bridge.url}")
         print(f"  Authorization: Bearer {token}")
-        print("  GET /health /status /probe /preview /screenshot")
+        print("  GET /health /status /probe /cells /preview /screenshot")
         print('  POST /speak  {"text":"..."}')
+        print(
+            '  POST /cells/drive  {"mode":"cell","x":128,"y":80,"dx":0,"dy":-1}'
+            '  # or mode=cluster|neighbor|batch'
+        )
         print('  POST /voice/expect  {"text":"..."}   then /voice/pcm, /voice/end')
         print(
             '  POST /voice/timeline {"spans":[{"phoneme":"OU","start":0,"end":0.12}],'
@@ -2202,10 +2376,18 @@ class AvatarFaceApp(FieldRuntime):
 
     def _bridge_status(self) -> dict[str, object]:
         state = self._render_state
+        profile = self._avatar_bundle.profile
         return {
             "chat_pending": bool(self._chatbox.pending),
             "tick": int(self.tick),
             "fps": float(self._fps),
+            "avatar": {
+                "id": profile.id,
+                "ok": bool(self._avatar_bundle.ok),
+                "mouth_cell_count": int(profile.geometry.mouth_cell_count),
+                "root": str(self._avatar_bundle.root),
+            },
+            "behavior": self._behavior.snapshot(),
             "phoneme": state.last_phoneme,
             "emotion": self._telemetry.last_emotion,
             "jaw_angle": float(state.jaw_angle),
@@ -2334,7 +2516,7 @@ class AvatarFaceApp(FieldRuntime):
 
     def _refresh_mouth_ownership(self) -> MouthOwnership:
         """Resolve Path-A ownership from eased openness + emotion + phoneme."""
-        mood = (self._telemetry.last_emotion or "NEUTRAL").upper()
+        mood = self._active_emotion()
         phoneme = self._render_state.last_phoneme or "REST"
         speaking = bool(self._render_state.speaking) or bool(self._visemes)
         ownership = resolve_mouth_ownership(
@@ -2348,23 +2530,50 @@ class AvatarFaceApp(FieldRuntime):
         return ownership
 
     def _enqueue_field_specs(self, specs: Sequence[FieldImpulseSpec]) -> None:
-        # NWR-first: always propose ±4; GPU Master Lock rejects identity cells.
+        """Propose ±4 velocity. Prefer per-cell spread into the mouth cluster."""
+        tick = self.tick + 1
+        mouth = (
+            self._cell_clusters.primary_mouth()
+            if self._cell_clusters is not None
+            else None
+        )
         for spec in specs:
             center = self._uv_to_grid(spec.center_uv)
-            # Keep field writes inside the unlocked mouth disc.
-            if abs(center[0] - self._mouth_center[0]) > MOUTH_RADIUS * 1.4:
-                center = (self._mouth_center[0], center[1])
-            if abs(center[1] - self._mouth_center[1]) > MOUTH_RADIUS * 1.2:
-                center = (center[0], self._mouth_center[1])
             velocity = (float(spec.velocity[0]), float(spec.velocity[1]))
+            radius = float(spec.radius)
+            # Cell-precise or cluster-spread path — do not collapse to one disc.
+            if mouth is not None and radius > 1.25:
+                impulses = distribute_to_nearby_cells(
+                    mouth,
+                    center,
+                    velocity,
+                    tick=tick,
+                    radius_cells=min(radius, MOUTH_RADIUS),
+                    budget=48,
+                )
+                for command in to_commands(
+                    impulses,
+                    grid_width=self.grid_width,
+                    grid_height=self.grid_height,
+                ):
+                    self._enqueue(command)
+                continue
+            # Soft safety: keep large discs near the mouth object, but never
+            # relocate a cell-precise write (radius ≤ 1).
+            if radius > 1.25:
+                if abs(center[0] - self._mouth_center[0]) > MOUTH_RADIUS * 1.4:
+                    center = (self._mouth_center[0], center[1])
+                if abs(center[1] - self._mouth_center[1]) > MOUTH_RADIUS * 1.2:
+                    center = (center[0], self._mouth_center[1])
+                radius = min(radius, MOUTH_RADIUS)
             self._enqueue(
                 PaintCommand(
-                    tick=self.tick + 1,
+                    tick=tick,
                     start_x=center[0],
                     start_y=center[1],
                     end_x=velocity[0],
                     end_y=velocity[1],
-                    radius=min(float(spec.radius), MOUTH_RADIUS),
+                    radius=radius,
                     category=0,
                     operation=1.0,
                     priority=PRIORITY_LEVELS["ai"],
@@ -2372,6 +2581,104 @@ class AvatarFaceApp(FieldRuntime):
                     velocity_impulse=velocity,
                 )
             )
+        self._flush_pending_cell_commands()
+
+    def _flush_pending_cell_commands(self) -> None:
+        """Drain bridge/API cell drives onto this tick's command buffer."""
+        pending = self._pending_cell_commands
+        if not pending:
+            return
+        self._pending_cell_commands = []
+        for command in pending:
+            self._enqueue(command)
+
+    def _enqueue_mouth_cell_plan(self) -> None:
+        """Execute the word-timed per-cell plan for this simulation tick."""
+        # L03 skip: REST / idle ticks do not burn the 256 command budget.
+        if not self._frame_layers.is_on("cell_groups"):
+            return
+        plan = self._mouth_cell_plan
+        if plan is None or plan.cell_count == 0:
+            return
+        impulses = plan.impulses_for_tick(tick=self.tick + 1)
+        if not impulses:
+            return
+        for command in to_commands(
+            impulses,
+            grid_width=self.grid_width,
+            grid_height=self.grid_height,
+        ):
+            self._enqueue(command)
+
+    def _cells_snapshot(self) -> dict[str, object]:
+        index = self._cell_clusters
+        layers = self._frame_layers.snapshot()
+        if index is None:
+            return {
+                "regions": [],
+                "command_budget": 256,
+                "neighbor_blend": True,
+                "display_layers": layers,
+            }
+        payload: dict[str, object] = {
+            "avatar": self._avatar_bundle.profile.as_dict(),
+            "regions": index.summary(),
+            "grid": [int(index.width), int(index.height)],
+            "command_budget": 256,
+            "neighbor_blend": True,
+            "modes": ["cell", "cluster", "neighbor", "batch", "retarget"],
+            "display_layers": layers,
+        }
+        if self._mouth_cell_plan is not None:
+            payload["mouth_cell_plan"] = self._mouth_cell_plan.snapshot()
+        return payload
+
+    def _cells_drive(self, payload: dict) -> dict[str, object]:
+        """Queue per-cell / neighbor / cluster ±4 impulses (unlocked only)."""
+        index = self._cell_clusters
+        if index is None:
+            raise RuntimeError("cell clusters not loaded")
+        mode = str(payload.get("mode") or payload.get("kind") or "cell").strip().lower()
+        if mode == "retarget":
+            plan = self._mouth_cell_plan
+            if plan is None:
+                raise RuntimeError("mouth cell plan not loaded")
+            group = str(payload.get("group") or "").strip()
+            cells = payload.get("cells")
+            if not group or not isinstance(cells, list) or not cells:
+                raise ValueError(
+                    "retarget requires group + cells: [[x,y], ...] or [{x,y}, ...]"
+                )
+            coords: list[tuple[int, int]] = []
+            for item in cells:
+                if isinstance(item, dict):
+                    coords.append((int(item["x"]), int(item["y"])))
+                elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                    coords.append((int(item[0]), int(item[1])))
+            plan.retarget_group(
+                group, coords, as_corner=bool(payload.get("as_corner", False))
+            )
+            return {
+                "queued": False,
+                "retargeted": True,
+                "group": group,
+                "cells": len(coords),
+                "mouth_groups": plan.groups.snapshot(),
+            }
+        tick = int(self.tick) + 1
+        impulses = parse_drive_request(payload, index=index, tick=tick)
+        commands = to_commands(
+            impulses,
+            grid_width=self.grid_width,
+            grid_height=self.grid_height,
+        )
+        self._pending_cell_commands.extend(commands)
+        return {
+            "queued": True,
+            "impulses": len(commands),
+            "tick": tick,
+            "mode": mode,
+        }
 
     def _step_biomechanics(self, frame_time: float) -> None:
         cpu_started = time.perf_counter()
@@ -2397,6 +2704,9 @@ class AvatarFaceApp(FieldRuntime):
             expression=expression,
         )
         self._enqueue_field_specs(specs)
+        # L00–L11 skip map, then L03 cell→neighbor only when active.
+        self._refresh_frame_layers()
+        self._enqueue_mouth_cell_plan()
         self._cpu_frame_ms = (time.perf_counter() - cpu_started) * 1000.0
 
     def _sample_mouth_telemetry(self) -> None:
@@ -2448,6 +2758,7 @@ class AvatarFaceApp(FieldRuntime):
             "global_unlocked_frac": global_unlocked,
             "phoneme": self._render_state.last_phoneme,
             "emotion": self._telemetry.last_emotion,
+            "display_layers": self._frame_layers.snapshot(),
             "plate_openness": float(self._plate_openness_current),
             "plate_blend": [
                 float(self._plate_blend_current[0]),
@@ -2524,6 +2835,7 @@ class AvatarFaceApp(FieldRuntime):
         ia, ib = self._plate_pair
         mix, amount = self._plate_blend_current
         jaw = float(getattr(self._render_state, "jaw_angle", 0.0))
+        layers = "+".join(self._frame_layers.ordered_active())
         line = (
             f"gpu@60 t={tick} viseme={phoneme} plate={plate_viseme} "
             f"jaw={jaw:.3f} "
@@ -2534,6 +2846,10 @@ class AvatarFaceApp(FieldRuntime):
             f"plates=open:{amount:.2f} smile:{float(cmd.smile_amount):.2f} "
             f"atlas={ia}/{ib} mix={mix:.2f} "
             f"muscles={int(self._active_muscle_count)} "
+            f"brow={float(self._expr_brow_raise):.2f} "
+            f"widen={float(self._expr_eye_widen):.2f} "
+            f"expr={self._expr_role_name}:{float(self._expr_plate_blend):.2f} "
+            f"layers={layers} "
             f"recipe=on warp_gain={float(self._display_recipe.field_warp_gain):.2f} "
             f"sharpness={float(self._display_recipe.plate_sharpness):.2f} "
             f"src={cmd.source} until={cmd.active_until:.2f}"

@@ -456,30 +456,34 @@ void main() {
 
     float mouth_inside = 0.0;
     if (avatar_deform == 1) {
+        // Display layer stack (aiface.display_layers) — DO NOT REORDER:
+        // L02 muscle_jaw_warp → L04 smile → L05 open → L06 cavity →
+        // L07 atlas → L08 expr → L09 eyes → L10 brow. Field L01 is sampled
+        // inside inverse_warp; cell groups L03 write ch0/1 before this pass.
         float snap = clamp(avatar_plate_sharpness, 0.0, 1.0);
         float atlas_own = atlas_own_amount();
-        // Committed speech plate is a rest-UV billboard. Keep the photo under
-        // it near rest-frame too — warping the identity while stamping a
-        // static plate double-images the lips (the residual "blur").
-        float plate_commit = mix(0.0, smoothstep(0.40, 0.88, atlas_own), snap);
+        // Mild rest-align only — a hard rest snap under an open jaw left a
+        // synthetic mouth_gap ("the gap") with nothing to fill it.
+        float plate_commit = mix(0.0, smoothstep(0.55, 0.95, atlas_own), snap);
+        // L02: muscle + jaw + field inverse-warp of identity photo.
         vec2 source = inverse_warp(grid_position);
-        source = mix(source, grid_position, plate_commit * 0.90);
+        source = mix(source, grid_position, plate_commit * 0.35);
         color = photo_at(source);
         face_alpha = smoothstep(0.02, 0.12, max(color.r, max(color.g, color.b)));
 
-        // CAPTURE LOOKS (open.png / smile.png): paint the digested frames onto
-        // the mouth matte. BUGFIX: these used to appear only inside a jaw-gap
-        // that never opened, so smile/open from the training video were invisible
-        // even when the PNGs differed strongly from the rest photo.
+        // L04/L05 CAPTURE LOOKS (smile.png then open.png).
         float open_plate_w = 0.0;
-        float open_drive_g = 0.0;
+        // Speech layer amount BEFORE capture mute — cavity suppress must follow
+        // this, not the muted open.png drive (muting open reopened the gap).
+        float layer_open = clamp(avatar_plate_blend.y, 0.0, 1.0);
+        float open_drive_g = layer_open;
         if (avatar_plates_ready == 1) {
             vec2 capture_uv = to_uv(grid_position);
             vec4 open_s = texture(avatar_open_plate, capture_uv);
             vec4 smile_s = texture(avatar_smile_plate, capture_uv);
             // Plate amount owns open.png under hard snap. Jaw lag used to keep
             // open.png full after PP/CLOSED (tight lips + stuck open layer).
-            float open_from_plate = clamp(avatar_plate_blend.y, 0.0, 1.0);
+            float open_from_plate = layer_open;
             float open_from_jaw = clamp(
                 avatar_jaw.z / max(avatar_recipe.x, 1e-3), 0.0, 1.0
             );
@@ -506,10 +510,10 @@ void main() {
             color = mix(color, open_s.rgb, open_w);
             face_alpha = max(face_alpha, max(open_w, smile_w));
             open_plate_w = open_w;
-            open_drive_g = open_drive;
+            open_drive_g = max(layer_open, open_drive);
         }
 
-        // Optional cavity fill when the jaw actually parts (still real plates).
+        // L06: optional cavity fill when the jaw actually parts.
         vec2 gap = mouth_gap(grid_position.x);
         float slit = tissue_at(vec2(grid_position.x, avatar_mouth_line.y)).b;
         float span = gap.y - gap.x;
@@ -531,16 +535,18 @@ void main() {
             * smoothstep(gap.x, gap.x + feather, grid_position.y)
             * (1.0 - smoothstep(gap.y - feather, gap.y, grid_position.y));
         // Real pixels beat synthetic shadow (`dark_cavity: Never` owns the
-        // mouth): as soon as the jaw meaningfully opens, the captured open
-        // plate takes over and the synthetic cavity bows out — the predicted
-        // hole leads the visible pixel warp during transitions, and painting
-        // it dark stamped a translucent box below still-closed lips.
-        float plate_takeover = smoothstep(0.15, 0.55, open_drive_g);
+        // mouth). Atlas/open layer amount suppresses cavity — never the muted
+        // capture drive alone (that reopened a dark gap under speech plates).
+        float plate_takeover = smoothstep(
+            0.15, 0.55, max(open_drive_g, atlas_own)
+        );
         // Closed / lip-tighten: never paint cavity — a residual slit+span still
         // stamped a dark soft rectangle over visibly closed lips ("the blur").
         float cavity_gate = smoothstep(
             0.04, 0.14, max(clamp(avatar_jaw.z, 0.0, 1.0), open_drive_g)
         );
+        // Atlas billboard owns the oral interior — kill synthetic gap fill.
+        cavity_gate *= (1.0 - mix(0.0, smoothstep(0.30, 0.70, atlas_own), snap));
         color = mix(
             color,
             cavity_color(grid_position.y, gap, grid_position.x),
@@ -550,7 +556,7 @@ void main() {
                 * cavity_gate
         );
 
-        // Atlas plate memory (finer viseme shapes) on top when amount > 0.
+        // L07: atlas plate memory (finer viseme shapes) on top when amount > 0.
         if (avatar_plates_ready == 1 && avatar_plate_blend.y > 0.001) {
             vec2 plate_uv = to_uv(grid_position);
             vec4 pa = texture(avatar_plate_a, plate_uv);
@@ -570,7 +576,7 @@ void main() {
             face_alpha = max(face_alpha, plate_a);
         }
 
-        // Upper-face expression plate (surprise brows / wider lids from capture).
+        // L08: upper-face expression plate (surprise brows / wider lids).
         if (avatar_expr_state.w > 0.5 && avatar_expr_state.z > 0.001) {
             vec4 expr = texture(avatar_expr_plate, to_uv(grid_position));
             float expr_a = expr.a * clamp(avatar_expr_state.z, 0.0, 1.0);
@@ -578,9 +584,7 @@ void main() {
             face_alpha = max(face_alpha, expr_a);
         }
 
-        // Eyes: a lid sliding over a fixed globe. Neither the occlusion nor the
-        // gaze shift is a deformation of the surrounding skin, so both are
-        // composited rather than folded into the displacement field.
+        // L09: eyes — lid sliding over a fixed globe (presentation plane).
         float aperture = tissue_at(source).a;
         if (aperture > 0.004) {
             float widen = clamp(avatar_expr_state.x, 0.0, 1.0);
@@ -615,18 +619,19 @@ void main() {
             }
         }
 
-        // Brow raise without a plate: lift the brow band by resampling upward.
+        // L10: brow raise without a plate — display-only, not Master-Lock gated.
         float brow = clamp(avatar_expr_state.y, 0.0, 1.0);
         if (brow > 0.04 && avatar_expr_state.z < 0.15) {
             int part = part_at(grid_position);
             if (part == PART_LEFT_BROW || part == PART_RIGHT_BROW || part == PART_FACE) {
                 float brow_band = smoothstep(
-                    avatar_eye_centers.y + avatar_eye_shape.y * 1.2,
-                    avatar_eye_centers.y + avatar_eye_shape.y * 3.2,
+                    avatar_eye_centers.y + avatar_eye_shape.y * 1.05,
+                    avatar_eye_centers.y + avatar_eye_shape.y * 3.4,
                     grid_position.y
                 );
-                vec3 lifted = photo_at(source - vec2(0.0, brow * 3.8));
-                color = mix(color, lifted, brow_band * brow * 0.55 * unlocked);
+                float lift = brow * 5.2;
+                vec3 lifted = photo_at(source - vec2(0.0, lift));
+                color = mix(color, lifted, brow_band * brow * 0.72);
             }
         }
     } else {

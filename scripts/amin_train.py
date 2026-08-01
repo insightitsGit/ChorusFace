@@ -46,18 +46,47 @@ def main() -> int:
         action="store_true",
         help="Reuse existing avatar_face.bds; only remap + retrain vectors",
     )
+    parser.add_argument(
+        "--behavior-only",
+        action="store_true",
+        help=(
+            "Only retrain cell_transition_track + behavior_model from --video "
+            "(fast path when user uploads a new take for the same face)"
+        ),
+    )
     parser.add_argument("--landmarker-model", type=Path, default=None)
     parser.add_argument("--seed", type=int, default=17)
     args = parser.parse_args()
-    report = run_all_steps(
-        args.video,
-        world_dir=args.world_dir,
-        digest_fps=float(args.digest_fps),
-        vector_fps=float(args.vector_fps),
-        skip_digest=bool(args.skip_digest),
-        landmarker_model=args.landmarker_model,
-        seed=int(args.seed),
-    )
+    if bool(args.behavior_only):
+        from aiface.avatar_profile import write_avatar_profile
+        from aiface.behavior.pipeline import train_behavior_from_video
+
+        world_dir = Path(args.world_dir).resolve()
+        meta = train_behavior_from_video(
+            Path(args.video),
+            world_dir=world_dir,
+            sample_fps=float(args.vector_fps),
+            landmarker_model=args.landmarker_model,
+            seed=int(args.seed),
+        )
+        write_avatar_profile(world_dir, avatar_id=world_dir.name)
+        report = {
+            "schema": "amin_loop.behavior_only.v1",
+            "video": str(Path(args.video).resolve()),
+            "world_dir": str(world_dir),
+            "steps": {"behavior": meta},
+            "note": "Retrainable: new upload → replace behavior_model in world dir",
+        }
+    else:
+        report = run_all_steps(
+            args.video,
+            world_dir=args.world_dir,
+            digest_fps=float(args.digest_fps),
+            vector_fps=float(args.vector_fps),
+            skip_digest=bool(args.skip_digest),
+            landmarker_model=args.landmarker_model,
+            seed=int(args.seed),
+        )
     print("---")
     print(json.dumps(report, indent=2))
     print()

@@ -78,6 +78,70 @@ def check_artifacts(report: Report, world_dir: Path) -> None:
         report.add(PASS, "artifacts", f"all {len(required)} pipeline files present")
 
 
+def check_behavior_track(report: Report, world_dir: Path) -> None:
+    """Measured transitions + ML fill model from the upload."""
+    track = world_dir / "cell_transition_track.npz"
+    model = world_dir / "behavior_model.joblib"
+    if not track.is_file():
+        report.add(
+            WARN,
+            "behavior-track",
+            "no cell_transition_track.npz — re-run amin_train to learn transitions",
+        )
+    else:
+        try:
+            data = np.load(track, allow_pickle=True)
+            n = int(np.asarray(data["times"]).shape[0])
+            report.add(PASS, "behavior-track", f"{n} measured group samples")
+        except (OSError, ValueError, KeyError) as exc:
+            report.add(FAIL, "behavior-track", f"unreadable ({exc})")
+    if not model.is_file():
+        report.add(
+            WARN,
+            "behavior-ml",
+            "no behavior_model.joblib — gaps/live speech use tables only",
+        )
+    else:
+        meta = load_json(world_dir / "behavior_model.meta.json") or {}
+        report.add(
+            PASS,
+            "behavior-ml",
+            f"val_mae={meta.get('val_mae', '?')} "
+            f"beats_baseline={meta.get('beats_baseline', '?')}",
+        )
+
+
+def check_avatar_adoption(report: Report, world_dir: Path) -> None:
+    """Adoption contract: any world dir that passes can plug into the GPU path."""
+    from aiface.avatar_profile import (
+        PROFILE_NAME,
+        open_avatar,
+        write_avatar_profile,
+    )
+
+    if not (world_dir / PROFILE_NAME).is_file():
+        try:
+            write_avatar_profile(world_dir, avatar_id=world_dir.name)
+            report.add(WARN, "avatar-profile", f"wrote missing {PROFILE_NAME}")
+        except OSError as exc:
+            report.add(FAIL, "avatar-profile", f"could not write profile ({exc})")
+            return
+    bundle = open_avatar(world_dir)
+    profile = bundle.profile
+    detail = (
+        f"id={profile.id} mouth_cells={profile.geometry.mouth_cell_count} "
+        f"plates={sorted(profile.plates)}"
+    )
+    if bundle.ok:
+        report.add(PASS, "avatar-adopt", detail)
+    else:
+        report.add(
+            FAIL,
+            "avatar-adopt",
+            f"{detail}; missing={', '.join(profile.validation.missing)}",
+        )
+
+
 def check_display_resolution(report: Report, world_dir: Path) -> None:
     """AMIN step 11 — plates must carry more pixels than the 256² field."""
     try:
@@ -377,6 +441,8 @@ def main() -> int:
 
     report = Report()
     check_artifacts(report, world_dir)
+    check_avatar_adoption(report, world_dir)
+    check_behavior_track(report, world_dir)
     check_display_resolution(report, world_dir)
     check_capture_selection(report, world_dir)
     check_plate_atlas(report, world_dir)

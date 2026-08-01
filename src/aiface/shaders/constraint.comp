@@ -171,6 +171,51 @@ void main() {
         state[PRIORITY_CHANNEL] = erase ? 0.0 : command_priority;
     }
 
+    // Velocity-only neighbor couple for unlocked soft tissue. Cells can push
+    // energy toward Moore neighbors without advecting albedo / density / lock
+    // (those stay on this cell — identity Master Lock story intact).
+    if (!is_locked(state) && state[25] >= 0.5 && VELOCITY_NEIGHBOR_BLEND > 1e-6) {
+        vec2 accum = vec2(0.0);
+        float weight = 0.0;
+        for (int oy = -1; oy <= 1; ++oy) {
+            for (int ox = -1; ox <= 1; ++ox) {
+                if (ox == 0 && oy == 0) {
+                    continue;
+                }
+                ivec2 neighbor = ivec2(position) + ivec2(ox, oy);
+                if (
+                    neighbor.x < 0 || neighbor.y < 0
+                    || neighbor.x >= int(grid_size.x)
+                    || neighbor.y >= int(grid_size.y)
+                ) {
+                    continue;
+                }
+                uint n_index = cell_index(uvec2(neighbor));
+                float n_lock = source_world.cells[n_index].value[HUMAN_LOCK_CHANNEL];
+                float n_perm = source_world.cells[n_index].value[25];
+                if (n_lock >= 0.5 || n_perm < 0.5) {
+                    continue;
+                }
+                accum.x += source_world.cells[n_index].value[0];
+                accum.y += source_world.cells[n_index].value[1];
+                weight += 1.0;
+            }
+        }
+        if (weight > 0.5) {
+            vec2 mean_v = accum / weight;
+            state[0] = clamp(
+                mix(state[0], mean_v.x, VELOCITY_NEIGHBOR_BLEND),
+                -CLAMP_LIMIT,
+                CLAMP_LIMIT
+            );
+            state[1] = clamp(
+                mix(state[1], mean_v.y, VELOCITY_NEIGHBOR_BLEND),
+                -CLAMP_LIMIT,
+                CLAMP_LIMIT
+            );
+        }
+    }
+
     for (int channel = 0; channel < CHANNELS; ++channel) {
         destination_world.cells[index].value[channel] = state[channel];
     }

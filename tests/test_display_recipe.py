@@ -33,12 +33,15 @@ def test_train_writes_the_runtime_recipe(tmp_path: Path) -> None:
     path = write_gpu_recipe(tmp_path)
     assert path.name == RECIPE_NAME
     payload = json.loads(path.read_text(encoding="utf-8"))
-    # The serialized display path is the real avatar.frag composite order,
-    # not a narrative: capture plates before cavity, cavity before atlas.
+    # L-codes: capture before cavity before atlas (display_layers hierarchy).
     steps = payload["display_path"]
-    assert steps.index(
-        "capture plates open.png / smile.png painted over the mouth matte"
-    ) < steps.index("optional cavity fill when the jaw actually parts")
+    smile = next(s for s in steps if "capture_smile" in s)
+    open_ = next(s for s in steps if "capture_open" in s)
+    cavity = next(s for s in steps if "cavity_fill" in s)
+    atlas = next(s for s in steps if "atlas_viseme" in s)
+    assert steps.index(smile) < steps.index(open_) < steps.index(cavity) < steps.index(
+        atlas
+    )
     assert "path_a_mouth_ownership_seals" in payload["forbidden"]
     # Play loads exactly what train wrote.
     assert load_display_recipe(tmp_path) == DisplayRecipe()
@@ -93,9 +96,10 @@ def test_shader_snaps_plates_with_recipe_knob() -> None:
     """AMIN step 12: the plate-snap knob is a real uniform used by the blend."""
     source = SHADER.read_text(encoding="utf-8")
     assert "uniform float avatar_plate_sharpness;" in source
-    assert source.count("avatar_plate_sharpness") >= 3, (
-        "sharpness must steepen the drive curves AND the atlas mix"
-    )
+    # Loaded once into `snap`, then applied to capture drives + atlas matte.
+    assert "float snap = clamp(avatar_plate_sharpness" in source
+    assert "smoothstep(0.18, 0.82, open_drive), snap)" in source
+    assert "harden_matte(max(pa.a, pb.a), snap)" in source
     recipe = DisplayRecipe()
     assert 0.0 < recipe.plate_sharpness <= 1.0
     # The knob rides the same serialized contract as every other knob.

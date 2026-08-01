@@ -151,7 +151,12 @@ class EmotionSystem:
         """Compatibility bridge from the existing discrete emotion tags."""
         presets = {
             "NEUTRAL": {},
-            "HAPPY": {"valence": 0.85, "arousal": 0.35, "confidence": 0.4},
+            "HAPPY": {
+                "valence": 0.85,
+                "arousal": 0.55,
+                "curiosity": 0.30,
+                "confidence": 0.4,
+            },
             "SAD": {"valence": -0.7, "arousal": -0.2, "relaxation": -0.1},
             "SURPRISED": {
                 "surprise": 1.0,

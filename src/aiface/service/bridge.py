@@ -11,9 +11,9 @@ tie the audio clock to the render loop. Alignment is pure signal processing that
 touches no GPU state, so those calls run on the request thread and hand the
 render loop nothing but timed viseme events.
 
-The surface is otherwise observation plus speech. There is no route that resets,
-saves, or loads a world, so a token holder can never overwrite the locked
-identity through the network.
+Cell-cluster control is available via ``GET /cells`` and ``POST /cells/drive``
+(±4 velocity on unlocked cells only). There is still no route that resets,
+saves, or loads a world, so a token holder cannot overwrite locked identity.
 """
 
 from __future__ import annotations
@@ -79,6 +79,10 @@ BytesProvider = Callable[[], bytes]
 SpeakHandler = Callable[[str], None]
 #: Live mouth ownership + SSBO disc metrics (Path A probe).
 ProbeProvider = Callable[[], dict[str, Any]]
+#: Controllable cell-cluster index summary.
+CellsProvider = Callable[[], dict[str, Any]]
+#: ``payload -> {queued, impulses, ...}`` — per-cell / neighbor / cluster drive.
+CellsDriveHandler = Callable[[dict[str, Any]], dict[str, Any]]
 #: ``(kind, payload) -> response``, where kind is ``expect``, ``pcm`` or ``end``.
 VoiceHandler = Callable[[str, dict[str, Any]], dict[str, Any]]
 
@@ -118,6 +122,8 @@ class FaceBridge:
         token: str,
         voice_handler: VoiceHandler | None = None,
         probe_provider: ProbeProvider | None = None,
+        cells_provider: CellsProvider | None = None,
+        cells_drive_handler: CellsDriveHandler | None = None,
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
         job_timeout: float = DEFAULT_JOB_TIMEOUT,
@@ -138,6 +144,8 @@ class FaceBridge:
         self._speak_handler = speak_handler
         self._voice_handler = voice_handler
         self._probe_provider = probe_provider
+        self._cells_provider = cells_provider
+        self._cells_drive_handler = cells_drive_handler
         self._token = token
         self._host = host
         self._port = int(port)
@@ -285,6 +293,15 @@ class FaceBridge:
                             HTTPStatus.OK, bridge._run_job("probe")
                         )
                         return
+                    if path == "/cells":
+                        if bridge._cells_provider is None:
+                            raise BridgeError(
+                                HTTPStatus.NOT_FOUND, "cells not available"
+                            )
+                        self._send_json(
+                            HTTPStatus.OK, bridge._run_job("cells")
+                        )
+                        return
                     if path == "/preview":
                         data = bridge._run_job("preview")
                         self._send(HTTPStatus.OK, data, "image/png")
@@ -309,6 +326,15 @@ class FaceBridge:
                             raise BridgeError(HTTPStatus.BAD_REQUEST, "text required")
                         bridge._run_job("speak", request=text)
                         self._send_json(HTTPStatus.OK, {"queued": True, "text": text})
+                        return
+                    if path == "/cells/drive":
+                        if bridge._cells_drive_handler is None:
+                            raise BridgeError(
+                                HTTPStatus.NOT_FOUND, "cells drive not available"
+                            )
+                        payload = self._read_json()
+                        result = bridge._run_job("cells_drive", request=payload)
+                        self._send_json(HTTPStatus.OK, result)
                         return
                     if path == "/voice/expect":
                         payload = self._read_json()
@@ -419,6 +445,16 @@ class FaceBridge:
                 elif job.kind == "speak":
                     self._speak_handler(str(job.request))
                     job.payload = {"queued": True}
+                elif job.kind == "cells":
+                    if self._cells_provider is None:
+                        raise RuntimeError("cells provider missing")
+                    job.payload = self._cells_provider()
+                elif job.kind == "cells_drive":
+                    if self._cells_drive_handler is None:
+                        raise RuntimeError("cells drive handler missing")
+                    if not isinstance(job.request, dict):
+                        raise RuntimeError("cells drive requires a json object")
+                    job.payload = self._cells_drive_handler(job.request)
                 else:
                     job.error = f"unknown job {job.kind}"
             except Exception as exc:  # noqa: BLE001 — surface to HTTP client
@@ -454,6 +490,8 @@ __all__ = [
     "MAX_PENDING_JOBS",
     "PCM_FORMATS",
     "BridgeError",
+    "CellsDriveHandler",
+    "CellsProvider",
     "FaceBridge",
     "VoiceHandler",
     "is_loopback_host",

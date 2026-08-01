@@ -11,6 +11,7 @@ from amin_loop.gpu_recipe import write_gpu_recipe
 from amin_loop.live_vectors import train_from_video
 from amin_loop.mapping import write_condition_maps
 from amin_loop.store import write_store_manifest
+from aiface.avatar_profile import write_avatar_profile
 
 
 def run_all_steps(
@@ -61,8 +62,26 @@ def run_all_steps(
         seed=seed,
     )
 
+    # Measured group transitions + ML model to fill gaps / live speech.
+    try:
+        from aiface.behavior.pipeline import train_behavior_from_video
+
+        report["steps"]["behavior"] = train_behavior_from_video(
+            video,
+            world_dir=world_dir,
+            sample_fps=vector_fps,
+            landmarker_model=landmarker_model,
+            seed=seed,
+        )
+    except Exception as exc:
+        report["steps"]["behavior"] = {"error": str(exc)}
+        print(f"behavior: train skipped ({exc})")
+
     store_path = write_store_manifest(world_dir)
     report["steps"]["store"] = {"manifest": str(store_path)}
+
+    profile_path = write_avatar_profile(world_dir, avatar_id=world_dir.name)
+    report["steps"]["avatar_profile"] = {"profile": str(profile_path)}
 
     summary = world_dir / "amin_loop_report.json"
     summary.write_text(json.dumps(report, indent=2), encoding="utf-8")

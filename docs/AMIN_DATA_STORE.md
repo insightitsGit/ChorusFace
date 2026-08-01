@@ -21,8 +21,12 @@ We store **one dense field + compact side-cars**.
 | `live_vector_dataset.npz` | ~6 KB | Audio features → control vectors (train set) |
 | `live_vector_trajectory.json` | ~19 KB | Time series of live vectors from the take |
 | `live_vector_model.joblib` | ~50 KB | Small regressor covering **unknown** sounds |
+| `cell_transition_track.npz` | ~tens of KB | Measured mouth-group transitions + deltas from the take |
+| `behavior_model.joblib` | ~50–100 KB | ML fill for **missing** transitions / live speech |
 
 Identity truth lives once in `.bds` + `source_face.png`. Everything else is indexes, tables, or short vectors.
+
+See [`AvatarBehavior.md`](AvatarBehavior.md) for measured → ML authority.
 
 ## Math of the big piece
 

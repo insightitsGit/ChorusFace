@@ -14,19 +14,13 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any, Final
 
+from aiface.display_layers import DISPLAY_PATH, layer_uniforms
+
 RECIPE_NAME: Final = "gpu_display_recipe.json"
-RECIPE_SCHEMA: Final = "aiface.gpu_display_recipe.v2"
+RECIPE_SCHEMA: Final = "aiface.gpu_display_recipe.v3"
 MAPPING_NAME: Final = "condition_maps.json"
 
-# The real fragment-shader composite order (avatar.frag deform path).
-DISPLAY_PATH: Final[tuple[str, ...]] = (
-    "identity_photo + tissue_warp (muscles + jaw, undamped jaw)",
-    "capture plates open.png / smile.png painted over the mouth matte",
-    "optional cavity fill when the jaw actually parts",
-    "atlas plate memory (finer viseme shapes)",
-    "upper-face expression plate (surprise)",
-    "Master Lock ch31 rejects illegal cell writes",
-)
+# DISPLAY_PATH imported from display_layers — L00..L11 single source of truth.
 
 # What actually drives each look at playback (uniform contract).
 UNIFORM_MAP: Final[dict[str, str]] = {
@@ -42,6 +36,7 @@ UNIFORM_MAP: Final[dict[str, str]] = {
     "avatar_open_plate / avatar_smile_plate": "capture look textures",
     "avatar_plate_a / avatar_plate_b": "atlas plate pair",
     "avatar_expr_plate": "upper-face expression texture",
+    **dict(layer_uniforms()),
 }
 
 FORBIDDEN: Final[tuple[str, ...]] = (

@@ -59,7 +59,12 @@ aiface-capture --rest r.png --smile s.png --open o.png --output output/worlds/av
 
 # Play only after QA looks good
 aiface --world output/worlds/avatar/avatar_face.bds
+
+# Any other world dir that meets adoption requirements works the same way
+aiface --world output/worlds/my_face/avatar_face.bds
 ```
+
+Adoption contract (portable world dirs): [`AvatarAdoption.md`](AvatarAdoption.md).
 
 The CLI prints a **reject report** (kept vs dropped by reason). Exit code **0**
 means the take passed selection safety; **1** means retake.

@@ -66,8 +66,37 @@ The residual "blurry mouth" was compositing, not resolution:
   from stacking `open.png` (soft ellipse over ~11% of the frame, mean α≈0.36)
   under the tighter atlas, plus warping the identity photo under a static
   plate (double-image lips). Fixed in `avatar.frag`: mute capture open/smile
-  when atlas owns speech, harden matte alphas, rest-align photo under a
-  committed speech plate.
+  when atlas owns speech, harden matte alphas; damp field warp while a speech
+  plate is active. Do **not** hard-rest-align the photo under an open jaw
+  (that reopened a synthetic mouth gap); cavity suppress follows layer/atlas
+  amount, not the muted open.png drive.
+- **Eyebrows stuck**: procedural brow lift was multiplied by Master-Lock
+  `unlocked` (brows live in locked skull → always 0); HAPPY catalog brow=0;
+  telemetry `NEUTRAL` blocked conversation emotion. Fixed: display brow no
+  longer lock-gated; HAPPY/speech brow floors; `_active_emotion()` fallback.
+- **No per-cell object control**: speakers collapsed Oris/Jaw to one mouth disc
+  and constraint had no neighbor exchange. Fixed: `CellClusterIndex` loads every
+  unlocked soft cell; speech spreads ±4 across nearby cluster cells; GPU
+  velocity-only Moore blend; bridge `GET /cells` + `POST /cells/drive`.
+- **Word-timed cell plan**: `MouthCellPlan` detects lip roles on the mouth
+  cluster, maps each viseme to an open/width/round flow, and each tick aims
+  cells toward their next neighbor using the same phoneme/`active_until` clock
+  as the layer timeline (`GET /cells` → `mouth_cell_plan`).
+- **Mouth groups (lips / teeth / cavity)**: named cell sets with per-viseme
+  recipes and `retarget_group` so teeth vs lips can change later — see
+  [`MouthCellGroups.md`](MouthCellGroups.md).
+- **Display layer hierarchy (L00–L11)**: one ordered stack
+  field → look plates → presentation, coded in `aiface.display_layers`,
+  mirrored in `avatar.frag` comments and `gpu_display_recipe.json`. Per-tick
+  `FrameLayerState` skips idle L03 cell work and marks atlas-owned capture /
+  cavity inactive for consistent realtime — see [`DisplayLayers.md`](DisplayLayers.md).
+- **Avatar adoption**: `aiface.avatar_profile` abstracts any world directory that
+  meets requirements (`.bds` + identity + open/smile + `mouth_unlocked` cells).
+  Train writes `avatar_profile.json`; runtime `open_avatar()` loads the bundle —
+  see [`AvatarAdoption.md`](AvatarAdoption.md).
+- **Behavior transitions + ML fill**: measured `cell_transition_track` from the
+  upload (group controls + deltas); `behavior_model` trained on that track fills
+  gaps and live speech — see [`AvatarBehavior.md`](AvatarBehavior.md).
 
 ## Runtime addressing + CPU discipline (same audit)
 

@@ -265,7 +265,8 @@ class BiomechanicalFace:
                 1.0,
                 frontalis * 1.15
                 + self.emotion.state.surprise * 0.55
-                + self.emotion.state.curiosity * 0.25,
+                + self.emotion.state.curiosity * 0.35
+                + self.emotion.state.arousal * 0.22,
             ),
         )
         render = FaceRenderState(
@@ -301,8 +302,11 @@ class BiomechanicalFace:
             radius=float(constraints.get("mouth_write_radius", 14.0)),
             budget=int(constraints.get("max_field_impulses_per_tick", 12)),
         )
-        # Lip and jaw writers act on the mouth, so their velocity impulses
-        # belong at the mouth centre rather than at their own tissue anchors.
+        # Default: keep muscle anchors so lip/jaw writers address distinct
+        # cells. Legacy single-disc remap is opt-in only — it destroyed
+        # per-cell / neighbor control of the mouth cluster.
+        if not bool(constraints.get("remap_field_to_mouth_center", False)):
+            return render, field_specs
         mouth = self.definition.get("mouth_center", [0.5, 0.78])
         mouth_writers = {"OrbicularisOris", "JawOpener"}
         remapped: list[FieldImpulseSpec] = []

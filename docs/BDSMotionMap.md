@@ -86,11 +86,24 @@ jaw still comes from the phoneme jaw target path.
 
 ## 5. What we underuse (vs NWR design power)
 
-1. **Velocity → visible warp** — impulses exist; pixels mostly ignore them  
-2. **Spatial writers** — many mouth writers remapped to one mouth-center disc  
+1. **Velocity → visible warp** — improved: per-cell ±4 + velocity neighbor blend
+2. **Spatial writers** — fixed: muscle anchors kept; speech spreads across nearby
+   mouth cluster cells (legacy single-disc remap is opt-in only)
 3. **Intent / density / hard_surface** as contact & seal, not just debug  
 4. **NWR observation loop** — filmstrip / timeline / schema for an external model  
 5. **Trained render MLP** (NWR) — intentionally *not* used for face identity here  
+
+### Per-cell / neighbor control (runtime)
+
+| Surface | Role |
+| --- | --- |
+| `aiface.cell_cluster` | Full mouth cell index from `.bds`; cell / cluster / neighbor drives |
+| `GET /cells` | List controllable regions + cell counts |
+| `POST /cells/drive` | `{mode:cell\|cluster\|neighbor\|batch, ...}` → AI ±4 at radius 0.5 |
+| `constraint.comp` | Unlocked soft cells exchange **velocity only** with Moore neighbors |
+| Master Lock | Still rejects AI on ch31≥0.5; albedo never written by cell drive |
+
+Command budget raised to **256 / tick** so a sweep can address many cells per frame.
 
 ## 6. Where ML fits (without breaking positioning)
 

@@ -24,7 +24,7 @@ from aiface.runtime.bds import (
 )
 
 PRELUDE_TOKEN: Final = "//#prelude"
-MAX_COMMANDS_PER_TICK: Final = 64
+MAX_COMMANDS_PER_TICK: Final = 256
 COMMAND_FLOATS: Final = 8
 WORKGROUP_SIZE: Final = 16
 CLAMP_LIMIT: Final = 1.5
@@ -34,6 +34,9 @@ EMPTY_EPSILON: Final = 0.01
 #: this is the only thing that dissipates speech energy; at 60 Hz it gives the
 #: impulse field a ~0.13 s tail instead of ratcheting up to ``CLAMP_LIMIT``.
 VELOCITY_DAMPING: Final = 0.88
+#: Unlocked soft cells exchange velocity with Moore neighbors (ch 0/1 only).
+#: This is NOT material advection — albedo / lock / density stay put.
+VELOCITY_NEIGHBOR_BLEND: Final = 0.08
 
 COMPUTE_PASSES: Final[tuple[str, ...]] = ("constraint",)
 
@@ -77,6 +80,7 @@ const float CLAMP_LIMIT = {_format_float(CLAMP_LIMIT)};
 const float SNAP_THRESHOLD = {_format_float(SNAP_THRESHOLD)};
 const float EMPTY_EPSILON = {_format_float(EMPTY_EPSILON)};
 const float VELOCITY_DAMPING = {_format_float(VELOCITY_DAMPING)};
+const float VELOCITY_NEIGHBOR_BLEND = {_format_float(VELOCITY_NEIGHBOR_BLEND)};
 
 {names}const float ANCHOR_TABLE[ANCHOR_COUNT][CHANNELS] = float[ANCHOR_COUNT][CHANNELS](
 {rows}
