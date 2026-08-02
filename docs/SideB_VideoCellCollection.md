@@ -1,6 +1,6 @@
 # Side B — Collect whole-face cell data from avatar video
 
-**Status:** design only (not implemented).  
+**Status:** implemented — optical-flow + landmark collect → `face_cell_timeline.npz`.  
 **Master:** [`TickFeedDesign.md`](TickFeedDesign.md).  
 **Pair with:** [`CellFeedBandwidth.md`](CellFeedBandwidth.md) (Side A) ·
 [`MultiLayerTickML.md`](MultiLayerTickML.md) · [`AvatarCapture.md`](AvatarCapture.md)

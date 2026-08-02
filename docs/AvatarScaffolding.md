@@ -1,6 +1,7 @@
 # Avatar scaffolding — lock what we need, free what users like
 
-**Status:** design only (not implemented).  
+**Status:** implemented — `calibration_script.json`, `validate_calibration_take`,
+`cosmetic_prefs.json` (`aiface.tickfeed.cosmetics`).  
 **Pair with:** [`SideB_VideoCellCollection.md`](SideB_VideoCellCollection.md) ·
 [`AvatarAdoption.md`](AvatarAdoption.md) · [`AvatarCapture.md`](AvatarCapture.md)
 

@@ -2543,11 +2543,22 @@ class AvatarFaceApp(FieldRuntime):
         tickfeed = None
         if self._tickfeed is not None:
             face = self._tickfeed.face
+            ml_loaded = self._tickfeed.ml is not None
+            transport = self._tickfeed.transport
             tickfeed = {
                 "enabled": bool(self._tickfeed.enabled),
                 "face_box": [face.x, face.y, face.w, face.h],
                 "timeline_ticks": len(self._tickfeed.timeline),
-                "transport": "KEY/DELTA full-face",
+                "ml_loaded": ml_loaded,
+                "transport": (
+                    transport.mode if transport is not None else "none"
+                ),
+                "wire": "KEY/DELTA full-face",
+                "cosmetics": (
+                    self._tickfeed.cosmetics.as_dict()
+                    if self._tickfeed.cosmetics is not None
+                    else None
+                ),
             }
         if index is None:
             return {

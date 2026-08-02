@@ -1,6 +1,6 @@
 # Multi-layer ML for per-tick face data
 
-**Status:** design only (not implemented).  
+**Status:** implemented (`aiface.tickfeed.ml` + `scripts/train_tickfeed_ml.py`).  
 **Master:** [`TickFeedDesign.md`](TickFeedDesign.md).  
 **Pair with:** [`SideB_VideoCellCollection.md`](SideB_VideoCellCollection.md) ·
 [`CellFeedBandwidth.md`](CellFeedBandwidth.md)

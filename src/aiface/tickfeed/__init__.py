@@ -1,7 +1,14 @@
 """TickFeed — full-face KEY/DELTA packages @ 60 Hz (design: TickFeedDesign.md)."""
 
+from aiface.tickfeed.calibration import (
+    load_calibration_script,
+    validate_calibration_take,
+    write_calibration_script,
+)
 from aiface.tickfeed.collect import prepare_face_timeline
+from aiface.tickfeed.cosmetics import load_cosmetic_prefs, write_cosmetic_prefs
 from aiface.tickfeed.driver import TickFeedDriver, face_box_from_profile
+from aiface.tickfeed.ml import TickFeedMLStack, fit_all_layers
 from aiface.tickfeed.package import (
     FaceBox,
     TickLabels,
@@ -38,6 +45,7 @@ __all__ = [
     "LockstepPlayer",
     "PackageKind",
     "TickFeedDriver",
+    "TickFeedMLStack",
     "TickLabels",
     "TickPackage",
     "TickRingBuffer",
@@ -48,5 +56,11 @@ __all__ = [
     "decode",
     "encode",
     "face_box_from_profile",
+    "fit_all_layers",
+    "load_calibration_script",
+    "load_cosmetic_prefs",
     "prepare_face_timeline",
+    "validate_calibration_take",
+    "write_calibration_script",
+    "write_cosmetic_prefs",
 ]

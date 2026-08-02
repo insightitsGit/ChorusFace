@@ -6,10 +6,75 @@ from pathlib import Path
 
 import numpy as np
 
+from aiface.tickfeed.calibration import write_calibration_script
 from aiface.tickfeed.driver import face_box_from_profile
 from aiface.tickfeed.package import FaceBox
 from aiface.tickfeed.schema import TICK_RATE_HZ
 from aiface.tickfeed.synth import synthesize_velocity
+
+
+def _optical_flow_face_series(
+    video: Path,
+    face: FaceBox,
+    *,
+    sample_fps: float,
+) -> tuple[list[float], list[np.ndarray]] | None:
+    """Dense Farneback flow on face crop → list of (t, HxWx2) patches."""
+    try:
+        import cv2
+    except ImportError:
+        return None
+    cap = cv2.VideoCapture(str(video))
+    if not cap.isOpened():
+        return None
+    native = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+    stride = max(int(round(native / max(sample_fps, 0.5))), 1)
+    prev_gray = None
+    times: list[float] = []
+    flows: list[np.ndarray] = []
+    idx = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        if idx % stride != 0:
+            idx += 1
+            continue
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Approximate face crop: center box scaled to frame
+        h, w = gray.shape[:2]
+        x0 = int(w * (face.x / 256.0))
+        y0 = int(h * (face.y / 256.0))
+        x1 = int(w * ((face.x + face.w) / 256.0))
+        y1 = int(h * ((face.y + face.h) / 256.0))
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(w, max(x0 + 8, x1)), min(h, max(y0 + 8, y1))
+        crop = gray[y0:y1, x0:x1]
+        crop = cv2.resize(crop, (face.w, face.h), interpolation=cv2.INTER_AREA)
+        t = idx / native
+        if prev_gray is not None:
+            flow = cv2.calcOpticalFlowFarneback(
+                prev_gray,
+                crop,
+                None,
+                0.5,
+                3,
+                15,
+                3,
+                5,
+                1.2,
+                0,
+            )
+            # Scale flow to grid velocity-ish units
+            flow = flow.astype(np.float32) * 0.15
+            times.append(t)
+            flows.append(flow)
+        prev_gray = crop
+        idx += 1
+    cap.release()
+    if not flows:
+        return None
+    return times, flows
 
 
 def prepare_face_timeline(
@@ -20,11 +85,12 @@ def prepare_face_timeline(
 ) -> Path:
     """Build a 60 Hz face velocity timeline beside the world.
 
-    Uses landmark-derived open/smile curves when video is available; otherwise
-    a short synthetic calibration pattern (REST→SMILE→OPEN→…) for QA.
+    Prefer optical-flow face patches when OpenCV can read the video; else
+    landmark open/smile curves → synth; else 8s calibration script pattern.
     """
     root = Path(world)
     root = root if root.is_dir() else root.parent
+    write_calibration_script(root)
     face = face_box_from_profile(root)
     mouth = (face.x + face.w * 0.5, face.y + face.h * 0.62)
 
@@ -48,7 +114,16 @@ def prepare_face_timeline(
                 vid = cand
                 break
 
+    flow_series = None
     if vid is not None and vid.is_file():
+        flow_series = _optical_flow_face_series(
+            vid, face, sample_fps=float(sample_fps)
+        )
+        if flow_series is not None:
+            print(
+                f"TickFeed collect: optical flow patches n={len(flow_series[1])} "
+                f"from {vid.name}"
+            )
         try:
             from aiface.behavior.track import extract_transition_track
 
@@ -60,8 +135,49 @@ def prepare_face_timeline(
                 opens.append(float(track.controls[i, 0]))
                 smiles.append(float(track.controls[i, 2]))
         except Exception as exc:  # noqa: BLE001
-            print(f"TickFeed collect: video track failed ({exc}); using script")
+            print(f"TickFeed collect: landmark track failed ({exc})")
             times, opens, smiles = [], [], []
+
+    if flow_series is not None:
+        flow_t, flow_v = flow_series
+        duration = max(flow_t[-1], 1.0 / TICK_RATE_HZ)
+        n_ticks = int(duration * TICK_RATE_HZ) + 1
+        velocities = np.zeros((n_ticks, face.h, face.w, 2), dtype=np.float32)
+        conf = np.zeros((n_ticks, face.h * face.w), dtype=np.uint8)
+        tick_index = np.arange(n_ticks, dtype=np.int32)
+        ft = np.asarray(flow_t, dtype=np.float64)
+        # Stack flows for interpolation along time of each pixel is heavy;
+        # nearest sample is enough for teacher.
+        for t in tick_index:
+            t_sec = float(t) / float(TICK_RATE_HZ)
+            j = int(np.searchsorted(ft, t_sec, side="right") - 1)
+            j = max(0, min(j, len(flow_v) - 1))
+            velocities[t] = flow_v[j]
+            # Blend landmark synth if available for open/smile emphasis
+            if times:
+                o = float(np.interp(t_sec, times, opens))
+                s = float(np.interp(t_sec, times, smiles))
+                syn = synthesize_velocity(
+                    face, open_amt=o, smile_amt=s, mouth_uv=mouth
+                )
+                velocities[t] = 0.65 * velocities[t] + 0.35 * syn
+            mag = np.linalg.norm(velocities[t], axis=-1).reshape(-1)
+            # High motion → high conf; quiet cells still keep a floor (measured).
+            conf[t] = np.clip(40 + mag * 400.0, 40, 255).astype(np.uint8)
+        out = root / "face_cell_timeline.npz"
+        np.savez_compressed(
+            out,
+            ticks=tick_index,
+            velocity=velocities,
+            conf=conf,
+            face_box=np.asarray([face.x, face.y, face.w, face.h], dtype=np.int32),
+            tick_rate=np.asarray([TICK_RATE_HZ], dtype=np.float64),
+        )
+        print(
+            f"TickFeed collect: wrote {out} ticks={n_ticks} "
+            f"face={face.w}x{face.h} source=optical_flow"
+        )
+        return out
 
     if not times:
         # 8s calibration script proxy @ sample_fps
@@ -96,6 +212,7 @@ def prepare_face_timeline(
     smile_s = np.asarray(smiles, dtype=np.float64)
 
     velocities = np.zeros((n_ticks, face.h, face.w, 2), dtype=np.float32)
+    conf = np.full((n_ticks, face.h * face.w), 180, dtype=np.uint8)
     tick_index = np.arange(n_ticks, dtype=np.int32)
     for t in tick_index:
         t_sec = float(t) / float(TICK_RATE_HZ)
@@ -109,12 +226,15 @@ def prepare_face_timeline(
             surprise_amt=sur,
             mouth_uv=mouth,
         )
+        # Synth teacher: mid confidence (not optical-flow measured).
+        conf[t] = 160
 
     out = root / "face_cell_timeline.npz"
     np.savez_compressed(
         out,
         ticks=tick_index,
         velocity=velocities,
+        conf=conf,
         face_box=np.asarray([face.x, face.y, face.w, face.h], dtype=np.int32),
         tick_rate=np.asarray([TICK_RATE_HZ], dtype=np.float64),
     )

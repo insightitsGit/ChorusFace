@@ -1,9 +1,14 @@
 # Tick Feed Design — full face @ 60 Hz (design session master)
 
-**Status:** implementing on `tickfeedmaster` — codec, GPU ingest, app hot path,
-Side B `face_cell_timeline` prepare. Legacy ±4 MouthCellPlan **disabled**.  
+**Status:** implemented on `tickfeedmaster` — codec, GPU ingest, app hot path,
+Side B optical-flow timeline + conf, L1–L5 ML train/runtime, L4 `c_t`, CHORUS
+spool/live transport, 8s calibration + cosmetics prefs. Legacy ±4 **disabled**.  
 **Branch:** `tickfeedmaster`  
 **Split from:** AminIntheLoop  
+**Operator step:** generate `calibration_take.mp4` from
+[`AvatarCalibrationPrompt.md`](AvatarCalibrationPrompt.md) when replacing the
+lab video, then `python scripts/train_tickfeed_ml.py --prepare`.  
+
 
 
 **Purpose:** Single from-scratch design doc capturing the Side A / Side B
