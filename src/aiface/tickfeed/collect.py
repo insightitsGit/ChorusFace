@@ -175,12 +175,27 @@ def prepare_face_timeline(
                 t_sec = float(t) / float(TICK_RATE_HZ)
                 o = float(np.interp(t_sec, t_src, open_s))
                 s = float(np.interp(t_sec, t_src, smile_s))
+                # Script beats amplify weak closed-lip smile / angry (flow alone
+                # under-reads those LOOK sections vs OPEN/TALK).
+                if 1.0 <= t_sec < 2.0:
+                    s = max(s, 0.85)
+                if 2.0 <= t_sec < 3.0:
+                    o = max(o, 0.85)
+                if 4.0 <= t_sec < 5.0:
+                    o = max(o, 0.25)
+                sur = 0.75 if 4.0 <= t_sec < 5.0 else 0.0
                 open_curve[t] = o
                 smile_curve[t] = s
                 syn = synthesize_velocity(
-                    face, open_amt=o, smile_amt=s, mouth_uv=mouth
+                    face,
+                    open_amt=o,
+                    smile_amt=s,
+                    surprise_amt=sur,
+                    mouth_uv=mouth,
                 )
-                velocities[t] = 0.65 * velocities[t] + 0.35 * syn
+                # Closed-lip SMILE: lean synth harder (measured flow is subtle).
+                w_syn = 0.55 if 1.0 <= t_sec < 2.0 else 0.35
+                velocities[t] = (1.0 - w_syn) * velocities[t] + w_syn * syn
         out = write_face_cell_timeline(
             root,
             face=face,

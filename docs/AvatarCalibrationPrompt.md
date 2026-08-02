@@ -7,16 +7,18 @@ Do not skip it. Without this video, TickFeed has code paths but **not** the agre
 
 ---
 
-## Paste into Gemini (exact)
+## Paste into Gemini (exact) — blonde woman standard take
 
 ```text
 Create one continuous video, exactly 8.0 seconds long, 24 or 30 fps.
 
-Subject: one adult human face, frontal close-up, looking at the camera.
-Neutral indoor lighting. Eyes clearly visible. No sunglasses. No cuts, no scene changes.
+Subject: one adult woman, blonde, beautiful, natural makeup, clear skin,
+frontal face close-up, looking at the camera. Soft natural beauty-light lighting.
+Eyes clearly visible. No sunglasses. No cuts, no scene changes.
 Head mostly still (tiny natural motion OK). Face fills most of the frame. Stable crop.
+Photorealistic, elegant, not cartoon, not stylized anime.
 
-Speak clearly in English. Follow this timeline exactly — one beat after another, no skipping:
+Speak clearly in English with a natural female voice. Follow this timeline exactly — one beat after another, no skipping:
 
 0.0–1.0s REST
 Neutral face, mouth closed, relaxed, silent.
@@ -50,10 +52,18 @@ Output: a single MP4 file only. No text overlay, no logo, no second person.
 
 ## After Gemini finishes — give it to me
 
-Save the file as either:
+**Drop folder (opened for you):**
 
-1. `output/worlds/avatar/calibration_take.mp4` (preferred), or  
-2. Drop the MP4 anywhere and tell me the path in chat.
+`assets/avatar_video_inputs/calibration_takes/`
+
+Save exactly:
+
+| File | Subject |
+| --- | --- |
+| `blonde_woman_8s.mp4` | Blonde woman 8s script take |
+| `male_8s.mp4` | Male 8s script take |
+
+Both should follow the **same** 8s beat script. Using both gives a stronger accuracy check (and optional dual-world train). Then tell me in chat.
 
 Then I will:
 
