@@ -7,9 +7,9 @@ beside the installed package, so a pip install stays read-only.
 The avatar world, its part atlas, and the source portrait are colocated by
 name. :func:`aiface.parts.default_parts_path` relies on that contract::
 
-    output/worlds/avatar/avatar_face.bds
-    output/worlds/avatar/face_parts.npy    (+ .json anchors, .png preview)
-    output/worlds/avatar/source_face.png
+    output/worlds/tickfeed/avatar_face.bds
+    output/worlds/tickfeed/face_parts.npy    (+ .json anchors, .png preview)
+    output/worlds/tickfeed/source_face.png
 """
 
 from __future__ import annotations
@@ -21,7 +21,8 @@ from typing import Final
 OUTPUT: Final = Path(os.environ.get("AIFACE_OUTPUT", "output")).resolve()
 
 WORLDS: Final = OUTPUT / "worlds"
-WORLDS_AVATAR: Final = WORLDS / "avatar"
+# Canonical TickFeed demo world (Gemini 8s calibration take → digest + timeline).
+WORLDS_AVATAR: Final = WORLDS / "tickfeed"
 PREVIEWS: Final = OUTPUT / "previews"
 
 DEFAULT_AVATAR_FACE: Final = WORLDS_AVATAR / "avatar_face.bds"
