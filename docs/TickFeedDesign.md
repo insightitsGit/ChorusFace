@@ -1,8 +1,8 @@
 # Tick Feed Design — full face @ 60 Hz (design session master)
 
-**Status:** implemented on `tickfeedmaster` — codec, GPU ingest, app hot path,
-Side B optical-flow timeline + conf, L1–L5 ML train/runtime, L4 `c_t`, CHORUS
-spool/live transport, 8s calibration + cosmetics prefs. Legacy ±4 **disabled**.  
+**Status:** Side A + Side B **implemented** on `tickfeedmaster` for design fidelity
+(HELLO, KEY/Δ, ring→GPU, labels→LOOK, every-frame flow timeline dir, speech/look
+align, L1–L5, CHORUS/`c_t`). Legacy ±4 **disabled**.  
 **Branch:** `tickfeedmaster`  
 **Split from:** AminIntheLoop  
 **Operator step:** generate `calibration_take.mp4` from
