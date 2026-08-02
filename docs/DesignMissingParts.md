@@ -94,16 +94,16 @@ runtime visemes, rest `.bds`.
 ## F. Priority order (recommended)
 
 ```text
-P0  TickPackage codec (encode/decode KEY|Δ)     ← in progress on tickfeedmaster
-P0b GPU ingest compute (B1) + face_box map (B2)
-P0c 3-tick ring + damp-on-miss (B3)
-P0d Label amounts → LOOK drives (B4)
-P1  Calibration script artifact + beat-labeled digest
-P2  Dense track → face_cell_timeline (Side B teacher)
-P3  L3 (+ L5) trained on timeline; L1/L2 teachers from beats/audio
-P4  CHORUS push into ingest path
-P5  L4 codec + wire compression balance
-P6  User upload UX + cosmetics
+P0  TickPackage codec                         DONE (aiface.tickfeed)
+P0b GPU ingest + face_box map (B1/B2)         DONE (tick_ingest.comp + FieldRuntime)
+P0c Ring + damp-on-miss (B3)                  DONE (CPU ring + GPU enc=4)
+P0d Labels → LOOK amounts (B4)                PARTIAL (timeline smile/open/surprise → uniforms)
+P1  Calibration script artifact               PARTIAL (8s script in collect fallback)
+P2  Dense UV-flow tracker                     OPEN (current: landmark→face synth timeline)
+P3  Multi-layer ML L1–L5                      OPEN (live synth + behavior still assist LOOK)
+P4  CHORUS Fabric wire                        OPEN
+P5  L4 c_t codec                              OPEN
+P6  User upload UX + cosmetics                OPEN
 ```
 
 ---
