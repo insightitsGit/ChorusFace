@@ -30,8 +30,9 @@ uniform uvec2 grid_size;
 uniform ivec2 face_offset; // face_x, face_y
 uniform ivec2 face_size;   // face_w, face_h
 uniform int is_keyframe;   // 1 = KEY (assign), 0 = DELTA (add)
-uniform int encoding;      // 0=none/key dense, 1=dense delta, 2=sparse, 3=empty
+uniform int encoding;      // 0=key dense, 1=dense delta, 2=sparse, 3=empty, 4=miss damp
 uniform uint sparse_count;
+uniform float miss_damp;   // encoding==4: multiply face vx,vy
 
 uint cell_index(uvec2 position) {
     return position.y * grid_size.x + position.x;
@@ -60,12 +61,36 @@ void apply_cell(ivec2 global_coord, vec2 vel) {
 
 void main() {
     if (encoding == 3) {
-        return; // EMPTY
+        return; // EMPTY — labels only; velocity unchanged
+    }
+
+    if (encoding == 4) {
+        // Miss damp: face ROI velocities decay toward rest
+        ivec2 local_coord = ivec2(gl_GlobalInvocationID.xy);
+        if (local_coord.x >= face_size.x || local_coord.y >= face_size.y) {
+            return;
+        }
+        ivec2 global_coord = face_offset + local_coord;
+        if (global_coord.x < 0 || global_coord.y < 0) {
+            return;
+        }
+        if (uint(global_coord.x) >= grid_size.x || uint(global_coord.y) >= grid_size.y) {
+            return;
+        }
+        uint index = cell_index(uvec2(global_coord));
+        float lock = world.cells[index].value[HUMAN_LOCK_CHANNEL];
+        if (lock >= 0.5) {
+            return;
+        }
+        world.cells[index].value[0] *= miss_damp;
+        world.cells[index].value[1] *= miss_damp;
+        return;
     }
 
     if (encoding == 2) {
-        // Sparse: one invocation per changed cell (1D dispatch)
-        uint lid = gl_GlobalInvocationID.x;
+        // Sparse: linearize 16x16 workgroups into one index per changed cell
+        uint lid = gl_LocalInvocationIndex
+            + gl_WorkGroupID.x * gl_WorkGroupSize.x * gl_WorkGroupSize.y;
         if (lid >= sparse_count) {
             return;
         }

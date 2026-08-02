@@ -104,8 +104,8 @@ from aiface.cell_cluster import (
     parse_drive_request,
     to_commands,
 )
-from aiface.mouth_cell_plan import MouthCellPlan, build_mouth_cell_plan
 from aiface.display_layers import FrameLayerState, evaluate_frame_layers
+from aiface.tickfeed.driver import TickFeedDriver, face_box_from_profile
 from aiface.service import DEFAULT_HOST, DEFAULT_PORT, FaceBridge, new_token
 from aiface.skinning import (
     MAX_ACTIVE_MUSCLES,
@@ -520,7 +520,7 @@ class AvatarFaceApp(FieldRuntime):
         self._open_close_source = "heuristic"
         self._mouth_object_cells = 0
         self._cell_clusters: CellClusterIndex | None = None
-        self._mouth_cell_plan: MouthCellPlan | None = None
+        self._tickfeed: TickFeedDriver | None = None
         self._frame_layers = FrameLayerState()
         self._pending_cell_commands: list = []
         self._gpu_log = bool(getattr(self.argv, "gpu_log", False))
@@ -729,33 +729,44 @@ class AvatarFaceApp(FieldRuntime):
         )
 
     def _load_cell_clusters(self) -> None:
-        """Index every unlocked soft cell so drives can address them one-by-one."""
+        """Load face ROI + TickFeed driver (replaces legacy ±4 MouthCellPlan)."""
         try:
             index = CellClusterIndex.from_world(self.world_path)
+            self._cell_clusters = index
+            mouth = index.primary_mouth()
+            if mouth is not None:
+                self._mouth_object_cells = int(mouth.cell_count)
+                cx, cy = mouth.centroid()
+                print(
+                    f"Cell clusters: {len(index.clusters)} regions; "
+                    f"mouth_unlocked={mouth.cell_count} cells "
+                    f"@ ({cx:.1f}, {cy:.1f})"
+                )
+            else:
+                print(
+                    f"Cell clusters: {len(index.clusters)} regions (no mouth_unlocked)"
+                )
         except (OSError, ValueError, BDSFormatError) as exc:
             print(f"Cell clusters: unavailable ({exc})")
             self._cell_clusters = None
-            return
-        self._cell_clusters = index
-        self._mouth_cell_plan = build_mouth_cell_plan(index)
-        mouth = index.primary_mouth()
-        if mouth is not None:
-            self._mouth_object_cells = int(mouth.cell_count)
-            cx, cy = mouth.centroid()
-            detected = (
-                self._mouth_cell_plan.cell_count if self._mouth_cell_plan else 0
+        try:
+            face = face_box_from_profile(
+                self.world_path, self.grid_width, self.grid_height
+            )
+            mouth_uv = (
+                float(self._mouth_center[0]),
+                float(self._mouth_center[1]),
+            )
+            self._tickfeed = TickFeedDriver.try_load_timeline(
+                self.world_path, face, mouth_uv
             )
             print(
-                f"Cell clusters: {len(index.clusters)} regions; "
-                f"mouth_unlocked={mouth.cell_count} cells "
-                f"@ ({cx:.1f}, {cy:.1f}) - per-cell drive armed"
+                f"TickFeed: full-face ROI {face.w}x{face.h} @ ({face.x},{face.y}) "
+                f"— KEY/DELTA ingest (legacy ±4 cell plan disabled)"
             )
-            print(
-                f"Mouth cell plan: detected {detected} cells; "
-                "word timing -> neighbor flow each tick"
-            )
-        else:
-            print(f"Cell clusters: {len(index.clusters)} regions (no mouth_unlocked)")
+        except Exception as exc:  # noqa: BLE001 — adopt must not kill launch
+            print(f"TickFeed: unavailable ({exc})")
+            self._tickfeed = None
 
     def _estimate_mouth_center(self) -> tuple[float, float]:
         """Locate the mouth from the digested region object, seed metadata,
@@ -1267,21 +1278,7 @@ class AvatarFaceApp(FieldRuntime):
         self._open_close_source = cmd.source
         # Jaw spring may lag visually; plate amounts already snapped above.
         self._biomech.jaw.set_speech_target(float(cmd.jaw_target))
-        # Word clock → per-cell neighbor plan (same phoneme / until as layers).
-        if self._mouth_cell_plan is not None:
-            self._mouth_cell_plan.sync_from_timeline(
-                cmd.phoneme,
-                active_until=float(cmd.active_until),
-                now=now,
-            )
-            # Overlay observed/ML group flow so cell transitions aren't table-only.
-            if behavior.source.startswith(
-                ("ml_fill", "measured", "observed", "heuristic")
-            ):
-                open_n, width_n, round_n = behavior.flow()
-                self._mouth_cell_plan.apply_behavior_flow(
-                    open_n, width_n, round_n, source=behavior.source
-                )
+        # FIELD velocity is TickFeed KEY/DELTA (not MouthCellPlan ±4).
         self._refresh_frame_layers()
 
     def _refresh_frame_layers(self) -> FrameLayerState:
@@ -1291,17 +1288,8 @@ class AvatarFaceApp(FieldRuntime):
 
         cmd = self._layer_command
         recipe = self._display_recipe
-        plan = self._mouth_cell_plan
         phoneme = canonical_viseme(cmd.phoneme or "REST")
-        # Heuristic budget — do not call plan_steps twice (enqueue does that).
-        cell_steps = 0
-        if (
-            plan is not None
-            and plan.cell_count > 0
-            and phoneme not in ("REST",)
-            and float(cmd.active_until) > 0.0
-        ):
-            cell_steps = min(int(plan.cell_count), 64)
+        # TickFeed owns FIELD; L03 cell_groups steps unused (0).
         speaking_plate = float(cmd.plate_openness) > 0.02 or bool(
             getattr(self._render_state, "speaking", False)
         )
@@ -1315,7 +1303,7 @@ class AvatarFaceApp(FieldRuntime):
             expr_blend=float(self._expr_plate_blend),
             brow_raise=float(self._expr_brow_raise),
             speaking_plate=speaking_plate,
-            cell_plan_steps=cell_steps,
+            cell_plan_steps=0,
             hard_snap=float(recipe.plate_sharpness) >= HARD_SNAP_THRESHOLD,
             chat_visible=bool(self._chat_box_visible),
         )
@@ -2538,141 +2526,55 @@ class AvatarFaceApp(FieldRuntime):
         return ownership
 
     def _enqueue_field_specs(self, specs: Sequence[FieldImpulseSpec]) -> None:
-        """Propose ±4 velocity. Prefer per-cell spread into the mouth cluster."""
-        tick = self.tick + 1
-        mouth = (
-            self._cell_clusters.primary_mouth()
-            if self._cell_clusters is not None
-            else None
-        )
-        for spec in specs:
-            center = self._uv_to_grid(spec.center_uv)
-            velocity = (float(spec.velocity[0]), float(spec.velocity[1]))
-            radius = float(spec.radius)
-            # Cell-precise or cluster-spread path — do not collapse to one disc.
-            if mouth is not None and radius > 1.25:
-                impulses = distribute_to_nearby_cells(
-                    mouth,
-                    center,
-                    velocity,
-                    tick=tick,
-                    radius_cells=min(radius, MOUTH_RADIUS),
-                    budget=48,
-                )
-                for command in to_commands(
-                    impulses,
-                    grid_width=self.grid_width,
-                    grid_height=self.grid_height,
-                ):
-                    self._enqueue(command)
-                continue
-            # Soft safety: keep large discs near the mouth object, but never
-            # relocate a cell-precise write (radius ≤ 1).
-            if radius > 1.25:
-                if abs(center[0] - self._mouth_center[0]) > MOUTH_RADIUS * 1.4:
-                    center = (self._mouth_center[0], center[1])
-                if abs(center[1] - self._mouth_center[1]) > MOUTH_RADIUS * 1.2:
-                    center = (center[0], self._mouth_center[1])
-                radius = min(radius, MOUTH_RADIUS)
-            self._enqueue(
-                PaintCommand(
-                    tick=tick,
-                    start_x=center[0],
-                    start_y=center[1],
-                    end_x=velocity[0],
-                    end_y=velocity[1],
-                    radius=radius,
-                    category=0,
-                    operation=1.0,
-                    priority=PRIORITY_LEVELS["ai"],
-                    source=1,
-                    velocity_impulse=velocity,
-                )
-            )
-        self._flush_pending_cell_commands()
+        """No-op — legacy ±4 muscle field writes removed (TickFeed owns ch0/1)."""
+        del specs
 
     def _flush_pending_cell_commands(self) -> None:
-        """Drain bridge/API cell drives onto this tick's command buffer."""
-        pending = self._pending_cell_commands
-        if not pending:
-            return
+        """No-op — legacy pending ±4 queue cleared; TickFeed owns FIELD."""
         self._pending_cell_commands = []
-        for command in pending:
-            self._enqueue(command)
 
     def _enqueue_mouth_cell_plan(self) -> None:
-        """Execute the word-timed per-cell plan for this simulation tick."""
-        # L03 skip: REST / idle ticks do not burn the 256 command budget.
-        if not self._frame_layers.is_on("cell_groups"):
-            return
-        plan = self._mouth_cell_plan
-        if plan is None or plan.cell_count == 0:
-            return
-        impulses = plan.impulses_for_tick(tick=self.tick + 1)
-        if not impulses:
-            return
-        for command in to_commands(
-            impulses,
-            grid_width=self.grid_width,
-            grid_height=self.grid_height,
-        ):
-            self._enqueue(command)
+        """No-op — legacy ±4 MouthCellPlan removed; TickFeed owns FIELD."""
+        return
 
     def _cells_snapshot(self) -> dict[str, object]:
         index = self._cell_clusters
         layers = self._frame_layers.snapshot()
+        tickfeed = None
+        if self._tickfeed is not None:
+            face = self._tickfeed.face
+            tickfeed = {
+                "enabled": bool(self._tickfeed.enabled),
+                "face_box": [face.x, face.y, face.w, face.h],
+                "timeline_ticks": len(self._tickfeed.timeline),
+                "transport": "KEY/DELTA full-face",
+            }
         if index is None:
             return {
                 "regions": [],
-                "command_budget": 256,
+                "command_budget": 0,
                 "neighbor_blend": True,
                 "display_layers": layers,
+                "tickfeed": tickfeed,
             }
-        payload: dict[str, object] = {
+        return {
             "avatar": self._avatar_bundle.profile.as_dict(),
             "regions": index.summary(),
             "grid": [int(index.width), int(index.height)],
-            "command_budget": 256,
+            "command_budget": 0,
             "neighbor_blend": True,
-            "modes": ["cell", "cluster", "neighbor", "batch", "retarget"],
+            "modes": ["tickfeed"],
             "display_layers": layers,
+            "tickfeed": tickfeed,
         }
-        if self._mouth_cell_plan is not None:
-            payload["mouth_cell_plan"] = self._mouth_cell_plan.snapshot()
-        return payload
 
     def _cells_drive(self, payload: dict) -> dict[str, object]:
-        """Queue per-cell / neighbor / cluster ±4 impulses (unlocked only)."""
-        index = self._cell_clusters
-        if index is None:
-            raise RuntimeError("cell clusters not loaded")
-        mode = str(payload.get("mode") or payload.get("kind") or "cell").strip().lower()
-        if mode == "retarget":
-            plan = self._mouth_cell_plan
-            if plan is None:
-                raise RuntimeError("mouth cell plan not loaded")
-            group = str(payload.get("group") or "").strip()
-            cells = payload.get("cells")
-            if not group or not isinstance(cells, list) or not cells:
-                raise ValueError(
-                    "retarget requires group + cells: [[x,y], ...] or [{x,y}, ...]"
-                )
-            coords: list[tuple[int, int]] = []
-            for item in cells:
-                if isinstance(item, dict):
-                    coords.append((int(item["x"]), int(item["y"])))
-                elif isinstance(item, (list, tuple)) and len(item) >= 2:
-                    coords.append((int(item[0]), int(item[1])))
-            plan.retarget_group(
-                group, coords, as_corner=bool(payload.get("as_corner", False))
-            )
-            return {
-                "queued": False,
-                "retargeted": True,
-                "group": group,
-                "cells": len(coords),
-                "mouth_groups": plan.groups.snapshot(),
-            }
+        """Legacy ±4 cell drive disabled — use TickFeed packages."""
+        del payload
+        raise RuntimeError(
+            "per-cell ±4 drive removed; FIELD is TickFeed KEY/DELTA "
+            "(see docs/TickFeedDesign.md)"
+        )
         tick = int(self.tick) + 1
         impulses = parse_drive_request(payload, index=index, tick=tick)
         commands = to_commands(
@@ -2711,11 +2613,26 @@ class AvatarFaceApp(FieldRuntime):
             roundness=render.mouth_roundness,
             expression=expression,
         )
-        self._enqueue_field_specs(specs)
-        # L00–L11 skip map, then L03 cell→neighbor only when active.
+        del specs  # legacy ±4 muscle field impulses unused (TickFeed owns ch0/1)
         self._refresh_frame_layers()
-        self._enqueue_mouth_cell_plan()
         self._cpu_frame_ms = (time.perf_counter() - cpu_started) * 1000.0
+
+    def _simulate_tick(self) -> None:
+        """Push TickPackage for next tick, then run ingest + constraint."""
+        next_tick = self.tick + 1
+        if self._tickfeed is not None and self._tickfeed.enabled:
+            pkg = self._tickfeed.push_drives(
+                tick=next_tick,
+                open_amt=float(self._ml_openness),
+                smile_amt=float(self._ml_smile),
+                surprise_amt=float(self._expr_plate_blend),
+                phoneme=str(self._held_speech_viseme or "REST"),
+                emotion=self._active_emotion(),
+            )
+            self.queue_tick_package(pkg)
+        else:
+            self.queue_tick_package(None)
+        super()._simulate_tick()
 
     def _sample_mouth_telemetry(self) -> None:
         # Hot path: read back only the mouth row band (~35 rows ≈ 1.1 MB), not

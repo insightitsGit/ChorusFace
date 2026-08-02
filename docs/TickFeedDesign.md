@@ -1,8 +1,10 @@
 # Tick Feed Design — full face @ 60 Hz (design session master)
 
-**Status:** design only — not implemented.  
-**Branch:** `tickfeedmaster` (implementation branch for this design)  
+**Status:** implementing on `tickfeedmaster` — codec, GPU ingest, app hot path,
+Side B `face_cell_timeline` prepare. Legacy ±4 MouthCellPlan **disabled**.  
+**Branch:** `tickfeedmaster`  
 **Split from:** AminIntheLoop  
+
 
 **Purpose:** Single from-scratch design doc capturing the Side A / Side B
 conversation so you can research and decide before build.

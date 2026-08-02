@@ -143,6 +143,11 @@ def load_compute_passes() -> dict[str, str]:
     return {name: load_shader(f"{name}.comp") for name in COMPUTE_PASSES}
 
 
+def load_tick_ingest_shader() -> str:
+    """TickFeed full-face KEY/DELTA ingest (not in COMPUTE_PASSES ping-pong)."""
+    return load_shader("tick_ingest.comp")
+
+
 def _format_float(value: float) -> str:
     text = repr(float(value))
     return text if ("." in text or "e" in text or "E" in text) else f"{text}.0"
@@ -162,6 +167,7 @@ __all__ = [
     "generate_prelude",
     "load_compute_passes",
     "load_shader",
+    "load_tick_ingest_shader",
     "normalize_priority",
     "priority_scale",
     "shader_source",

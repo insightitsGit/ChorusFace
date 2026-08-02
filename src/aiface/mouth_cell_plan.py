@@ -1,17 +1,8 @@
-"""Word-timed per-cell mouth plan: detect roles → plan neighbor flow → drive.
+"""DEPRECATED realtime path — replaced by ``aiface.tickfeed`` (full-face KEY/DELTA).
 
-Pipeline
---------
-1. **Detect** — classify every ``mouth_unlocked`` cell (upper/lower lip,
-   left/right, interior) from the live cluster geometry.
-2. **Plan** — each canonical viseme maps to an open/width/round flow field.
-3. **Time** — the same word/viseme clock as ``MouthLayerTimeline``
-   (``phoneme`` + ``active_until``) selects the active field.
-4. **Drive** — each tick emits cell-precise ±4 impulses aiming each sampled
-   cell toward its next neighbor in the flow direction.
-
-This does not invent face RGB. It only writes velocity on unlocked soft cells;
-Master Lock still rejects identity writes on the GPU.
+Kept for unit tests and offline group QA only. ``AvatarFaceApp`` no longer
+enqueues ±4 MouthCellPlan impulses; FIELD velocity comes from TickPackage
+ingest (``tick_ingest.comp``).
 """
 
 from __future__ import annotations

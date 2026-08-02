@@ -40,6 +40,7 @@ from aiface.runtime.shaders import (
     WORKGROUP_SIZE,
     load_compute_passes,
     load_shader,
+    load_tick_ingest_shader,
 )
 
 FIXED_STEP: Final = 1.0 / TICK_RATE_HZ
@@ -115,6 +116,12 @@ class FieldRuntime(mglw.WindowConfig):
             name: self.ctx.compute_shader(source)
             for name, source in load_compute_passes().items()
         }
+        # TickFeed B1: full-face KEY/DELTA ingest (in-place on current world).
+        self._tick_ingest = self.ctx.compute_shader(load_tick_ingest_shader())
+        self._tick_dense_buf = self.ctx.buffer(reserve=GRID_WIDTH * GRID_HEIGHT * 4)
+        self._tick_sparse_idx_buf = self.ctx.buffer(reserve=GRID_WIDTH * GRID_HEIGHT * 4)
+        self._tick_sparse_vel_buf = self.ctx.buffer(reserve=GRID_WIDTH * GRID_HEIGHT * 4)
+        self._pending_tick_package = None  # set by AvatarFaceApp each sim tick
         self.render_program = self.ctx.program(
             vertex_shader=load_shader("fullscreen.vert"),
             fragment_shader=load_shader(self.fragment_shader),
@@ -141,6 +148,7 @@ class FieldRuntime(mglw.WindowConfig):
 
         for compute in self.compute_passes.values():
             compute["grid_size"].value = self.bounds
+        self._tick_ingest["grid_size"].value = self.bounds
         self.render_program["grid_size"].value = self.bounds
         # Portrait rectangle in UV. Subclasses shrink this to letterbox the
         # face; the default fills the window so plain runtimes are unaffected.
@@ -302,8 +310,105 @@ class FieldRuntime(mglw.WindowConfig):
         selected.sort(key=lambda command: 0 if command.is_ai else 1)
         return selected
 
+    def queue_tick_package(self, package: object | None) -> None:
+        """Stage a TickPackage (or None for miss-damp) for the next simulate."""
+        self._pending_tick_package = package
+
+    def _run_tick_ingest(self) -> None:
+        """Apply pending TickPackage into world ch0/1 (bridge B1/B2/B3)."""
+        from aiface.tickfeed.gpu_pack import (
+            dense_uints_from_package,
+            face_uniforms,
+            ingest_encoding,
+            sparse_buffers_from_package,
+        )
+        from aiface.tickfeed.package import TickPackage
+        from aiface.tickfeed.schema import (
+            DeltaEncoding,
+            PackageKind,
+            VELOCITY_MISS_DAMP,
+        )
+
+        package = self._pending_tick_package
+        self._pending_tick_package = None
+        compute = self._tick_ingest
+        self.world_buffers[self.current_buffer].bind_to_storage_buffer(0)
+
+        if package is None:
+            # Miss: damp face ROI if subclass set face uniforms via last package
+            # Use full-grid damp of velocity via encoding 4 with last face box
+            face = getattr(self, "_tick_face_box", None)
+            if face is None:
+                return
+            compute["face_offset"].value = (int(face.x), int(face.y))
+            compute["face_size"].value = (int(face.w), int(face.h))
+            compute["is_keyframe"].value = 0
+            compute["encoding"].value = 4
+            compute["sparse_count"].value = 0
+            compute["miss_damp"].value = float(VELOCITY_MISS_DAMP)
+            groups = (
+                math.ceil(int(face.w) / WORKGROUP_SIZE),
+                math.ceil(int(face.h) / WORKGROUP_SIZE),
+            )
+            compute.run(group_x=max(groups[0], 1), group_y=max(groups[1], 1), group_z=1)
+            self.ctx.memory_barrier()
+            return
+
+        if not isinstance(package, TickPackage):
+            return
+        self._tick_face_box = package.face
+        uniforms = face_uniforms(package.face)
+        compute["face_offset"].value = uniforms["face_offset"]
+        compute["face_size"].value = uniforms["face_size"]
+        compute["is_keyframe"].value = 1 if package.kind == PackageKind.KEYFRAME else 0
+        compute["miss_damp"].value = float(VELOCITY_MISS_DAMP)
+        enc = ingest_encoding(package)
+        compute["encoding"].value = int(enc)
+
+        if enc == 3:
+            return
+        if enc == 2:
+            idx, vel = sparse_buffers_from_package(package)
+            raw_idx = np.ascontiguousarray(idx, dtype="<u4").tobytes()
+            raw_vel = np.ascontiguousarray(vel, dtype="<u4").tobytes()
+            if len(raw_idx) > self._tick_sparse_idx_buf.size:
+                self._tick_sparse_idx_buf.orphan(len(raw_idx))
+            if len(raw_vel) > self._tick_sparse_vel_buf.size:
+                self._tick_sparse_vel_buf.orphan(len(raw_vel))
+            self._tick_sparse_idx_buf.write(raw_idx)
+            self._tick_sparse_vel_buf.write(raw_vel)
+            self._tick_sparse_idx_buf.bind_to_storage_buffer(2)
+            self._tick_sparse_vel_buf.bind_to_storage_buffer(3)
+            compute["sparse_count"].value = int(idx.size)
+            # 16x16 local size → 256 threads / group
+            groups_1d = math.ceil(max(int(idx.size), 1) / 256)
+            compute.run(group_x=max(groups_1d, 1), group_y=1, group_z=1)
+            self.ctx.memory_barrier()
+            return
+
+        # Dense KEY or DENSE_DELTA
+        if package.delta_encoding == DeltaEncoding.EMPTY:
+            return
+        packed = dense_uints_from_package(package)
+        raw = np.ascontiguousarray(packed, dtype="<u4").tobytes()
+        if len(raw) > self._tick_dense_buf.size:
+            self._tick_dense_buf.orphan(len(raw))
+        self._tick_dense_buf.write(raw)
+        self._tick_dense_buf.bind_to_storage_buffer(1)
+        compute["sparse_count"].value = 0
+        fw, fh = int(package.face.w), int(package.face.h)
+        groups = (
+            math.ceil(fw / WORKGROUP_SIZE),
+            math.ceil(fh / WORKGROUP_SIZE),
+        )
+        compute.run(group_x=max(groups[0], 1), group_y=max(groups[1], 1), group_z=1)
+        self.ctx.memory_barrier()
+
     def _simulate_tick(self) -> None:
         next_tick = self.tick + 1
+        # TickFeed first: write full-face velocity, then constraint damps/snaps.
+        self._run_tick_ingest()
+        # Legacy ±4 PaintCommands disabled for speech; keep queue for debug only.
         commands = self._commands_for_tick(next_tick)
         if commands:
             command_array = np.asarray(

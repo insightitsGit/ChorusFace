@@ -1,5 +1,7 @@
 """TickFeed — full-face KEY/DELTA packages @ 60 Hz (design: TickFeedDesign.md)."""
 
+from aiface.tickfeed.collect import prepare_face_timeline
+from aiface.tickfeed.driver import TickFeedDriver, face_box_from_profile
 from aiface.tickfeed.package import (
     FaceBox,
     TickLabels,
@@ -35,6 +37,7 @@ __all__ = [
     "FaceVelocityState",
     "LockstepPlayer",
     "PackageKind",
+    "TickFeedDriver",
     "TickLabels",
     "TickPackage",
     "TickRingBuffer",
@@ -44,4 +47,6 @@ __all__ = [
     "build_keyframe",
     "decode",
     "encode",
+    "face_box_from_profile",
+    "prepare_face_timeline",
 ]
