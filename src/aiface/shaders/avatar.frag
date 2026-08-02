@@ -85,6 +85,10 @@ uniform float avatar_field_gain;
 // AMIN step 12 — plate snap. 0 keeps linear cross-fades; 1 commits each drive
 // to the nearest captured mouth shape so mid-blends stop reading as blur.
 uniform float avatar_plate_sharpness;
+// Cosmetic grade on top of locked identity (scaffolding prefs; not new RGB identity).
+uniform vec3 avatar_skin_tint;
+uniform vec3 avatar_eye_tint;
+uniform float avatar_makeup_strength;
 
 in vec2 uv;
 layout(location = 0) out vec4 fragment_color;
@@ -644,6 +648,22 @@ void main() {
     vec3 background = vec3(0.01, 0.01, 0.012);
     color = mix(background, color, max(face_alpha, 0.15));
     color.y += (avatar_breath_phase - 0.5) * 0.0; // keep uniform live
+
+    // Cosmetic grade (prefs) — multiplies unlocked look; does not invent identity RGB.
+    color *= clamp(avatar_skin_tint, vec3(0.0), vec3(2.0));
+    float eye_r = max(avatar_eye_shape.x, avatar_eye_shape.y) * 1.35;
+    float d_l = length(grid_position - avatar_eye_centers.xy);
+    float d_r = length(grid_position - avatar_eye_centers.zw);
+    float eye_m = max(
+        1.0 - smoothstep(eye_r * 0.35, eye_r, d_l),
+        1.0 - smoothstep(eye_r * 0.35, eye_r, d_r)
+    );
+    color = mix(color, color * clamp(avatar_eye_tint, vec3(0.0), vec3(2.0)), eye_m * 0.85);
+    float makeup = clamp(avatar_makeup_strength, 0.0, 1.0);
+    if (makeup > 0.001) {
+        float lip = clamp(tissue_at(grid_position).b, 0.0, 1.0);
+        color = mix(color, color * vec3(1.08, 0.92, 0.94), lip * makeup * 0.55);
+    }
 
     float locked_edge = lock_boundary(cell_position) * avatar_lock_overlay;
     color = mix(color, vec3(1.0, 0.08, 0.72), locked_edge * 0.85);

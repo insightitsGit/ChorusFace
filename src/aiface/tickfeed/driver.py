@@ -144,12 +144,12 @@ class TickFeedDriver:
         word: str,
         speech_viseme: int | None = None,
     ) -> TickLabels:
-        # Side B look/speech teachers win when present
+        # Side B look/speech teachers are sole authority when present (not max-merge).
         if tick in self.look_by_tick:
             lk = self.look_by_tick[tick]
-            smile_amt = max(smile_amt, float(lk.get("smile") or 0.0))
-            open_amt = max(open_amt, float(lk.get("open") or 0.0))
-            surprise_amt = max(surprise_amt, float(lk.get("surprise") or 0.0))
+            smile_amt = float(lk.get("smile") or 0.0)
+            open_amt = float(lk.get("open") or 0.0)
+            surprise_amt = float(lk.get("surprise") or 0.0)
             if int(lk.get("emotion_id", -1)) >= 0:
                 emotion_map = {
                     int(EmotionId.HAPPY): "HAPPY",

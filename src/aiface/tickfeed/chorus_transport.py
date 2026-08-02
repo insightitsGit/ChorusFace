@@ -1,16 +1,19 @@
 """CHORUS Fabric transport for TickFeed compact codes / packages.
 
-Uses installed ``chorus-fabric`` when a control plane is reachable; otherwise
-falls back to a local binary spool (same float32 payload) so training/demo
-never hard-depends on a live pod.
+Starts against a live control plane + target when available; otherwise falls
+back to a local binary spool (same float32 payload).
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+# Match L4 CODE_DIM; control plane must be started with CHORUS_DIM=64.
+DEFAULT_DIM = 64
 
 
 class TickFeedTransport:
@@ -20,9 +23,10 @@ class TickFeedTransport:
         self,
         *,
         world: Path | str,
-        dim: int = 64,
+        dim: int = DEFAULT_DIM,
         use_chorus: bool = True,
-        control_plane: str = "localhost:50051",
+        control_plane: str | None = None,
+        target: str | None = None,
         spool_packages: bool = False,
         spool_codes: bool = True,
         spool_keep: int = 240,
@@ -37,27 +41,42 @@ class TickFeedTransport:
         self.spool.mkdir(parents=True, exist_ok=True)
         self._client: Any = None
         self.mode = "spool"
+        self.control_plane = control_plane or os.environ.get(
+            "AIFACE_CHORUS_CONTROL", "localhost:50051"
+        )
+        self.target = target or os.environ.get(
+            "AIFACE_CHORUS_TARGET", "localhost:50053"
+        )
         if use_chorus:
-            try:
-                from chorus_fabric import ChorusClient
+            self._try_chorus()
 
-                client = ChorusClient(
-                    pod_id="aiface-tickfeed",
-                    control_plane=control_plane,
-                    dim=self.dim,
+    def _try_chorus(self) -> None:
+        # Ensure client/server dim match TickFeed codes.
+        os.environ.setdefault("CHORUS_DIM", str(self.dim))
+        try:
+            from chorus_fabric import ChorusClient
+
+            client = ChorusClient(
+                pod_id="aiface-tickfeed",
+                control_plane=self.control_plane,
+                relay=None,
+                target=self.target,
+                dim=self.dim,
+            )
+            try:
+                client.handshake()
+                self._client = client
+                self.mode = "chorus"
+                print(
+                    f"TickFeed transport: CHORUS Fabric "
+                    f"cp={self.control_plane} target={self.target} dim={self.dim}"
                 )
-                # Handshake may fail if no server — keep spool.
-                try:
-                    client.handshake()
-                    self._client = client
-                    self.mode = "chorus"
-                    print(f"TickFeed transport: CHORUS Fabric @ {control_plane}")
-                except Exception as exc:  # noqa: BLE001
-                    print(
-                        f"TickFeed transport: CHORUS unavailable ({exc}); using spool"
-                    )
             except Exception as exc:  # noqa: BLE001
-                print(f"TickFeed transport: chorus-fabric import failed ({exc})")
+                print(
+                    f"TickFeed transport: CHORUS unavailable ({exc}); using spool"
+                )
+        except Exception as exc:  # noqa: BLE001
+            print(f"TickFeed transport: chorus-fabric import failed ({exc})")
 
     def _trim(self, pattern: str) -> None:
         files = sorted(self.spool.glob(pattern))
@@ -79,9 +98,18 @@ class TickFeedTransport:
 
                 signal = torch.from_numpy(vec.copy())
                 self._client.send_direct(signal)
+                # Also keep a short spool for QA replay
+                if self.spool_codes:
+                    path = self.spool / f"tick_{int(tick):08d}.f32"
+                    path.write_bytes(
+                        np.ascontiguousarray(vec, dtype="<f4").tobytes()
+                    )
+                    self._trim("tick_*.f32")
                 return None
             except Exception as exc:  # noqa: BLE001
                 print(f"TickFeed CHORUS send failed ({exc}); spooling")
+                self._client = None
+                self.mode = "spool"
         if not self.spool_codes:
             return None
         path = self.spool / f"tick_{int(tick):08d}.f32"
@@ -90,8 +118,6 @@ class TickFeedTransport:
         return path
 
     def push_package_bytes(self, tick: int, blob: bytes) -> Path | None:
-        """Optional local TickPackage spool (debug/QA; off by default at 60 Hz)."""
-        # Always keep HELLO negotiate artifacts (tick < 0)
         if int(tick) < 0:
             path = self.spool / f"hello_{abs(int(tick)):02d}.tpk"
             path.write_bytes(blob)
@@ -104,7 +130,6 @@ class TickFeedTransport:
         return path
 
     def pull_latest_code(self) -> np.ndarray | None:
-        """Receive-side: latest spooled c_t (one-way producer write)."""
         files = sorted(self.spool.glob("tick_*.f32"))
         if not files:
             return None
@@ -115,4 +140,4 @@ class TickFeedTransport:
         return vec[: self.dim].astype(np.float32)
 
 
-__all__ = ["TickFeedTransport"]
+__all__ = ["DEFAULT_DIM", "TickFeedTransport"]

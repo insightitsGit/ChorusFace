@@ -25,9 +25,9 @@ from numpy.typing import NDArray
 from aiface.tickfeed.package import FaceBox
 from aiface.tickfeed.qa import qa_beat_motion
 from aiface.tickfeed.schema import CHANNEL_MASK_VELOCITY, TICK_RATE_HZ
+from aiface.tickfeed.force_align import force_align_speech
 from aiface.tickfeed.speech_align import (
     build_look_drive,
-    build_speech_align,
     write_look_drive,
     write_speech_align,
 )
@@ -90,7 +90,12 @@ def write_face_cell_timeline(
             conf=conf_a[start:end],
         )
 
-    speech = build_speech_align(root, n_ticks=n_ticks)
+    video_path = root / "calibration_take.mp4"
+    speech = force_align_speech(
+        root,
+        video_path if video_path.is_file() else None,
+        n_ticks=n_ticks,
+    )
     look = build_look_drive(
         root, n_ticks=n_ticks, open_curve=open_curve, smile_curve=smile_curve
     )

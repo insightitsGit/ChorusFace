@@ -521,6 +521,13 @@ class AvatarFaceApp(FieldRuntime):
         self._mouth_object_cells = 0
         self._cell_clusters: CellClusterIndex | None = None
         self._tickfeed: TickFeedDriver | None = None
+        self._tickfeed_look_authority = False
+        try:
+            from aiface.tickfeed.cosmetics import load_cosmetic_prefs
+
+            self._cosmetics = load_cosmetic_prefs(self._avatar_bundle.root)
+        except Exception:  # noqa: BLE001
+            self._cosmetics = None
         self._frame_layers = FrameLayerState()
         self._pending_cell_commands: list = []
         self._gpu_log = bool(getattr(self.argv, "gpu_log", False))
@@ -765,9 +772,13 @@ class AvatarFaceApp(FieldRuntime):
             self._tickfeed = TickFeedDriver.try_load_timeline(
                 self.world_path, face, mouth_uv
             )
+            self._tickfeed_look_authority = bool(
+                self._tickfeed is not None and self._tickfeed.enabled
+            )
             print(
                 f"TickFeed: full-face ROI {face.w}x{face.h} @ ({face.x},{face.y}) "
-                f"— KEY/DELTA ingest (legacy ±4 cell plan disabled)"
+                f"— KEY/DELTA ingest (legacy ±4 cell plan disabled); "
+                f"LOOK authority={'tickfeed-labels' if self._tickfeed_look_authority else 'mouth-timeline'}"
             )
         except Exception as exc:  # noqa: BLE001 — adopt must not kill launch
             print(f"TickFeed: unavailable ({exc})")
@@ -1174,7 +1185,7 @@ class AvatarFaceApp(FieldRuntime):
         )
 
     def _sync_plate_blend_from_phoneme(self) -> None:
-        """Upload atlas pair + open amount from the viseme-clock LayerCommand."""
+        """Upload atlas pair + open amount from TickFeed labels or LayerCommand."""
         atlas = self._plate_atlas
         if atlas is None or not self._atlas_textures:
             self._plate_blend = (0.0, 0.0)
@@ -1184,6 +1195,28 @@ class AvatarFaceApp(FieldRuntime):
             self._held_speech_viseme = "REST"
             return
         from aiface.plates import HARD_SNAP_THRESHOLD
+
+        # Design B4: when TickFeed is live, package labels own LOOK amounts.
+        if (
+            self._tickfeed_look_authority
+            and self._tickfeed is not None
+            and self._tickfeed.last_labels is not None
+        ):
+            labels = self._tickfeed.last_labels
+            phoneme = str(self._held_speech_viseme or "REST")
+            open_amt = float(labels.open_amt)
+            hard = float(self._display_recipe.plate_sharpness) >= HARD_SNAP_THRESHOLD
+            if hard:
+                ia, ib, mix = atlas.pair_for_viseme(phoneme, hard_snap=True)
+            else:
+                ia, ib, mix = atlas.pair_for_openness(open_amt, hard_snap=False)
+            ia = max(0, min(ia, len(self._atlas_textures) - 1))
+            ib = max(0, min(ib, len(self._atlas_textures) - 1))
+            self._plate_pair = (ia, ib)
+            self._plate_openness_current = open_amt
+            self._plate_blend = (float(mix), open_amt)
+            self._plate_blend_current = (float(mix), open_amt)
+            return
 
         cmd = self._layer_command
         phoneme = cmd.atlas_viseme
@@ -1273,16 +1306,30 @@ class AvatarFaceApp(FieldRuntime):
                 source=f"{controls.source}+{behavior.source}",
             )
         self._layer_command = cmd
-        self._ml_openness = float(cmd.plate_openness)
-        self._ml_jaw = float(cmd.jaw_target)
-        self._ml_width = float(controls.width_n)
-        self._ml_plate_gate = float(controls.plate_gate)
-        self._ml_smile = float(cmd.smile_amount)
-        self._plate_openness_current = float(cmd.plate_openness)
-        self._held_speech_viseme = cmd.atlas_viseme
-        self._open_close_source = cmd.source
-        # Jaw spring may lag visually; plate amounts already snapped above.
-        self._biomech.jaw.set_speech_target(float(cmd.jaw_target))
+        if self._tickfeed_look_authority and self._tickfeed is not None:
+            # TickFeed labels already set LOOK; keep jaw assist only.
+            labels = self._tickfeed.last_labels
+            if labels is not None:
+                self._ml_openness = float(labels.open_amt)
+                self._ml_smile = float(labels.smile_amt)
+                self._plate_openness_current = float(labels.open_amt)
+                self._expr_plate_blend = float(labels.surprise_amt)
+                self._open_close_source = "tickfeed-labels"
+                jaw_t = max(float(cmd.jaw_target), float(labels.open_amt) * 0.85)
+                self._ml_jaw = jaw_t
+                self._biomech.jaw.set_speech_target(jaw_t)
+            self._ml_width = float(controls.width_n)
+            self._ml_plate_gate = float(controls.plate_gate)
+        else:
+            self._ml_openness = float(cmd.plate_openness)
+            self._ml_jaw = float(cmd.jaw_target)
+            self._ml_width = float(controls.width_n)
+            self._ml_plate_gate = float(controls.plate_gate)
+            self._ml_smile = float(cmd.smile_amount)
+            self._plate_openness_current = float(cmd.plate_openness)
+            self._held_speech_viseme = cmd.atlas_viseme
+            self._open_close_source = cmd.source
+            self._biomech.jaw.set_speech_target(float(cmd.jaw_target))
         # FIELD velocity is TickFeed KEY/DELTA (not MouthCellPlan ±4).
         self._refresh_frame_layers()
 
@@ -1672,6 +1719,27 @@ class AvatarFaceApp(FieldRuntime):
         program["avatar_plate_sharpness"].value = float(
             self._display_recipe.plate_sharpness
         )
+        # Cosmetic prefs (scaffolding) — grade only, never replace identity photo.
+        if self._cosmetics is not None:
+            skin = self._cosmetics.skin_tint_rgb
+            eye = self._cosmetics.eye_tint_rgb
+            program["avatar_skin_tint"].value = (
+                float(skin[0]),
+                float(skin[1]),
+                float(skin[2]),
+            )
+            program["avatar_eye_tint"].value = (
+                float(eye[0]),
+                float(eye[1]),
+                float(eye[2]),
+            )
+            program["avatar_makeup_strength"].value = float(
+                self._cosmetics.makeup_strength
+            )
+        else:
+            program["avatar_skin_tint"].value = (1.0, 1.0, 1.0)
+            program["avatar_eye_tint"].value = (1.0, 1.0, 1.0)
+            program["avatar_makeup_strength"].value = 0.0
         program["avatar_lock_overlay"].value = 1.0 if self._show_locks else 0.0
         program["avatar_breath_phase"].value = float(state.breath_phase)
         program["avatar_debug_view"].value = int(self._debug_view)
@@ -2649,7 +2717,7 @@ class AvatarFaceApp(FieldRuntime):
         self._cpu_frame_ms = (time.perf_counter() - cpu_started) * 1000.0
 
     def _apply_tickfeed_labels_to_look(self, pkg) -> None:
-        """B4 — LOOK plates driven by TickPackage label amounts (resident plates)."""
+        """B4 — LOOK plates owned by TickPackage labels (sole authority)."""
         labels = getattr(pkg, "labels", None) if pkg is not None else None
         if labels is None and self._tickfeed is not None:
             labels = self._tickfeed.last_labels
@@ -2658,20 +2726,17 @@ class AvatarFaceApp(FieldRuntime):
         smile = float(labels.smile_amt)
         open_amt = float(labels.open_amt)
         surprise = float(labels.surprise_amt)
-        # Package labels are authority for LOOK amounts when present
-        self._ml_smile = max(float(self._ml_smile), smile)
-        self._ml_openness = max(float(self._ml_openness), open_amt)
-        self._plate_openness_current = max(
-            float(self._plate_openness_current), open_amt
-        )
-        self._expr_plate_blend = max(float(self._expr_plate_blend), surprise)
+        self._tickfeed_look_authority = True
+        self._ml_smile = smile
+        self._ml_openness = open_amt
+        self._plate_openness_current = open_amt
+        self._expr_plate_blend = surprise
         if getattr(labels, "viseme_id", None) is not None:
             from aiface.tickfeed.schema import VISEME_TABLE
 
             vid = int(labels.viseme_id)
             if 0 <= vid < len(VISEME_TABLE):
                 self._held_speech_viseme = VISEME_TABLE[vid]
-        # Refresh plate pair from label-driven openness
         if self._plate_atlas is not None and self._atlas_textures:
             from aiface.plates import HARD_SNAP_THRESHOLD
 
@@ -2682,13 +2747,13 @@ class AvatarFaceApp(FieldRuntime):
                 )
             else:
                 ia, ib, mix = self._plate_atlas.pair_for_openness(
-                    float(self._plate_openness_current), hard_snap=False
+                    open_amt, hard_snap=False
                 )
             ia = max(0, min(ia, len(self._atlas_textures) - 1))
             ib = max(0, min(ib, len(self._atlas_textures) - 1))
             self._plate_pair = (ia, ib)
-            self._plate_blend = (float(mix), float(open_amt))
-            self._plate_blend_current = (float(mix), float(open_amt))
+            self._plate_blend = (float(mix), open_amt)
+            self._plate_blend_current = (float(mix), open_amt)
 
     def _simulate_tick(self) -> None:
         """Push → 3-tick ring → pop for master → GPU ingest (B1–B3)."""
