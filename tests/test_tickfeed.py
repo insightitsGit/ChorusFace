@@ -4,18 +4,19 @@ from __future__ import annotations
 
 import numpy as np
 
-from aiface.tickfeed import (
-    BeatId,
+from aiface.tickfeed.package import (
     FaceBox,
-    FaceVelocityState,
-    LockstepPlayer,
     TickLabels,
     apply_to_state,
     build_delta,
+    build_hello,
     build_keyframe,
     decode,
     encode,
+    negotiate_hello,
 )
+from aiface.tickfeed.ring import FaceVelocityState, LockstepPlayer
+from aiface.tickfeed.schema import BeatId
 from aiface.tickfeed.gpu_pack import (
     dense_uints_from_package,
     ingest_encoding,
@@ -102,6 +103,36 @@ def test_lockstep_ring_damp_on_miss() -> None:
     # tick 1 missing → damp
     assert player.step() == "damp"
     assert float(player.state.velocity[0, 0, 0]) < 1.0
+
+
+def test_hello_negotiate_roundtrip() -> None:
+    face = _face()
+    hello = build_hello(face, world_id="avatar")
+    blob = encode(hello)
+    back = decode(blob)
+    assert back.kind == PackageKind.HELLO
+    assert back.hello is not None
+    assert back.hello.world_id == "avatar"
+    assert back.hello.is_ack is False
+    ack = negotiate_hello(back)
+    assert ack.hello is not None and ack.hello.ok is True
+    assert ack.hello.apply_mode == "velocity_write"
+    ack2 = decode(encode(ack))
+    assert ack2.hello is not None and ack2.hello.is_ack is True
+
+
+def test_sparse_delta_with_conf() -> None:
+    face = _face()
+    prev = np.zeros((face.h, face.w, 2), dtype=np.float32)
+    curr = prev.copy()
+    curr[0, 0] = (0.1, 0.0)
+    conf = np.full(face.n_cells, 200, dtype=np.uint8)
+    conf[0] = 255
+    pkg = build_delta(1, face, prev, curr, conf=conf, value_dtype=ValueDtype.F16)
+    assert pkg.flags & 2  # FLAG_HAS_CONF
+    back = decode(encode(pkg))
+    assert back.conf is not None
+    assert int(back.conf[0]) == 255
 
 
 def test_gpu_pack_dense_and_sparse() -> None:

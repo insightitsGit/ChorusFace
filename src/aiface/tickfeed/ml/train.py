@@ -102,11 +102,24 @@ def _viseme_from_open(open_amt: float, beat_id: str) -> int:
 
 
 def build_training_tables(world: Path | str) -> dict[str, np.ndarray]:
-    """Build X/y tables for all layers from face_cell_timeline + calibration."""
+    """Build X/y tables from FaceCellTimeline + speech_align + look_drive."""
+    import json
+
     world = Path(world)
     ticks, vel, _box = _load_timeline(world)
     script = load_calibration_script(world)
-    # Recover open/smile proxies from patch stats for labeling
+    tdir = world if world.is_dir() else world.parent
+    speech_path = tdir / "face_cell_timeline" / "speech_align.json"
+    look_path = tdir / "face_cell_timeline" / "look_drive.json"
+    speech_by_tick: dict[int, dict] = {}
+    look_by_tick: dict[int, dict] = {}
+    if speech_path.is_file():
+        for row in json.loads(speech_path.read_text(encoding="utf-8")).get("ticks") or []:
+            speech_by_tick[int(row["tick"])] = row
+    if look_path.is_file():
+        for row in json.loads(look_path.read_text(encoding="utf-8")).get("ticks") or []:
+            look_by_tick[int(row["tick"])] = row
+
     n = len(ticks)
     x_audio = np.zeros((n, AUDIO_FEAT), dtype=np.float64)
     y_viseme = np.zeros((n,), dtype=np.int64)
@@ -119,13 +132,30 @@ def build_training_tables(world: Path | str) -> dict[str, np.ndarray]:
         stats = _patch_stats(vel[i])
         open_amt = float(np.clip(stats[1] * 3.0, 0.0, 1.0))
         smile_amt = float(np.clip(stats[0] * 3.0, 0.0, 1.0))
-        if bid == "SMILE":
-            smile_amt = max(smile_amt, 0.75)
-        if bid == "OPEN":
-            open_amt = max(open_amt, 0.75)
+        if tick in look_by_tick:
+            lk = look_by_tick[int(tick)]
+            open_amt = max(open_amt, float(lk.get("open") or 0.0))
+            smile_amt = max(smile_amt, float(lk.get("smile") or 0.0))
+            y_look[i] = np.asarray(
+                [
+                    float(lk.get("smile") or 0.0),
+                    float(lk.get("open") or 0.0),
+                    float(lk.get("surprise") or 0.0),
+                    float(lk.get("brow") or 0.0),
+                ],
+                dtype=np.float64,
+            )
+        else:
+            if bid == "SMILE":
+                smile_amt = max(smile_amt, 0.75)
+            if bid == "OPEN":
+                open_amt = max(open_amt, 0.75)
+            y_look[i] = _look_from_beat(bid, open_amt, smile_amt)
         x_audio[i] = _audio_proxy(open_amt, smile_amt, t)
-        y_viseme[i] = _viseme_from_open(open_amt, bid)
-        y_look[i] = _look_from_beat(bid, open_amt, smile_amt)
+        if tick in speech_by_tick:
+            y_viseme[i] = int(speech_by_tick[int(tick)].get("viseme_id") or 0)
+        else:
+            y_viseme[i] = _viseme_from_open(open_amt, bid)
         patches.append(vel[i].reshape(-1))
     y_patch = np.stack(patches, axis=0).astype(np.float32)
     return {

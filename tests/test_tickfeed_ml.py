@@ -52,6 +52,15 @@ def test_ml_train_load_and_driver(tmp_path: Path) -> None:
         tick_rate=np.asarray([60.0]),
     )
     write_calibration_script(tmp_path)
+    from aiface.tickfeed.timeline_io import write_face_cell_timeline
+
+    write_face_cell_timeline(
+        tmp_path,
+        face=face,
+        velocity=vel,
+        conf=conf,
+        video_name="test",
+    )
     meta = fit_all_layers(tmp_path)
     assert "l3" in meta["layers"]
     stack = TickFeedMLStack.try_load(tmp_path)

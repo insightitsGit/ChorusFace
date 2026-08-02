@@ -102,6 +102,89 @@ class FaceBox:
         return int(self.x), int(self.y), int(self.w), int(self.h)
 
 
+# HELLO body: face(8) + mask(4) + dtype(1) + caps(1) + tick_rate(2) + labels(1)
+# + is_ack(1) + ok(1) + pad(1) + max_payload(4) + apply_mode(16) + world_id(32) = 72
+_HELLO_STRUCT = struct.Struct("<4H I BBH BBB x I 16s 32s")
+HELLO_BYTES = _HELLO_STRUCT.size
+# Caps bits (handshake §5)
+CAP_DENSE = 1 << 1
+CAP_SPARSE = 1 << 2
+CAP_EMPTY = 1 << 3
+CAP_ALL = CAP_DENSE | CAP_SPARSE | CAP_EMPTY
+
+
+@dataclass(slots=True)
+class HelloPayload:
+    """HELLO / HELLO_ACK negotiate body (TickPackageHandshake §5)."""
+
+    face: FaceBox
+    channel_mask: int = CHANNEL_MASK_VELOCITY
+    value_dtype: ValueDtype = ValueDtype.F16
+    delta_encoding_caps: int = CAP_ALL
+    tick_rate: int = TICK_RATE_HZ
+    labels: int = 1
+    world_id: str = ""
+    is_ack: bool = False
+    ok: bool = True
+    max_payload: int = 512 * 1024
+    apply_mode: str = "velocity_write"
+
+    def pack(self) -> bytes:
+        wid = self.world_id.encode("utf-8")[:32]
+        wid = wid + b"\x00" * (32 - len(wid))
+        mode = self.apply_mode.encode("utf-8")[:16]
+        mode = mode + b"\x00" * (16 - len(mode))
+        return _HELLO_STRUCT.pack(
+            int(self.face.x),
+            int(self.face.y),
+            int(self.face.w),
+            int(self.face.h),
+            int(self.channel_mask) & 0xFFFFFFFF,
+            int(self.value_dtype) & 0xFF,
+            int(self.delta_encoding_caps) & 0xFF,
+            int(self.tick_rate) & 0xFFFF,
+            int(self.labels) & 0xFF,
+            1 if self.is_ack else 0,
+            1 if self.ok else 0,
+            int(self.max_payload) & 0xFFFFFFFF,
+            mode,
+            wid,
+        )
+
+    @classmethod
+    def unpack(cls, data: bytes) -> HelloPayload:
+        (
+            fx,
+            fy,
+            fw,
+            fh,
+            mask,
+            dtype,
+            caps,
+            rate,
+            labels,
+            is_ack,
+            ok,
+            max_payload,
+            mode,
+            wid,
+        ) = _HELLO_STRUCT.unpack(data[:HELLO_BYTES])
+        return cls(
+            face=FaceBox(fx, fy, fw, fh),
+            channel_mask=int(mask),
+            value_dtype=ValueDtype(dtype),
+            delta_encoding_caps=int(caps),
+            tick_rate=int(rate),
+            labels=int(labels),
+            world_id=wid.split(b"\x00", 1)[0].decode("utf-8", errors="replace"),
+            is_ack=bool(is_ack),
+            ok=bool(ok),
+            max_payload=int(max_payload),
+            apply_mode=mode.split(b"\x00", 1)[0].decode("utf-8", errors="replace")
+            or "velocity_write",
+        )
+
+
 @dataclass(slots=True)
 class TickPackage:
     """One master-clock package for full-face velocity."""
@@ -116,6 +199,7 @@ class TickPackage:
     sparse_delta: NDArray[np.floating] | None = None
     conf: NDArray[np.uint8] | None = None
     labels: TickLabels | None = None
+    hello: HelloPayload | None = None
     value_dtype: ValueDtype = ValueDtype.F16
     delta_encoding: DeltaEncoding = DeltaEncoding.NONE
     channel_mask: int = CHANNEL_MASK_VELOCITY
@@ -194,6 +278,93 @@ def build_keyframe(
     )
 
 
+def build_hello(
+    face: FaceBox,
+    *,
+    world_id: str = "",
+    world_hash: int = 0,
+    value_dtype: ValueDtype = ValueDtype.F16,
+    tick: int = 0,
+) -> TickPackage:
+    """Producer HELLO negotiate (kind=3)."""
+    hello = HelloPayload(
+        face=face,
+        channel_mask=CHANNEL_MASK_VELOCITY,
+        value_dtype=value_dtype,
+        delta_encoding_caps=CAP_ALL,
+        tick_rate=TICK_RATE_HZ,
+        labels=1,
+        world_id=world_id,
+        is_ack=False,
+        ok=True,
+        apply_mode="velocity_write",
+    )
+    return TickPackage(
+        kind=PackageKind.HELLO,
+        tick=int(tick),
+        face=face,
+        hello=hello,
+        value_dtype=value_dtype,
+        channel_mask=CHANNEL_MASK_VELOCITY,
+        world_hash=int(world_hash) & 0xFFFFFFFFFFFFFFFF,
+        time_seconds=0.0,
+    )
+
+
+def build_hello_ack(
+    hello: HelloPayload,
+    *,
+    ok: bool = True,
+    max_payload: int = 512 * 1024,
+    apply_mode: str = "velocity_write",
+    world_hash: int = 0,
+    tick: int = 0,
+) -> TickPackage:
+    """Master HELLO_ACK (kind=3, is_ack=1)."""
+    ack = HelloPayload(
+        face=hello.face,
+        channel_mask=hello.channel_mask,
+        value_dtype=hello.value_dtype,
+        delta_encoding_caps=hello.delta_encoding_caps & CAP_ALL,
+        tick_rate=hello.tick_rate,
+        labels=hello.labels,
+        world_id=hello.world_id,
+        is_ack=True,
+        ok=bool(ok),
+        max_payload=int(max_payload),
+        apply_mode=apply_mode,
+    )
+    return TickPackage(
+        kind=PackageKind.HELLO,
+        tick=int(tick),
+        face=hello.face,
+        hello=ack,
+        value_dtype=hello.value_dtype,
+        channel_mask=hello.channel_mask,
+        world_hash=int(world_hash) & 0xFFFFFFFFFFFFFFFF,
+        time_seconds=0.0,
+    )
+
+
+def negotiate_hello(hello_pkg: TickPackage) -> TickPackage:
+    """Master-side negotiate: accept phase-1 velocity + sparse/dense/empty."""
+    if hello_pkg.kind != PackageKind.HELLO or hello_pkg.hello is None:
+        raise ValueError("negotiate_hello requires HELLO package")
+    req = hello_pkg.hello
+    ok = (
+        req.tick_rate == TICK_RATE_HZ
+        and (req.channel_mask & CHANNEL_MASK_VELOCITY) == CHANNEL_MASK_VELOCITY
+        and (req.delta_encoding_caps & CAP_SPARSE) != 0
+    )
+    return build_hello_ack(
+        req,
+        ok=ok,
+        apply_mode="velocity_write",
+        world_hash=hello_pkg.world_hash,
+        tick=hello_pkg.tick,
+    )
+
+
 def build_delta(
     tick: int,
     face: FaceBox,
@@ -201,6 +372,7 @@ def build_delta(
     curr: NDArray[np.floating],
     *,
     labels: TickLabels | None = None,
+    conf: NDArray[np.uint8] | None = None,
     value_dtype: ValueDtype = ValueDtype.F16,
     world_hash: int = 0,
     eps: float = DELTA_EPS,
@@ -213,6 +385,10 @@ def build_delta(
     mag = np.max(np.abs(flat), axis=1)
     changed = np.flatnonzero(mag >= float(eps)).astype(np.uint16)
     flags = FLAG_HAS_LABELS if labels is not None else 0
+    conf_u8 = None
+    if conf is not None:
+        flags |= FLAG_HAS_CONF
+        conf_u8 = np.asarray(conf, dtype=np.uint8).reshape(face.n_cells)
     frac = float(changed.size) / float(max(face.n_cells, 1))
 
     if changed.size == 0:
@@ -221,6 +397,7 @@ def build_delta(
             tick=int(tick),
             face=face,
             labels=labels,
+            conf=conf_u8,
             value_dtype=value_dtype,
             delta_encoding=DeltaEncoding.EMPTY,
             flags=flags,
@@ -234,6 +411,7 @@ def build_delta(
             face=face,
             values=d,
             labels=labels,
+            conf=conf_u8,
             value_dtype=value_dtype,
             delta_encoding=DeltaEncoding.DENSE_DELTA,
             flags=flags,
@@ -247,6 +425,7 @@ def build_delta(
         sparse_idx=changed,
         sparse_delta=flat[changed].astype(np.float32),
         labels=labels,
+        conf=conf_u8,
         value_dtype=value_dtype,
         delta_encoding=DeltaEncoding.SPARSE_DELTA,
         flags=flags,
@@ -259,50 +438,64 @@ def encode(package: TickPackage) -> bytes:
     face = package.face
     body = bytearray()
     enc = package.delta_encoding
-
-    if package.kind == PackageKind.KEYFRAME:
-        if package.values is None:
-            raise ValueError("KEYFRAME requires values")
-        body += _pack_values(_as_hw2(package.values, face), package.value_dtype)
-        if package.flags & FLAG_HAS_CONF:
-            if package.conf is None:
-                raise ValueError("HAS_CONF set but conf missing")
-            body += np.asarray(package.conf, dtype=np.uint8).reshape(-1).tobytes()
-    elif package.kind == PackageKind.DELTA:
-        if enc == DeltaEncoding.EMPTY:
-            pass
-        elif enc == DeltaEncoding.DENSE_DELTA:
-            if package.values is None:
-                raise ValueError("DENSE_DELTA requires values")
-            body += _pack_values(_as_hw2(package.values, face), package.value_dtype)
-        elif enc == DeltaEncoding.SPARSE_DELTA:
-            if package.sparse_idx is None or package.sparse_delta is None:
-                raise ValueError("SPARSE_DELTA requires idx/delta")
-            idx = np.asarray(package.sparse_idx, dtype="<u2")
-            count = np.uint32(idx.size)
-            body += struct.pack("<I", int(count))
-            body += idx.tobytes()
-            deltas = np.asarray(package.sparse_delta, dtype=np.float32).reshape(
-                -1, PHASE1_CHANNELS
-            )
-            if package.value_dtype == ValueDtype.F16:
-                body += deltas.astype("<f2").tobytes()
-            else:
-                body += deltas.astype("<f4").tobytes()
-        else:
-            raise ValueError(f"bad delta_encoding {enc}")
-    else:
-        raise ValueError(f"encode does not support kind {package.kind}")
-
-    labels_blob = b""
     flags = package.flags
-    if package.labels is not None:
-        flags |= FLAG_HAS_LABELS
-        labels_blob = package.labels.pack()
-    elif flags & FLAG_HAS_LABELS:
-        labels_blob = TickLabels().pack()
 
-    payload = labels_blob + bytes(body)
+    if package.kind == PackageKind.HELLO:
+        if package.hello is None:
+            raise ValueError("HELLO requires hello payload")
+        body += package.hello.pack()
+        labels_blob = b""
+        payload = labels_blob + bytes(body)
+    else:
+        if package.kind == PackageKind.KEYFRAME:
+            if package.values is None:
+                raise ValueError("KEYFRAME requires values")
+            body += _pack_values(_as_hw2(package.values, face), package.value_dtype)
+            if flags & FLAG_HAS_CONF:
+                if package.conf is None:
+                    raise ValueError("HAS_CONF set but conf missing")
+                body += np.asarray(package.conf, dtype=np.uint8).reshape(-1).tobytes()
+        elif package.kind == PackageKind.DELTA:
+            if enc == DeltaEncoding.EMPTY:
+                pass
+            elif enc == DeltaEncoding.DENSE_DELTA:
+                if package.values is None:
+                    raise ValueError("DENSE_DELTA requires values")
+                body += _pack_values(_as_hw2(package.values, face), package.value_dtype)
+                if flags & FLAG_HAS_CONF and package.conf is not None:
+                    body += np.asarray(package.conf, dtype=np.uint8).reshape(-1).tobytes()
+            elif enc == DeltaEncoding.SPARSE_DELTA:
+                if package.sparse_idx is None or package.sparse_delta is None:
+                    raise ValueError("SPARSE_DELTA requires idx/delta")
+                idx = np.asarray(package.sparse_idx, dtype="<u2")
+                count = int(idx.size)
+                body += struct.pack("<I", count)
+                body += idx.tobytes()
+                deltas = np.asarray(package.sparse_delta, dtype=np.float32).reshape(
+                    -1, PHASE1_CHANNELS
+                )
+                if package.value_dtype == ValueDtype.F16:
+                    body += deltas.astype("<f2").tobytes()
+                else:
+                    body += deltas.astype("<f4").tobytes()
+                if flags & FLAG_HAS_CONF:
+                    if package.conf is None:
+                        raise ValueError("HAS_CONF set but conf missing")
+                    conf_full = np.asarray(package.conf, dtype=np.uint8).reshape(-1)
+                    body += conf_full[idx.astype(np.int64)].tobytes()
+            else:
+                raise ValueError(f"bad delta_encoding {enc}")
+        else:
+            raise ValueError(f"encode does not support kind {package.kind}")
+
+        labels_blob = b""
+        if package.labels is not None:
+            flags |= FLAG_HAS_LABELS
+            labels_blob = package.labels.pack()
+        elif flags & FLAG_HAS_LABELS:
+            labels_blob = TickLabels().pack()
+
+        payload = labels_blob + bytes(body)
     # crc over header fields that precede crc + payload — fill crc after
     header_wo_crc = _HEADER_STRUCT.pack(
         MAGIC,
@@ -324,7 +517,7 @@ def encode(package: TickPackage) -> bytes:
         int(package.world_hash) & 0xFFFFFFFFFFFFFFFF,
         b"\x00" * 16,
     )
-    # Recompute with real crc of (header with crc=0)[0:36] is awkward; crc payload only
+    del header_wo_crc
     crc = zlib.crc32(payload) & 0xFFFFFFFF
     header = _HEADER_STRUCT.pack(
         MAGIC,
@@ -396,9 +589,13 @@ def decode(blob: bytes) -> TickPackage:
     sparse_idx = None
     sparse_delta = None
     conf = None
+    hello = None
     body = payload[offset:]
 
-    if kind_e == PackageKind.KEYFRAME:
+    if kind_e == PackageKind.HELLO:
+        hello = HelloPayload.unpack(body)
+        face = hello.face
+    elif kind_e == PackageKind.KEYFRAME:
         n = face.n_cells
         elem = 4 if dtype_e == ValueDtype.F32 else 2
         need = n * PHASE1_CHANNELS * elem
@@ -411,8 +608,14 @@ def decode(blob: bytes) -> TickPackage:
         if enc_e == DeltaEncoding.EMPTY:
             pass
         elif enc_e == DeltaEncoding.DENSE_DELTA:
-            flat = _unpack_values(body, face.n_cells, dtype_e)
+            n = face.n_cells
+            elem = 4 if dtype_e == ValueDtype.F32 else 2
+            need = n * PHASE1_CHANNELS * elem
+            flat = _unpack_values(body, n, dtype_e)
             values = flat.reshape(face.h, face.w, PHASE1_CHANNELS)
+            rest = body[need:]
+            if flags & FLAG_HAS_CONF:
+                conf = np.frombuffer(rest[:n], dtype=np.uint8).copy()
         elif enc_e == DeltaEncoding.SPARSE_DELTA:
             (count,) = struct.unpack_from("<I", body, 0)
             idx_bytes = 4
@@ -435,6 +638,13 @@ def decode(blob: bytes) -> TickPackage:
                     .reshape(count, PHASE1_CHANNELS)
                     .copy()
                 )
+            conf_off = val_off + count * PHASE1_CHANNELS * elem
+            if flags & FLAG_HAS_CONF:
+                sparse_conf = np.frombuffer(
+                    body[conf_off : conf_off + count], dtype=np.uint8
+                ).copy()
+                conf = np.zeros(face.n_cells, dtype=np.uint8)
+                conf[sparse_idx.astype(np.int64)] = sparse_conf
         else:
             raise ValueError(f"bad delta encoding {enc_e}")
     else:
@@ -449,6 +659,7 @@ def decode(blob: bytes) -> TickPackage:
         sparse_delta=sparse_delta,
         conf=conf,
         labels=labels,
+        hello=hello,
         value_dtype=dtype_e,
         delta_encoding=enc_e,
         channel_mask=int(channel_mask),
@@ -490,12 +701,21 @@ def apply_to_state(
 
 
 __all__ = [
+    "CAP_ALL",
+    "CAP_DENSE",
+    "CAP_EMPTY",
+    "CAP_SPARSE",
     "FaceBox",
+    "HELLO_BYTES",
+    "HelloPayload",
     "TickLabels",
     "TickPackage",
     "apply_to_state",
     "build_delta",
+    "build_hello",
+    "build_hello_ack",
     "build_keyframe",
     "decode",
     "encode",
+    "negotiate_hello",
 ]

@@ -1,6 +1,6 @@
 # TickPackage handshake — full-face ROI
 
-**Status:** design contract (not implemented).  
+**Status:** implemented — `aiface.tickfeed.package` (HELLO/KEY/DELTA, f16, sparse conf).  
 **Master:** [`TickFeedDesign.md`](TickFeedDesign.md).  
 **Pair with:** [`CellFeedBandwidth.md`](CellFeedBandwidth.md) ·
 [`SideB_VideoCellCollection.md`](SideB_VideoCellCollection.md) ·

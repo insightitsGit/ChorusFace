@@ -2545,15 +2545,30 @@ class AvatarFaceApp(FieldRuntime):
             face = self._tickfeed.face
             ml_loaded = self._tickfeed.ml is not None
             transport = self._tickfeed.transport
+            labels = self._tickfeed.last_labels
             tickfeed = {
                 "enabled": bool(self._tickfeed.enabled),
                 "face_box": [face.x, face.y, face.w, face.h],
                 "timeline_ticks": len(self._tickfeed.timeline),
+                "speech_ticks": len(self._tickfeed.speech_by_tick),
+                "look_ticks": len(self._tickfeed.look_by_tick),
                 "ml_loaded": ml_loaded,
+                "hello_ok": bool(self._tickfeed.hello_ack_ok),
                 "transport": (
                     transport.mode if transport is not None else "none"
                 ),
                 "wire": "KEY/DELTA full-face",
+                "labels": (
+                    {
+                        "smile": float(labels.smile_amt),
+                        "open": float(labels.open_amt),
+                        "surprise": float(labels.surprise_amt),
+                        "viseme_id": int(labels.viseme_id),
+                        "word": labels.word,
+                    }
+                    if labels is not None
+                    else None
+                ),
                 "cosmetics": (
                     self._tickfeed.cosmetics.as_dict()
                     if self._tickfeed.cosmetics is not None
@@ -2628,11 +2643,54 @@ class AvatarFaceApp(FieldRuntime):
         self._refresh_frame_layers()
         self._cpu_frame_ms = (time.perf_counter() - cpu_started) * 1000.0
 
+    def _apply_tickfeed_labels_to_look(self, pkg) -> None:
+        """B4 — LOOK plates driven by TickPackage label amounts (resident plates)."""
+        labels = getattr(pkg, "labels", None) if pkg is not None else None
+        if labels is None and self._tickfeed is not None:
+            labels = self._tickfeed.last_labels
+        if labels is None:
+            return
+        smile = float(labels.smile_amt)
+        open_amt = float(labels.open_amt)
+        surprise = float(labels.surprise_amt)
+        # Package labels are authority for LOOK amounts when present
+        self._ml_smile = max(float(self._ml_smile), smile)
+        self._ml_openness = max(float(self._ml_openness), open_amt)
+        self._plate_openness_current = max(
+            float(self._plate_openness_current), open_amt
+        )
+        self._expr_plate_blend = max(float(self._expr_plate_blend), surprise)
+        if getattr(labels, "viseme_id", None) is not None:
+            from aiface.tickfeed.schema import VISEME_TABLE
+
+            vid = int(labels.viseme_id)
+            if 0 <= vid < len(VISEME_TABLE):
+                self._held_speech_viseme = VISEME_TABLE[vid]
+        # Refresh plate pair from label-driven openness
+        if self._plate_atlas is not None and self._atlas_textures:
+            from aiface.plates import HARD_SNAP_THRESHOLD
+
+            hard = float(self._display_recipe.plate_sharpness) >= HARD_SNAP_THRESHOLD
+            if hard:
+                ia, ib, mix = self._plate_atlas.pair_for_viseme(
+                    str(self._held_speech_viseme or "REST"), hard_snap=True
+                )
+            else:
+                ia, ib, mix = self._plate_atlas.pair_for_openness(
+                    float(self._plate_openness_current), hard_snap=False
+                )
+            ia = max(0, min(ia, len(self._atlas_textures) - 1))
+            ib = max(0, min(ib, len(self._atlas_textures) - 1))
+            self._plate_pair = (ia, ib)
+            self._plate_blend = (float(mix), float(open_amt))
+            self._plate_blend_current = (float(mix), float(open_amt))
+
     def _simulate_tick(self) -> None:
-        """Push TickPackage for next tick, then run ingest + constraint."""
+        """Push → 3-tick ring → pop for master → GPU ingest (B1–B3)."""
         next_tick = self.tick + 1
         if self._tickfeed is not None and self._tickfeed.enabled:
-            pkg = self._tickfeed.push_drives(
+            # Producer push into ring (may also expand remote c_t)
+            self._tickfeed.push_drives(
                 tick=next_tick,
                 open_amt=float(self._ml_openness),
                 smile_amt=float(self._ml_smile),
@@ -2640,6 +2698,9 @@ class AvatarFaceApp(FieldRuntime):
                 phoneme=str(self._held_speech_viseme or "REST"),
                 emotion=self._active_emotion(),
             )
+            # Master consumes ring; None → GPU miss damp (encoding 4)
+            pkg = self._tickfeed.pop_for_master(next_tick)
+            self._apply_tickfeed_labels_to_look(pkg)
             self.queue_tick_package(pkg)
         else:
             self.queue_tick_package(None)

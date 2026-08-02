@@ -91,12 +91,28 @@ class TickFeedTransport:
 
     def push_package_bytes(self, tick: int, blob: bytes) -> Path | None:
         """Optional local TickPackage spool (debug/QA; off by default at 60 Hz)."""
+        # Always keep HELLO negotiate artifacts (tick < 0)
+        if int(tick) < 0:
+            path = self.spool / f"hello_{abs(int(tick)):02d}.tpk"
+            path.write_bytes(blob)
+            return path
         if not self.spool_packages:
             return None
         path = self.spool / f"pkg_{int(tick):08d}.tpk"
         path.write_bytes(blob)
         self._trim("pkg_*.tpk")
         return path
+
+    def pull_latest_code(self) -> np.ndarray | None:
+        """Receive-side: latest spooled c_t (one-way producer write)."""
+        files = sorted(self.spool.glob("tick_*.f32"))
+        if not files:
+            return None
+        raw = files[-1].read_bytes()
+        vec = np.frombuffer(raw, dtype="<f4").copy()
+        if vec.size < self.dim:
+            vec = np.pad(vec, (0, self.dim - vec.size))
+        return vec[: self.dim].astype(np.float32)
 
 
 __all__ = ["TickFeedTransport"]

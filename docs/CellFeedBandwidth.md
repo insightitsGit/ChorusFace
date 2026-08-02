@@ -1,6 +1,6 @@
 # Cell feed bandwidth — design (480 MB/s target)
 
-**Status:** design only (not implemented).  
+**Status:** implemented on `tickfeedmaster` (CHORUS push + c_t + KEY/Δ f16).  
 **Session:** AminIntheLoop — realtime full-cell control.
 
 **Master:** [`TickFeedDesign.md`](TickFeedDesign.md).  

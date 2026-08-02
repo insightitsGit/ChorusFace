@@ -17,8 +17,10 @@ from aiface.tickfeed.package import (
     TickLabels,
     TickPackage,
     build_delta,
+    build_hello,
     build_keyframe,
     encode,
+    negotiate_hello,
 )
 from aiface.tickfeed.ring import FaceVelocityState, LockstepPlayer
 from aiface.tickfeed.schema import (
@@ -28,6 +30,7 @@ from aiface.tickfeed.schema import (
     ValueDtype,
 )
 from aiface.tickfeed.synth import labels_from_drives, synthesize_velocity
+from aiface.tickfeed.timeline_io import load_timeline_bundle
 
 
 @dataclass
@@ -42,10 +45,16 @@ class TickFeedDriver:
     ticks_since_key: int = 0
     timeline: dict[int, NDArray[np.float32]] = field(default_factory=dict)
     timeline_conf: dict[int, NDArray[np.uint8]] = field(default_factory=dict)
+    speech_by_tick: dict[int, dict] = field(default_factory=dict)
+    look_by_tick: dict[int, dict] = field(default_factory=dict)
     enabled: bool = True
     ml: TickFeedMLStack | None = None
     transport: TickFeedTransport | None = None
     last_code: list[float] = field(default_factory=list)
+    last_labels: TickLabels | None = None
+    last_package: TickPackage | None = None
+    hello_done: bool = False
+    hello_ack_ok: bool = False
     calibration: dict | None = None
     cosmetics: CosmeticPrefs | None = None
     world: Path | None = None
@@ -73,22 +82,28 @@ class TickFeedDriver:
         driver.world = root
         driver.calibration = load_calibration_script(root)
         driver.cosmetics = load_cosmetic_prefs(root)
-        npz = root / "face_cell_timeline.npz"
-        if npz.is_file():
-            data = np.load(npz)
-            ticks = np.asarray(data["ticks"], dtype=np.int64)
-            vel = np.asarray(data["velocity"], dtype=np.float32)
-            conf = None
-            if "conf" in data.files:
-                conf = np.asarray(data["conf"], dtype=np.uint8)
+        try:
+            bundle = load_timeline_bundle(root)
+            ticks = np.asarray(bundle["ticks"], dtype=np.int64)
+            vel = np.asarray(bundle["velocity"], dtype=np.float32)
+            conf = np.asarray(bundle["conf"], dtype=np.uint8)
             for i, t in enumerate(ticks):
                 driver.timeline[int(t)] = vel[i]
-                if conf is not None:
-                    driver.timeline_conf[int(t)] = conf[i].reshape(-1)
+                driver.timeline_conf[int(t)] = conf[i].reshape(-1)
+            if bundle.get("speech"):
+                for row in bundle["speech"].get("ticks") or []:
+                    driver.speech_by_tick[int(row["tick"])] = row
+            if bundle.get("look"):
+                for row in bundle["look"].get("ticks") or []:
+                    driver.look_by_tick[int(row["tick"])] = row
             print(
-                f"TickFeedDriver: loaded timeline {npz.name} "
-                f"({len(driver.timeline)} ticks)"
+                f"TickFeedDriver: loaded timeline "
+                f"({len(driver.timeline)} ticks, "
+                f"speech={len(driver.speech_by_tick)}, "
+                f"look={len(driver.look_by_tick)})"
             )
+        except FileNotFoundError:
+            pass
         driver.ml = TickFeedMLStack.try_load(root)
         try:
             from aiface.tickfeed.ml.train import CODE_DIM
@@ -98,7 +113,24 @@ class TickFeedDriver:
             )
         except Exception as exc:  # noqa: BLE001
             print(f"TickFeed transport: {exc}")
+        driver.run_hello()
         return driver
+
+    def run_hello(self) -> TickPackage:
+        """HELLO → local HELLO_ACK negotiate (design handshake §1)."""
+        world_id = self.world.name if self.world is not None else "avatar"
+        hello = build_hello(self.face, world_id=world_id)
+        ack = negotiate_hello(hello)
+        self.hello_done = True
+        self.hello_ack_ok = bool(ack.hello and ack.hello.ok)
+        if self.transport is not None:
+            self.transport.push_package_bytes(-1, encode(hello))
+            self.transport.push_package_bytes(-2, encode(ack))
+        print(
+            f"TickFeed HELLO: ack_ok={self.hello_ack_ok} "
+            f"apply_mode={(ack.hello.apply_mode if ack.hello else '?')}"
+        )
+        return ack
 
     def _labels_for_tick(
         self,
@@ -112,6 +144,25 @@ class TickFeedDriver:
         word: str,
         speech_viseme: int | None = None,
     ) -> TickLabels:
+        # Side B look/speech teachers win when present
+        if tick in self.look_by_tick:
+            lk = self.look_by_tick[tick]
+            smile_amt = max(smile_amt, float(lk.get("smile") or 0.0))
+            open_amt = max(open_amt, float(lk.get("open") or 0.0))
+            surprise_amt = max(surprise_amt, float(lk.get("surprise") or 0.0))
+            if int(lk.get("emotion_id", -1)) >= 0:
+                emotion_map = {
+                    int(EmotionId.HAPPY): "HAPPY",
+                    int(EmotionId.SURPRISED): "SURPRISED",
+                    int(EmotionId.ANGRY): "ANGRY",
+                }
+                emotion = emotion_map.get(int(lk["emotion_id"]), emotion)
+        if tick in self.speech_by_tick:
+            sp = self.speech_by_tick[tick]
+            phoneme = str(sp.get("viseme") or phoneme)
+            word = str(sp.get("word") or word)
+            speech_viseme = int(sp.get("viseme_id", speech_viseme or 0))
+
         labels = labels_from_drives(
             phoneme=phoneme,
             smile_amt=smile_amt,
@@ -124,12 +175,11 @@ class TickFeedDriver:
             labels.viseme_id = int(speech_viseme)
         if self.calibration is not None:
             t = float(tick) / float(TICK_RATE_HZ)
-            # Only stamp script beats inside the 8s calibration window.
             if t < float(self.calibration.get("duration_s") or 8.0):
                 beat = beat_at_time(self.calibration, t)
                 labels.beat_id = int(beat.get("beat_id", labels.beat_id))
                 speech = str(beat.get("speech") or "")
-                if speech and not word:
+                if speech and not labels.word:
                     labels.word = speech[:16]
                 bid = str(beat.get("id") or "")
                 if bid == "ANGRY":
@@ -163,15 +213,12 @@ class TickFeedDriver:
         curr: NDArray[np.float32] | None = None
         conf: NDArray[np.uint8] | None = None
         code: list[float] = []
-        source = "synth"
 
         # Authority: measured timeline > ML decode > synth
         if tick in self.timeline:
             curr = self.timeline[tick]
             conf = self.timeline_conf.get(tick)
-            source = "timeline"
             mean_conf = float(np.mean(conf)) if conf is not None else 255.0
-            # Low-confidence measured cells → L5 gap prior blend when available
             if (
                 mean_conf < 90.0
                 and self.ml is not None
@@ -188,7 +235,6 @@ class TickFeedDriver:
                     gap = flat.reshape(self.face.h, self.face.w, 2)
                     alpha = 1.0 - (mean_conf / 255.0)
                     curr = (1.0 - alpha) * curr + alpha * gap
-                    source = "timeline+l5"
                 except ValueError:
                     pass
                 labels = self._labels_for_tick(
@@ -220,20 +266,18 @@ class TickFeedDriver:
             )
             try:
                 curr = flat.reshape(self.face.h, self.face.w, 2)
-                source = "ml"
                 conf = np.full(self.face.n_cells, 140, dtype=np.uint8)
             except ValueError:
                 curr = None
         if curr is None:
             curr = synthesize_velocity(
                 self.face,
-                open_amt=open_amt,
-                smile_amt=smile_amt,
-                surprise_amt=surprise_amt,
+                open_amt=float(labels.open_amt),
+                smile_amt=float(labels.smile_amt),
+                surprise_amt=float(labels.surprise_amt),
                 mouth_uv=self.mouth_uv,
             )
             conf = np.full(self.face.n_cells, 100, dtype=np.uint8)
-            source = "synth"
 
         need_key = (
             not self.sent_key
@@ -258,17 +302,17 @@ class TickFeedDriver:
                 self.prev_velocity,
                 curr,
                 labels=labels,
+                conf=conf,
                 value_dtype=ValueDtype.F16,
             )
             self.ticks_since_key += 1
         self.prev_velocity = np.asarray(curr, dtype=np.float32).copy()
         self.player.submit(pkg)
+        self.last_labels = labels
         self.last_code = code
-        # Encode L4 code from measured/ML patch when not already produced
         if self.ml is not None and not code:
             try:
-                code = self.ml.encode_patch(curr)
-                self.last_code = code
+                self.last_code = self.ml.encode_patch(curr)
             except Exception:  # noqa: BLE001
                 pass
         if self.transport is not None:
@@ -276,18 +320,78 @@ class TickFeedDriver:
                 self.transport.push_code(tick, self.last_code)
             self.transport.push_package_bytes(tick, encode(pkg))
         pkg.time_seconds = float(tick) / float(TICK_RATE_HZ)
-        del source  # authority path used above; not on wire
+        self.last_package = pkg
         return pkg
 
     def pop_for_master(self, master_tick: int) -> TickPackage | None:
+        """Consume ring for master tick (None → GPU miss damp)."""
+        # Advance any skipped ticks with damp on CPU state
         while self.player.master_tick < master_tick:
             self.player.step()
-        if self.player.master_tick == master_tick:
-            pkg = self.player.ring.pop_ready(master_tick)
-            self.player.state.apply_or_damp(master_tick, pkg)
-            self.player.master_tick = master_tick + 1
-            return pkg
-        return None
+        if self.player.master_tick != master_tick:
+            return None
+        pkg = self.player.ring.pop_ready(master_tick)
+        self.player.state.apply_or_damp(master_tick, pkg)
+        self.player.master_tick = master_tick + 1
+        if pkg is not None and pkg.labels is not None:
+            self.last_labels = pkg.labels
+        return pkg
+
+    def expand_code_to_package(
+        self,
+        tick: int,
+        code: list[float] | NDArray[np.floating],
+        *,
+        open_amt: float = 0.0,
+        smile_amt: float = 0.0,
+        surprise_amt: float = 0.0,
+    ) -> TickPackage:
+        """Side A receive path: L4 decode c_t → TickPackage → ring."""
+        if self.ml is None:
+            raise RuntimeError("ML stack required to expand c_t")
+        flat = self.ml.decode_code(code)
+        curr = flat.reshape(self.face.h, self.face.w, 2)
+        labels = self._labels_for_tick(
+            tick=tick,
+            open_amt=open_amt,
+            smile_amt=smile_amt,
+            surprise_amt=surprise_amt,
+            phoneme="REST",
+            emotion="NEUTRAL",
+            word="",
+        )
+        conf = np.full(self.face.n_cells, 130, dtype=np.uint8)
+        if self.prev_velocity is None or not self.sent_key:
+            pkg = build_keyframe(
+                tick, self.face, curr, labels=labels, conf=conf
+            )
+            self.sent_key = True
+            self.ticks_since_key = 0
+        else:
+            pkg = build_delta(
+                tick,
+                self.face,
+                self.prev_velocity,
+                curr,
+                labels=labels,
+                conf=conf,
+            )
+            self.ticks_since_key += 1
+        self.prev_velocity = curr.copy()
+        self.player.submit(pkg)
+        self.last_code = list(np.asarray(code, dtype=np.float32).reshape(-1))
+        self.last_labels = labels
+        self.last_package = pkg
+        return pkg
+
+    def pull_remote_code_if_any(self, tick: int) -> TickPackage | None:
+        """If CHORUS/spool has a newer c_t, expand and submit."""
+        if self.transport is None or self.ml is None:
+            return None
+        code = self.transport.pull_latest_code()
+        if code is None:
+            return None
+        return self.expand_code_to_package(tick, code)
 
 
 def face_box_from_profile(
