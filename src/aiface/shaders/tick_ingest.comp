@@ -1,0 +1,90 @@
+#version 430
+
+// TickFeed bridge B1+B2: unpack full-face KEY/DELTA velocity into world ch0/1.
+// Dense f16 path (packed uint = packHalf2x16). Sparse path uses a second buffer.
+// Master Lock: cells with human_lock >= 0.5 are not written.
+//
+//#prelude
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(std430, binding = 0) buffer World {
+    Cell cells[];
+} world;
+
+// Dense: one uint per face cell = packHalf2x16(vx, vy)
+layout(std430, binding = 1) readonly restrict buffer DenseVelocities {
+    uint packed_vel[];
+} dense_vel;
+
+// Sparse: indices (u32) + packed f16 pairs
+layout(std430, binding = 2) readonly restrict buffer SparseIdx {
+    uint idx[];
+} sparse_idx;
+
+layout(std430, binding = 3) readonly restrict buffer SparseVel {
+    uint packed_vel[];
+} sparse_vel;
+
+uniform uvec2 grid_size;
+uniform ivec2 face_offset; // face_x, face_y
+uniform ivec2 face_size;   // face_w, face_h
+uniform int is_keyframe;   // 1 = KEY (assign), 0 = DELTA (add)
+uniform int encoding;      // 0=none/key dense, 1=dense delta, 2=sparse, 3=empty
+uniform uint sparse_count;
+
+uint cell_index(uvec2 position) {
+    return position.y * grid_size.x + position.x;
+}
+
+void apply_cell(ivec2 global_coord, vec2 vel) {
+    if (global_coord.x < 0 || global_coord.y < 0) {
+        return;
+    }
+    if (uint(global_coord.x) >= grid_size.x || uint(global_coord.y) >= grid_size.y) {
+        return;
+    }
+    uint index = cell_index(uvec2(global_coord));
+    float lock = world.cells[index].value[HUMAN_LOCK_CHANNEL];
+    if (lock >= 0.5) {
+        return;
+    }
+    if (is_keyframe == 1) {
+        world.cells[index].value[0] = vel.x;
+        world.cells[index].value[1] = vel.y;
+    } else {
+        world.cells[index].value[0] += vel.x;
+        world.cells[index].value[1] += vel.y;
+    }
+}
+
+void main() {
+    if (encoding == 3) {
+        return; // EMPTY
+    }
+
+    if (encoding == 2) {
+        // Sparse: one invocation per changed cell (1D dispatch)
+        uint lid = gl_GlobalInvocationID.x;
+        if (lid >= sparse_count) {
+            return;
+        }
+        uint linear = sparse_idx.idx[lid];
+        uint w = uint(face_size.x);
+        ivec2 local_coord = ivec2(int(linear % w), int(linear / w));
+        ivec2 global_coord = face_offset + local_coord;
+        vec2 vel = unpackHalf2x16(sparse_vel.packed_vel[lid]);
+        apply_cell(global_coord, vel);
+        return;
+    }
+
+    // Dense KEY or DENSE_DELTA: 2D face patch
+    ivec2 local_coord = ivec2(gl_GlobalInvocationID.xy);
+    if (local_coord.x >= face_size.x || local_coord.y >= face_size.y) {
+        return;
+    }
+    uint patch_idx = uint(local_coord.y * face_size.x + local_coord.x);
+    vec2 vel = unpackHalf2x16(dense_vel.packed_vel[patch_idx]);
+    ivec2 global_coord = face_offset + local_coord;
+    apply_cell(global_coord, vel);
+}

@@ -29,6 +29,10 @@ One continuous take. Speak the beats out loud if it helps you pace:
 | **4. Surprise** | ~1 s | Raise brows, widen eyes (soft “oh!” face) — brows must move |
 | **5. Talk** | ~5–10 s | Read the talk line below at a natural pace |
 
+For **Side B dense collection / lab samples**, prefer the fixed **~8s calibration
+script** (adds explicit **Say “hi”** + **Angry** + timed windows) in
+[`SideB_VideoCellCollection.md`](SideB_VideoCellCollection.md) §0b.
+
 **Talk line (open vowels + bilabials):**
 
 > “Hello there. My name is Ava. Please buy me a puppy. How are you today?”

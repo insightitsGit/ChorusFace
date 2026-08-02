@@ -7,7 +7,8 @@ upload teaches two layers:
 2. **ML behavior model** — trained on that track to **fill missing** data (gaps
    and live speech)
 
-Related: [`AvatarAdoption.md`](AvatarAdoption.md) · [`AMIN_DATA_STORE.md`](AMIN_DATA_STORE.md) ·
+Related: [`AvatarObservations.md`](AvatarObservations.md) ·
+[`AvatarAdoption.md`](AvatarAdoption.md) · [`AMIN_DATA_STORE.md`](AMIN_DATA_STORE.md) ·
 [`MouthCellGroups.md`](MouthCellGroups.md)
 
 ## Authority
@@ -15,14 +16,15 @@ Related: [`AvatarAdoption.md`](AvatarAdoption.md) · [`AMIN_DATA_STORE.md`](AMIN
 ```text
 upload video
      │
+     ├─► avatar_observations.json         (smile/open GPU + delta vectors)
      ├─► cell_transition_track.npz/json   (measured, honest)
      │         deltas = transform from previous sample
      │
-     └─► behavior_model.joblib            (ML fill)
+     └─► behavior_model.joblib            (ML fill between observations)
               trained: audio features → group controls
 
 runtime resolve():
-  measured @ t  →  ML fill (gaps / live)  →  viseme table
+  observed smile/open  →  measured @ t  →  ML fill (gaps / live)  →  viseme table
 ```
 
 We do **not** invent optical flow or generative face RGB. Groups
@@ -32,6 +34,7 @@ We do **not** invent optical flow or generative face RGB. Groups
 
 | File | Role |
 | --- | --- |
+| `avatar_observations.json` | Measured smile/open GPU vectors + rest deltas |
 | `cell_transition_track.npz` | times, controls[8], deltas, audio features |
 | `cell_transition_track.json` | Readable samples for QA |
 | `behavior_dataset.npz` | Train set |

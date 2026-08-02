@@ -60,6 +60,7 @@ OPTIONAL_FILES: Final[tuple[str, ...]] = (
     "live_vector_model.meta.json",
     "cell_transition_track.npz",
     "behavior_model.joblib",
+    "avatar_observations.json",
 )
 
 MIN_MOUTH_CELLS: Final = 32

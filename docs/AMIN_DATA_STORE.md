@@ -22,11 +22,13 @@ We store **one dense field + compact side-cars**.
 | `live_vector_trajectory.json` | ~19 KB | Time series of live vectors from the take |
 | `live_vector_model.joblib` | ~50 KB | Small regressor covering **unknown** sounds |
 | `cell_transition_track.npz` | ~tens of KB | Measured mouth-group transitions + deltas from the take |
+| `avatar_observations.json` | ~20 KB | Measured smile/open GPU vectors + rest deltas (gap-fill anchors) |
 | `behavior_model.joblib` | ~50–100 KB | ML fill for **missing** transitions / live speech |
 
 Identity truth lives once in `.bds` + `source_face.png`. Everything else is indexes, tables, or short vectors.
 
-See [`AvatarBehavior.md`](AvatarBehavior.md) for measured → ML authority.
+See [`AvatarBehavior.md`](AvatarBehavior.md) for measured → ML authority.  
+**Full layer inventory:** [`NWRDataDesign.md`](NWRDataDesign.md).
 
 ## Math of the big piece
 

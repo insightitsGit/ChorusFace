@@ -21,6 +21,15 @@
 | [`MouthCellGroups.md`](MouthCellGroups.md) | Named lip / teeth / cavity groups (L03) + retarget |
 | [`AvatarAdoption.md`](AvatarAdoption.md) | Any qualifying world dir → same GPU path |
 | [`AvatarBehavior.md`](AvatarBehavior.md) | Measured transitions + **retrainable** ML fill for gaps |
+| [`AvatarObservations.md`](AvatarObservations.md) | **Smile/open vectors** the ML fills from (GPU + landmarks) |
+| [`TickFeedDesign.md`](TickFeedDesign.md) | **MASTER** — full-face tick feed Side A/B (`tickfeedmaster` branch) |
+| [`TickPackageHandshake.md`](TickPackageHandshake.md) | Exact TickPackage fields, bytes, KEY/DELTA handshake |
+| [`CellFeedBandwidth.md`](CellFeedBandwidth.md) | 480/241 MB/s math + CHORUS + deltas |
+| [`SideB_VideoCellCollection.md`](SideB_VideoCellCollection.md) | Collect from video + 8s calibration script |
+| [`MultiLayerTickML.md`](MultiLayerTickML.md) | Multi-layer tick ML + abstract packets |
+| [`AvatarScaffolding.md`](AvatarScaffolding.md) | Lock scaffold; user cosmetics + uploads |
+| [`DesignMissingParts.md`](DesignMissingParts.md) | Missing parts / P0–P6 backlog |
+| [`NWRDataDesign.md`](NWRDataDesign.md) | Broader world dataset layers L0–L6 |
 
 ## Substrate / product (NWR + avatar)
 
@@ -44,7 +53,7 @@
 5. Same GPU display recipe at train and play  
 6. **No Path A mouth ownership seals**  
 7. Display layer order (L00–L11) is shared CPU/GPU — do not reorder Plane B casually  
-8. Behavior authority: **measured track → ML fill → viseme table**  
+8. Behavior authority: **observed smile/open → measured track → ML fill → table**  
 9. New upload → retrain behavior model in that world dir (replace artifacts)
 
 ## Train + play + retrain

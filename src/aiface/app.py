@@ -1222,19 +1222,6 @@ class AvatarFaceApp(FieldRuntime):
         controls = self._live_vector.resolve(
             phoneme=phoneme, phoneme_jaw=phoneme_jaw
         )
-        # Measured transitions first; ML fills gaps / live speech in-betweens.
-        behavior = self._behavior.resolve(phoneme=phoneme, video_t=None)
-        # Prefer behavior width when ML/track is richer than live-vector alone.
-        if behavior.source in ("ml_fill", "measured", "measured_lerp"):
-            from aiface.live_vector.schema import LiveControlVector
-
-            controls = LiveControlVector(
-                openness_n=max(float(controls.openness_n), float(behavior.openness_n)),
-                jaw_n=max(float(controls.jaw_n), float(behavior.jaw_n)),
-                width_n=max(float(controls.width_n), float(behavior.width_n)),
-                plate_gate=float(controls.plate_gate),
-                source=f"{controls.source}+{behavior.source}",
-            )
         del speech_t  # reserved for capture-replay clock later
         recipe = self._display_recipe
         hard = float(recipe.plate_sharpness) >= HARD_SNAP_THRESHOLD
@@ -1250,6 +1237,25 @@ class AvatarFaceApp(FieldRuntime):
             upcoming_due_at=upcoming_due,
             upcoming_phoneme=upcoming_phoneme,
         )
+        # After plates resolve: pull behavior toward measured smile/open vectors.
+        behavior = self._behavior.resolve(
+            phoneme=cmd.phoneme,
+            video_t=None,
+            smile_amount=float(cmd.smile_amount),
+            open_amount=float(cmd.plate_openness),
+        )
+        if behavior.source.startswith(
+            ("ml_fill", "measured", "observed", "heuristic")
+        ):
+            from aiface.live_vector.schema import LiveControlVector
+
+            controls = LiveControlVector(
+                openness_n=max(float(controls.openness_n), float(behavior.openness_n)),
+                jaw_n=max(float(controls.jaw_n), float(behavior.jaw_n)),
+                width_n=max(float(controls.width_n), float(behavior.width_n)),
+                plate_gate=float(controls.plate_gate),
+                source=f"{controls.source}+{behavior.source}",
+            )
         self._layer_command = cmd
         self._ml_openness = float(cmd.plate_openness)
         self._ml_jaw = float(cmd.jaw_target)
@@ -1268,8 +1274,10 @@ class AvatarFaceApp(FieldRuntime):
                 active_until=float(cmd.active_until),
                 now=now,
             )
-            # Overlay measured/ML group flow so cell transitions aren't table-only.
-            if behavior.source in ("ml_fill", "measured", "measured_lerp", "heuristic"):
+            # Overlay observed/ML group flow so cell transitions aren't table-only.
+            if behavior.source.startswith(
+                ("ml_fill", "measured", "observed", "heuristic")
+            ):
                 open_n, width_n, round_n = behavior.flow()
                 self._mouth_cell_plan.apply_behavior_flow(
                     open_n, width_n, round_n, source=behavior.source

@@ -328,6 +328,7 @@ Index: [`docs/README.md`](README.md)
 | Mouth groups | [`MouthCellGroups.md`](MouthCellGroups.md) |
 | Adopt any face | [`AvatarAdoption.md`](AvatarAdoption.md) |
 | Transitions + ML | [`AvatarBehavior.md`](AvatarBehavior.md) |
+| Full NWR dataset | [`NWRDataDesign.md`](NWRDataDesign.md) |
 | Capture kit | [`AvatarCapture.md`](AvatarCapture.md) |
 | Data sizes | [`AMIN_DATA_STORE.md`](AMIN_DATA_STORE.md) |
 | Live vectors | [`LiveControlVectors.md`](LiveControlVectors.md) |
