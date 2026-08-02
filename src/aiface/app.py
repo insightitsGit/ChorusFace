@@ -393,10 +393,10 @@ class AvatarFaceApp(FieldRuntime):
         parser.add_argument(
             "--face-image",
             type=Path,
-            default=DEFAULT_AVATAR_SOURCE,
+            default=None,
             help=(
-                "Immutable photograph used for rendering. This does NOT rebuild "
-                "locks or tissue — use aiface-seed --input to replace the avatar"
+                "Optional override photograph. Default: this world's "
+                "source_face.png from adoption (not a hard-coded avatar path)"
             ),
         )
         parser.add_argument(
@@ -673,18 +673,23 @@ class AvatarFaceApp(FieldRuntime):
         return grid_x, grid_y
 
     def _resolve_avatar_source(self, world: Path) -> Path | None:
-        """Prefer the original photograph so rendering never uses a mutated grid."""
-        bundle_source = getattr(self, "_avatar_bundle", None)
+        """Prefer this world's adopted photograph (never a stale hard-coded path)."""
+        bundle = getattr(self, "_avatar_bundle", None)
+        override = getattr(self.argv, "face_image", None)
         candidates = [
-            Path(getattr(self.argv, "face_image", "") or ""),
-            bundle_source.source_face if bundle_source is not None else None,
+            Path(override) if override else None,
+            bundle.source_face if bundle is not None else None,
             world.with_name("source_face.png"),
             world.with_suffix(".png"),
+            # Last resort only when no world photo exists
             DEFAULT_AVATAR_SOURCE,
         ]
         for candidate in candidates:
-            if candidate and Path(candidate).is_file():
-                return Path(candidate)
+            if candidate is None:
+                continue
+            path = Path(candidate)
+            if path.is_file():
+                return path
         return None
 
     def _mouth_center_from_regions(self) -> tuple[float, float] | None:
