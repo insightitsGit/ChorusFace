@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -199,6 +200,7 @@ class TickFeedDriver:
         word: str,
         speech_viseme: int | None = None,
         live_speech: bool = False,
+        brow_amt: float = 0.0,
     ) -> TickLabels:
         teacher = self._teacher_tick(tick)
         # Live chat/TTS owns amounts; otherwise Side B teachers are sole authority.
@@ -208,6 +210,7 @@ class TickFeedDriver:
                 smile_amt = float(lk.get("smile") or 0.0)
                 open_amt = float(lk.get("open") or 0.0)
                 surprise_amt = float(lk.get("surprise") or 0.0)
+                brow_amt = float(lk.get("brow") or brow_amt)
                 if int(lk.get("emotion_id", -1)) >= 0:
                     emotion_map = {
                         int(EmotionId.HAPPY): "HAPPY",
@@ -228,6 +231,7 @@ class TickFeedDriver:
             surprise_amt=surprise_amt,
             emotion=emotion,
             word=word,
+            brow_amt=brow_amt,
         )
         if speech_viseme is not None:
             labels.viseme_id = int(speech_viseme)
@@ -297,20 +301,40 @@ class TickFeedDriver:
             conf = np.full(self.face.n_cells, 255, dtype=np.uint8)
         # Authority: live speech synth/ML > measured timeline > ML decode > synth
         elif live_speech:
-            if self.ml is not None:
-                speech, look, flat, code = self.ml.resolve(
-                    tick=tick,
-                    open_amt=open_amt,
-                    smile_amt=smile_amt,
-                    surprise_amt=surprise_amt,
+            # Hearing / 0-state overlay: closed lips own LOOK; keep FIELD still
+            # so ML does not invent mouth motion while the user types.
+            closed_live = (
+                str(phoneme).upper() in {"REST", "CLOSED", "PP", "MM"}
+                and float(open_amt) < 0.08
+            )
+            if closed_live:
+                curr = np.zeros((self.face.h, self.face.w, 2), dtype=np.float32)
+                conf = np.full(self.face.n_cells, 255, dtype=np.uint8)
+            else:
+                # Live chat/TTS: label-driven synth FIELD (readable lip travel).
+                # ML decode was often near-zero here so LOOK open had no warp.
+                curr = synthesize_velocity(
+                    self.face,
+                    open_amt=float(open_amt),
+                    smile_amt=float(smile_amt),
+                    surprise_amt=float(surprise_amt),
+                    mouth_uv=self.mouth_uv,
                 )
-                # Live amounts stay authoritative; ML only fills FIELD patch.
-                del speech, look
-                try:
-                    curr = flat.reshape(self.face.h, self.face.w, 2)
-                    conf = np.full(self.face.n_cells, 150, dtype=np.uint8)
-                except ValueError:
-                    curr = None
+                conf = np.full(self.face.n_cells, 220, dtype=np.uint8)
+                if self.ml is not None:
+                    try:
+                        _s, _l, flat, code = self.ml.resolve(
+                            tick=tick,
+                            open_amt=open_amt,
+                            smile_amt=smile_amt,
+                            surprise_amt=surprise_amt,
+                        )
+                        del _s, _l
+                        ml = flat.reshape(self.face.h, self.face.w, 2)
+                        # Light ML detail only — never replace synth authority.
+                        curr = (0.75 * curr + 0.25 * ml).astype(np.float32)
+                    except Exception:  # noqa: BLE001
+                        pass
         elif teacher in self.timeline:
             curr = self.timeline[teacher]
             conf = self.timeline_conf.get(teacher)
@@ -382,36 +406,28 @@ class TickFeedDriver:
             curr = np.zeros((self.face.h, self.face.w, 2), dtype=np.float32)
             conf = np.full(self.face.n_cells, 255, dtype=np.uint8)
 
-        need_key = (
-            not self.sent_key
-            or self.ticks_since_key >= KEY_REFRESH_TICKS
-            or self.prev_velocity is None
-        )
         curr_f = np.asarray(curr, dtype=np.float32)
         still = float(np.abs(curr_f).max()) < 1e-6
         prev_still = (
             self.prev_velocity is not None
             and float(np.abs(self.prev_velocity).max()) < 1e-6
         )
-        # Settled zeros: EMPTY delta instead of re-shipping a dense zero KEY.
-        if (
-            need_key
-            and self.sent_key
-            and self.prev_velocity is not None
-            and still
-            and prev_still
-        ):
-            pkg = build_delta(
-                tick,
-                self.face,
-                self.prev_velocity,
-                curr_f,
-                labels=labels,
-                conf=conf,
-                value_dtype=ValueDtype.F16,
-            )
-            self.ticks_since_key = 0
-        elif need_key:
+        # Absolute KEY every tick (default): GPU S:=vel at 16.7 ms — no residual
+        # from sparse/EMPTY Δ. Set AIFACE_TICKFEED_ABSOLUTE=0 for bandwidth Δ.
+        absolute = os.environ.get("AIFACE_TICKFEED_ABSOLUTE", "1").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+        need_key = (
+            absolute
+            or not self.sent_key
+            or self.ticks_since_key >= KEY_REFRESH_TICKS
+            or self.prev_velocity is None
+            or (still and not prev_still)
+        )
+        if need_key:
             pkg = build_keyframe(
                 tick,
                 self.face,

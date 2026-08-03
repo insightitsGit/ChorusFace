@@ -122,6 +122,7 @@ class FieldRuntime(mglw.WindowConfig):
         self._tick_sparse_idx_buf = self.ctx.buffer(reserve=GRID_WIDTH * GRID_HEIGHT * 4)
         self._tick_sparse_vel_buf = self.ctx.buffer(reserve=GRID_WIDTH * GRID_HEIGHT * 4)
         self._pending_tick_package = None  # set by AvatarFaceApp each sim tick
+        self._tickfeed_preserve_velocity = False
         self.render_program = self.ctx.program(
             vertex_shader=load_shader("fullscreen.vert"),
             fragment_shader=load_shader(self.fragment_shader),
@@ -333,6 +334,8 @@ class FieldRuntime(mglw.WindowConfig):
         self._pending_tick_package = None
         compute = self._tick_ingest
         self.world_buffers[self.current_buffer].bind_to_storage_buffer(0)
+        # Default: allow constraint damp/neighbor blend (PaintCommand path).
+        self._tickfeed_preserve_velocity = False
 
         if package is None:
             # Miss: damp face ROI if subclass set face uniforms via last package
@@ -366,7 +369,10 @@ class FieldRuntime(mglw.WindowConfig):
         compute["encoding"].value = int(enc)
 
         if enc == 3:
+            # EMPTY: labels only — let constraint damp clear GPU residue.
             return
+        # KEY / dense Δ / sparse Δ wrote face velocity; keep S as assigned.
+        self._tickfeed_preserve_velocity = True
         if enc == 2:
             idx, vel = sparse_buffers_from_package(package)
             raw_idx = np.ascontiguousarray(idx, dtype="<u4").tobytes()
@@ -421,6 +427,7 @@ class FieldRuntime(mglw.WindowConfig):
             math.ceil(self.grid_width / WORKGROUP_SIZE),
             math.ceil(self.grid_height / WORKGROUP_SIZE),
         )
+        preserve = 1 if getattr(self, "_tickfeed_preserve_velocity", False) else 0
         for name in COMPUTE_PASSES:
             compute = self.compute_passes[name]
             destination_index = 1 - self.current_buffer
@@ -429,6 +436,7 @@ class FieldRuntime(mglw.WindowConfig):
             if name == "constraint":
                 self.command_buffer.bind_to_storage_buffer(2)
                 compute["command_count"].value = len(commands)
+                compute["preserve_velocity"].value = int(preserve)
             compute.run(group_x=groups[0], group_y=groups[1], group_z=1)
             self.ctx.memory_barrier()
             self.current_buffer = destination_index

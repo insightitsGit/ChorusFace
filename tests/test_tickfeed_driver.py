@@ -11,7 +11,8 @@ from aiface.tickfeed.schema import PackageKind
 from aiface.tickfeed.synth import synthesize_velocity
 
 
-def test_synth_and_driver_key_then_delta() -> None:
+def test_synth_and_driver_key_then_delta(monkeypatch) -> None:
+    monkeypatch.setenv("AIFACE_TICKFEED_ABSOLUTE", "0")
     face = FaceBox(10, 20, 32, 24)
     drv = TickFeedDriver.create(face, mouth_uv=(26.0, 35.0))
     k0 = drv.push_drives(tick=0, open_amt=0.0, smile_amt=0.0, phoneme="REST")
@@ -24,6 +25,36 @@ def test_synth_and_driver_key_then_delta() -> None:
     vel = synthesize_velocity(face, open_amt=0.8, smile_amt=0.1)
     assert vel.shape == (24, 32, 2)
     assert float(np.abs(vel).max()) > 0.0
+
+
+def test_absolute_key_every_tick_by_default() -> None:
+    """Default fidelity mode: each 16.7 ms tick is KEY assign, not Δ residue."""
+    face = FaceBox(10, 20, 8, 8)
+    drv = TickFeedDriver.create(face, mouth_uv=(14.0, 24.0))
+    k0 = drv.push_drives(tick=0, open_amt=0.5, smile_amt=0.0, phoneme="AH")
+    k1 = drv.push_drives(tick=1, open_amt=0.6, smile_amt=0.0, phoneme="AH")
+    assert k0.kind == PackageKind.KEYFRAME
+    assert k1.kind == PackageKind.KEYFRAME
+
+
+def test_synth_open_moves_both_lips() -> None:
+    """Live open must raise upper lip and drop lower — not jaw-only slide."""
+    face = FaceBox(10, 20, 32, 24)
+    vel = synthesize_velocity(face, open_amt=0.9, smile_amt=0.0, mouth_uv=(26.0, 35.0))
+    # mouth_uv → local (16, 15); upper rows y<15, lower y>15
+    upper = vel[:15, :, 1]
+    lower = vel[15:, :, 1]
+    assert float(upper.max()) > 0.05
+    assert float(lower.min()) < -0.08
+
+
+def test_brow_amt_roundtrips_in_labels() -> None:
+    from aiface.tickfeed.package import TickLabels
+
+    labels = TickLabels(brow_amt=0.7, surprise_amt=0.8, emotion_id=2)
+    back = TickLabels.unpack(labels.pack())
+    assert abs(back.brow_amt - 0.7) < 1e-5
+    assert abs(back.surprise_amt - 0.8) < 1e-5
 
 
 def test_look_drive_sole_label_authority() -> None:
@@ -70,6 +101,25 @@ def test_live_speech_beats_look_drive() -> None:
     assert abs(pkg.labels.open_amt - 0.72) < 1e-3
 
 
+def test_hearing_live_keeps_field_still() -> None:
+    """Typing/hearing overlay owns LOOK but must not invent mouth FIELD motion."""
+    face = FaceBox(10, 20, 8, 8)
+    drv = TickFeedDriver.create(face, mouth_uv=(14.0, 24.0))
+    pkg = drv.push_drives(
+        tick=0,
+        open_amt=0.0,
+        smile_amt=0.0,
+        surprise_amt=0.15,
+        phoneme="REST",
+        emotion="THINKING",
+        live_speech=True,
+    )
+    assert pkg.labels is not None
+    assert abs(pkg.labels.surprise_amt - 0.15) < 1e-3
+    assert pkg.values is not None
+    assert float(np.abs(pkg.values).max()) < 1e-6
+
+
 def test_timeline_teacher_tick_loops() -> None:
     face = FaceBox(10, 20, 8, 8)
     drv = TickFeedDriver.create(face, mouth_uv=(14.0, 24.0))
@@ -78,6 +128,39 @@ def test_timeline_teacher_tick_loops() -> None:
     assert drv._teacher_tick(0) == 0
     assert drv._teacher_tick(10) == 0
     assert drv._teacher_tick(25) == 5
+
+
+def test_entering_still_emits_zero_keyframe() -> None:
+    """Motion → still must KEY-clear GPU velocity (not sparse/EMPTY residue)."""
+    face = FaceBox(10, 20, 8, 8)
+    drv = TickFeedDriver.create(face, mouth_uv=(14.0, 24.0))
+    moving = np.zeros((face.h, face.w, 2), dtype=np.float32)
+    moving[..., 1] = -0.35
+    drv.timeline[0] = moving
+    drv.timeline_conf[0] = np.full(face.n_cells, 220, dtype=np.uint8)
+    drv.look_by_tick[0] = {
+        "smile": 0.0,
+        "open": 0.5,
+        "surprise": 0.0,
+        "emotion_id": 0,
+    }
+    drv.timeline_length = 2
+    k0 = drv.push_drives(tick=0, open_amt=0.5, smile_amt=0.0, phoneme="AH")
+    assert k0.kind == PackageKind.KEYFRAME
+    assert float(np.abs(k0.values).max()) > 0.1
+
+    drv.timeline[1] = np.zeros((face.h, face.w, 2), dtype=np.float32)
+    drv.timeline_conf[1] = np.full(face.n_cells, 255, dtype=np.uint8)
+    drv.look_by_tick[1] = {
+        "smile": 0.0,
+        "open": 0.0,
+        "surprise": 0.0,
+        "emotion_id": 0,
+    }
+    k1 = drv.push_drives(tick=1, open_amt=0.0, smile_amt=0.0, phoneme="REST")
+    assert k1.kind == PackageKind.KEYFRAME
+    assert k1.values is not None
+    assert float(np.abs(k1.values).max()) < 1e-6
 
 
 def test_rest_labels_zero_field() -> None:
@@ -117,6 +200,18 @@ def test_ring_producer_lead_absorbs_jitter() -> None:
     for _ in range(lead - 1):
         assert player.step() == "damp"
     assert player.step() == "keyframe"
+
+
+def test_local_ring_same_tick_has_no_misses() -> None:
+    """Local-ring Side B feed: produce tick T then pop T — no warm-up MISS."""
+    face = FaceBox(10, 20, 8, 8)
+    drv = TickFeedDriver.create(face, mouth_uv=(14.0, 24.0))
+    for master in range(1, 8):
+        drv.push_drives(tick=master, open_amt=0.4, smile_amt=0.0, phoneme="AH")
+        pkg = drv.pop_for_master(master)
+        assert pkg is not None
+        assert int(pkg.tick) == master
+        assert pkg.kind == PackageKind.KEYFRAME
 
 
 def test_package_bytes_spool_lane_b(tmp_path) -> None:

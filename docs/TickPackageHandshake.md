@@ -116,7 +116,8 @@ mask does not include those bits. Wider masks are reserved for later phases.
 | +8 | `f32` | `open_amt` | 0..1 |
 | +12 | `f32` | `surprise_amt` | 0..1 |
 | +16 | `u8[16]` | `word_utf8` | truncated word / empty |
-| +32 | `u8[16]` | `reserved` |
+| +32 | `f32` | `brow_amt` | 0..1 emotion brow (ANGRY/SURPRISE) |
+| +36 | `u8[12]` | `reserved` |
 
 Labels are **small**; they ride with every KEY/DELTA when known.
 

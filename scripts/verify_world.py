@@ -214,15 +214,21 @@ def check_capture_selection(report: Report, world_dir: Path) -> None:
         report.add(PASS, "capture-selection", detail)
 
     meta = load_json(world_dir / "capture_meta.json") or {}
-    teeth = float((meta.get("selection") or {}).get("rest_teeth", 0.0))
-    if teeth > 0.12:
+    sel = meta.get("selection") or {}
+    teeth = float(sel.get("rest_teeth", 0.0))
+    if teeth > 0.12 or rest_open > 0.18:
         report.add(
-            WARN,
+            FAIL,
             "rest-frame",
-            f"rest frame shows teeth ({teeth:.2f}) — identity is not a closed mouth",
+            f"identity not closed (teeth={teeth:.2f}, mouth_open={rest_open:.3f}) "
+            "— REST LOOK will show a permanently open mouth",
         )
     else:
-        report.add(PASS, "rest-frame", f"rest teeth score {teeth:.2f} (closed mouth)")
+        report.add(
+            PASS,
+            "rest-frame",
+            f"rest teeth={teeth:.2f} mouth_open={rest_open:.3f} (closed mouth)",
+        )
 
 
 def check_plate_atlas(report: Report, world_dir: Path) -> None:

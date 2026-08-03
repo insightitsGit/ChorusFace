@@ -18,7 +18,13 @@ def _optical_flow_face_series(
     video: Path,
     face: FaceBox,
 ) -> tuple[list[float], list[np.ndarray]] | None:
-    """Dense Farneback flow on **every** decoded frame → (t, HxWx2) patches."""
+    """Dense Farneback **rest→frame** displacement on every decoded frame.
+
+    Phase-1 ch0/1 are sampled by the avatar warp as a *displacement field*
+    (not integrated). Frame-to-frame optical flow therefore leaves residue and
+    mostly pulls the lower lip on open. Measuring each frame against the first
+    (rest) crop yields rest-relative ``(vx, vy)`` the KEY path can assign.
+    """
     try:
         import cv2
     except ImportError:
@@ -27,7 +33,7 @@ def _optical_flow_face_series(
     if not cap.isOpened():
         return None
     native = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
-    prev_gray = None
+    rest_gray: np.ndarray | None = None
     times: list[float] = []
     flows: list[np.ndarray] = []
     idx = 0
@@ -47,9 +53,13 @@ def _optical_flow_face_series(
         crop = gray[y0:y1, x0:x1]
         crop = cv2.resize(crop, (face.w, face.h), interpolation=cv2.INTER_AREA)
         t = idx / native
-        if prev_gray is not None:
+        if rest_gray is None:
+            rest_gray = crop.copy()
+            times.append(t)
+            flows.append(np.zeros((face.h, face.w, 2), dtype=np.float32))
+        else:
             flow = cv2.calcOpticalFlowFarneback(
-                prev_gray,
+                rest_gray,
                 crop,
                 None,
                 0.5,
@@ -59,16 +69,22 @@ def _optical_flow_face_series(
                 5,
                 1.2,
                 0,
-            )
-            # Scale flow to grid velocity (units / second ≈ flow * fps * scale)
-            flow = flow.astype(np.float32) * float(native) * 0.01
-            times.append(t)
+            ).astype(np.float32)
+            # Drop rigid translation (head/camera) — otherwise OPEN is a jaw
+            # slide and lip separation is invisible under the warp.
+            mean = flow.reshape(-1, 2).mean(axis=0)
+            flow = flow - mean.reshape(1, 1, 2)
             flows.append(flow)
-        prev_gray = crop
+            times.append(t)
         idx += 1
     cap.release()
     if not flows:
         return None
+    # Fit into NWR ±CLAMP (~1.5): keep articulation loud after derigid.
+    stacked = np.stack(flows, axis=0)
+    peak = float(np.percentile(np.abs(stacked), 99.5))
+    scale = 1.15 / max(peak, 1e-3)
+    flows = [f * scale for f in flows]
     return times, flows
 
 
@@ -144,7 +160,7 @@ def prepare_face_timeline(
         flow_series = _optical_flow_face_series(vid, face)
         if flow_series is not None:
             print(
-                f"TickFeed collect: every-frame optical flow n={len(flow_series[1])} "
+                f"TickFeed collect: rest→frame displacement n={len(flow_series[1])} "
                 f"from {vid.name}"
             )
         try:

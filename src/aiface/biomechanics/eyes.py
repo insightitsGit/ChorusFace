@@ -60,7 +60,13 @@ class EyeSystem:
         if self.state.blink_timer <= 0.0:
             self.state.blink_timer = interval + self._next_unit() * 1.5
 
-    def step(self, dt: float, *, arousal: float = 0.0) -> list[MuscleImpulse]:
+    def step(
+        self,
+        dt: float,
+        *,
+        arousal: float = 0.0,
+        emit_impulses: bool = True,
+    ) -> list[MuscleImpulse]:
         self.set_arousal(arousal)
         delay = max(self.state.focus_delay, 1e-3)
         amount = 1.0 - pow(0.5, dt / delay)
@@ -84,7 +90,9 @@ class EyeSystem:
             self.state.lid_left = 1.0 - close
             self.state.lid_right = 1.0 - min(1.0, close * 0.92)
             self.state.lid_tension = close
-            if close > 0.2:
+            # When TickFeed owns FIELD, skip blink muscle warps — lid overlay
+            # alone. Muscle+field stacking reads as double lips.
+            if emit_impulses and close > 0.2:
                 impulses.append(
                     MuscleImpulse(
                         tick=0,

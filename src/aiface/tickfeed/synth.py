@@ -44,9 +44,14 @@ def synthesize_velocity(
     sur_n = float(np.clip(surprise_amt, 0.0, 1.0))
 
     vx = smile_n * 0.55 * dx * mouth
+    # Rest-relative open: upper lip up (+y), lower lip down (−y). A lower-only
+    # bias made live speech look like the jaw alone was sliding.
+    # Stronger open so live TTS FIELD is readable at recipe field_warp_gain.
+    # Peak ~1.2 at open=1 so GPU clamp (±1.5) still has headroom.
     vy = (
-        -open_n * 0.85 * mouth * (0.35 + 0.65 * lower)
-        + sur_n * 0.35 * upper * np.exp(-((xx - mx) / max(w * 0.4, 1.0)) ** 2)
+        -open_n * 2.10 * mouth * (0.12 + 0.88 * lower)
+        + open_n * 1.80 * mouth * upper
+        + sur_n * 0.55 * upper * np.exp(-((xx - mx) / max(w * 0.4, 1.0)) ** 2)
     )
     out = np.stack([vx, vy], axis=-1).astype(np.float32)
     return out
@@ -60,6 +65,7 @@ def labels_from_drives(
     surprise_amt: float = 0.0,
     emotion: str = "NEUTRAL",
     word: str = "",
+    brow_amt: float = 0.0,
 ) -> TickLabels:
     emo = (emotion or "NEUTRAL").strip().upper()
     emotion_id = {
@@ -91,6 +97,7 @@ def labels_from_drives(
         open_amt=float(open_amt),
         surprise_amt=float(surprise_amt),
         word=(word or "")[:16],
+        brow_amt=float(np.clip(brow_amt, 0.0, 1.0)),
     )
 
 

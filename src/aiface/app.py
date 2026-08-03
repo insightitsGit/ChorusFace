@@ -208,6 +208,12 @@ def _environment_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+# Demo face presence — "0 state" is idle closed lips + natural blink.
+PRESENCE_ZERO: Final = "zero"
+PRESENCE_HEARING: Final = "hearing"
+PRESENCE_SPEAKING: Final = "speaking"
+
+
 def _default_tts_enabled() -> bool:
     """Whether to synthesise speech in-process. Off unless asked.
 
@@ -251,6 +257,15 @@ class AvatarFaceApp(FieldRuntime):
             "--gpu-log-verbose",
             action="store_true",
             help="Print every tick to stdout (default: file + 5 Hz summary)",
+        )
+        parser.add_argument(
+            "--tickfeed-debug",
+            action="store_true",
+            default=_environment_flag("AIFACE_TICKFEED_DEBUG"),
+            help=(
+                "Dump Side A TickPackage ingest JSONL "
+                "(labels/FIELD/gain/blur flags). Also AIFACE_TICKFEED_DEBUG=1"
+            ),
         )
         parser.add_argument(
             "--no-chat",
@@ -449,6 +464,11 @@ class AvatarFaceApp(FieldRuntime):
             help="Bearer token; generated and printed when --bridge is set without one",
         )
         parser.add_argument(
+            "--bridge-direct-speak",
+            action="store_true",
+            help="POST /speak TTS the text directly (skip LLM) — lab calibration",
+        )
+        parser.add_argument(
             "--wire-loop",
             action=argparse.BooleanOptionalAction,
             default=_environment_flag("AIFACE_WIRE_LOOP"),
@@ -540,6 +560,8 @@ class AvatarFaceApp(FieldRuntime):
         self._tickfeed_look_authority = False
         # Live chat/TTS overlay for TickFeed (bypasses MouthLayerTimeline LOOK).
         self._tickfeed_live: dict[str, float | str] | None = None
+        # 0-state / hearing / speaking — chat presence for the demo face.
+        self._presence: str = PRESENCE_ZERO
         try:
             from aiface.tickfeed.cosmetics import load_cosmetic_prefs
 
@@ -616,8 +638,9 @@ class AvatarFaceApp(FieldRuntime):
                 self.wnd.exit_key = None
             self._chatbox.add(
                 SPEAKER_SYSTEM,
-                "Type and press Enter. Drag Hold slider to keep teeth/plates "
-                "on longer; Mouth dropdown or M cycles Slow/Normal/Fast.",
+                "0-state: closed lips + blink. Typing → hearing look. "
+                "Enter to chat; face returns to 0-state when done. "
+                "Hold slider / Mouth dropdown or M for plate timing.",
             )
 
         self._capture_directory = getattr(self.argv, "capture", None)
@@ -632,8 +655,10 @@ class AvatarFaceApp(FieldRuntime):
                 # do not boot with old hard-snap open-mouth greeting.
                 print(
                     "TickFeed demo: LOOK from package labels "
-                    "(one 8s calibration pass, then REST still; chat = live speech)."
+                    "(one 8s calibration pass, then 0-state: closed lips + blink; "
+                    "typing = hearing look; chat end → 0-state)."
                 )
+                self._enter_zero_state(blink=True)
             else:
                 self._speak_without_chat(
                     "[EMOTION:HAPPY] Ah, oh — hello! My smile and lips follow the capture."
@@ -1177,6 +1202,13 @@ class AvatarFaceApp(FieldRuntime):
         elif speaking and phoneme not in {"REST", "CLOSED", "PP", "MM"}:
             self._expr_target_brow = max(self._expr_target_brow, 0.14)
 
+        # Hearing / waiting look — closed lips, attentive brows + soft widen.
+        if self._presence == PRESENCE_HEARING or self._tickfeed_live_mode() == "hearing":
+            self._expr_target_brow = max(self._expr_target_brow, 0.45)
+            self._expr_target_widen = max(self._expr_target_widen, 0.30)
+            if not self._tickfeed_look_authority:
+                self._expr_target_blend = max(self._expr_target_blend, 0.18)
+
     def _ease_expression_state(self, frame_time: float) -> None:
         rate = 4.5
         amount = 1.0 - math.exp(-max(frame_time, 0.0) * rate)
@@ -1286,6 +1318,77 @@ class AvatarFaceApp(FieldRuntime):
         now = time.perf_counter() - self._clock0
         return now <= float(live.get("until", 0.0))
 
+    def _tickfeed_live_mode(self) -> str:
+        live = self._tickfeed_live
+        if live is None or not self._tickfeed_live_active():
+            return ""
+        return str(live.get("mode") or "speech").strip().lower()
+
+    def _enter_zero_state(self, *, blink: bool = False) -> None:
+        """Idle 0-state: closed lips, soft gaze, optional blink."""
+        was = self._presence
+        self._presence = PRESENCE_ZERO
+        live = self._tickfeed_live
+        if live is not None and str(live.get("mode") or "") == "hearing":
+            self._tickfeed_live = None
+        if hasattr(self, "_biomech"):
+            self._biomech.eyes.look_at(0.0, 0.0)
+            if blink and was != PRESENCE_ZERO:
+                self._biomech.eyes.request_blink()
+        if was == PRESENCE_SPEAKING:
+            self._telemetry.last_emotion = "NEUTRAL"
+            self._held_speech_viseme = "REST"
+
+    def _enter_hearing_state(self) -> None:
+        """Waiting / listening look — lips stay closed, brows lift, soft gaze."""
+        now = time.perf_counter() - self._clock0
+        if self._tickfeed_live_mode() == "speech":
+            # Never clobber an active speech overlay.
+            return
+        if self._presence != PRESENCE_HEARING and hasattr(self, "_biomech"):
+            # Slightly toward the chat panel / attentive focus.
+            self._biomech.eyes.look_at(0.22, 0.08)
+        self._presence = PRESENCE_HEARING
+        self._tickfeed_live = {
+            "phoneme": "REST",
+            "open": 0.0,
+            "smile": 0.0,
+            "surprise": 0.15,
+            "emotion": "THINKING",
+            "mode": "hearing",
+            "until": now + 2.0,
+        }
+        self._held_speech_viseme = "REST"
+        self._telemetry.last_emotion = "THINKING"
+
+    def _update_presence(self) -> None:
+        """0-state ↔ hearing (typing/pending) ↔ speaking (visemes/TTS)."""
+        speech_active = bool(self._visemes) or self._tickfeed_live_mode() == "speech"
+        if speech_active:
+            self._presence = PRESENCE_SPEAKING
+            return
+
+        want_hearing = bool(self._chatbox.pending) or (
+            self._chat_box_visible
+            and bool(self._chatbox.focused)
+            and bool(self._chatbox.text.strip())
+        )
+        if want_hearing:
+            self._enter_hearing_state()
+            return
+
+        if self._presence == PRESENCE_SPEAKING:
+            # Finishing a chat turn → back to 0-state with a blink.
+            self._enter_zero_state(blink=True)
+            return
+
+        if self._presence == PRESENCE_HEARING:
+            self._enter_zero_state(blink=False)
+            return
+
+        if self._presence != PRESENCE_ZERO:
+            self._enter_zero_state(blink=False)
+
     def _layer_command_from_tickfeed(self) -> LayerCommand:
         """Build GPU layer directive from TickPackage labels (not MouthLayerTimeline)."""
         from aiface.tickfeed.schema import VISEME_TABLE
@@ -1303,12 +1406,14 @@ class AvatarFaceApp(FieldRuntime):
             if 0 <= vid < len(VISEME_TABLE):
                 phoneme = VISEME_TABLE[vid]
         src = "tickfeed-live" if self._tickfeed_live_active() else "tickfeed-labels"
+        # FIELD (TickPackage ch0/1) owns lip separation. Jaw muscle warp only
+        # pulls the lower lip and stacked on residual flow as "lip slides down".
         return LayerCommand(
             phoneme=phoneme,
             atlas_viseme=phoneme,
             open_amount=open_amt,
             smile_amount=smile_amt,
-            jaw_target=open_amt * 0.85,
+            jaw_target=0.0,
             plate_openness=open_amt,
             source=src,
             active_until=float(
@@ -1744,15 +1849,24 @@ class AvatarFaceApp(FieldRuntime):
             1.0 if self._expression_catalog is not None else 0.0,
         )
 
-        # The displacement field is the whole deformation model: every visible
-        # motion except jaw, lid, and mouth-opening occlusion comes from here.
-        uniforms = pack_muscle_uniforms(
-            self._biomech.registry,
-            state.muscle_activations,
-            face_box=self._face_box,
-            grid_height=self.grid_height,
-            capacity=MAX_ACTIVE_MUSCLES,
-        )
+        # TickFeed owns face FIELD + plates; muscle warp on top made lips muddy
+        # and fought KEY clears. Keep lid geometry only when TickFeed is live.
+        if self._tickfeed_look_authority:
+            uniforms = pack_muscle_uniforms(
+                self._biomech.registry,
+                {},
+                face_box=self._face_box,
+                grid_height=self.grid_height,
+                capacity=MAX_ACTIVE_MUSCLES,
+            )
+        else:
+            uniforms = pack_muscle_uniforms(
+                self._biomech.registry,
+                state.muscle_activations,
+                face_box=self._face_box,
+                grid_height=self.grid_height,
+                capacity=MAX_ACTIVE_MUSCLES,
+            )
         program["muscle_geometry"].write(uniforms.geometry.tobytes())
         program["muscle_drive"].write(uniforms.drive.tobytes())
         program["muscle_count"].value = uniforms.count
@@ -1800,8 +1914,17 @@ class AvatarFaceApp(FieldRuntime):
         # While a speech plate owns the mouth, keep field travel low so the
         # unlocked disc does not smear under the static atlas billboard.
         field_gain = float(self._display_recipe.field_warp_gain)
-        if speaking_plate:
+        # Legacy atlas path crushed FIELD so plates wouldn't smear.
+        if speaking_plate and not self._tickfeed_look_authority:
             field_gain *= 0.20
+        elif self._tickfeed_look_authority:
+            # Capture open/atlas plates are the readable mouth. Stacking full
+            # FIELD warp on top ghosts double lips (verified in bridge captures).
+            plate_o = float(self._plate_blend_current[1])
+            if plate_o >= 0.45:
+                field_gain *= 0.05
+            else:
+                field_gain *= max(0.40, 1.0 - 0.55 * plate_o)
         program["avatar_field_gain"].value = field_gain
         # Step 12: plate snap — commit toward the nearest captured mouth shape.
         program["avatar_plate_sharpness"].value = float(
@@ -2055,6 +2178,8 @@ class AvatarFaceApp(FieldRuntime):
         if key == getattr(keys, "ESCAPE", None):
             box.focused = not box.focused
             self._overlay_dirty = True
+            if not box.focused and not box.pending and not self._visemes:
+                self._enter_zero_state(blink=False)
             return True
         if not box.focused:
             return False
@@ -2062,10 +2187,15 @@ class AvatarFaceApp(FieldRuntime):
         control = bool(getattr(modifiers, "ctrl", False))
         if key in {keys.ENTER, getattr(keys, "NUMPAD_ENTER", keys.ENTER)}:
             self._submit_chat_line()
+            # Submitted — stay in hearing/waiting until speech starts.
+            if box.pending:
+                self._enter_hearing_state()
             return True
         if key == keys.BACKSPACE:
             changed = box.delete_word() if control else box.backspace()
             self._overlay_dirty = self._overlay_dirty or changed
+            if changed and box.text.strip():
+                self._enter_hearing_state()
             return True
         if key == getattr(keys, "DELETE", None):
             self._overlay_dirty = box.delete() or self._overlay_dirty
@@ -2112,6 +2242,8 @@ class AvatarFaceApp(FieldRuntime):
             return
         if self._chatbox.insert(char):
             self._overlay_dirty = True
+            # First keystroke → hearing / waiting look (lips stay closed).
+            self._enter_hearing_state()
 
     # ---------------------------------------------------------------- voice
 
@@ -2502,11 +2634,16 @@ class AvatarFaceApp(FieldRuntime):
 
     def _start_face_bridge(self) -> None:
         token = str(getattr(self.argv, "bridge_token", "") or "").strip() or new_token()
+        speak = (
+            self._speak_without_chat
+            if bool(getattr(self.argv, "bridge_direct_speak", False))
+            else self._kick_llm
+        )
         self._bridge = FaceBridge(
             status_provider=self._bridge_status,
             preview_provider=self._preview,
             screenshot_provider=self._screenshot,
-            speak_handler=self._kick_llm,
+            speak_handler=speak,
             voice_handler=self._voice_request,
             probe_provider=self._mouth_probe_snapshot,
             cells_provider=self._cells_snapshot,
@@ -2562,6 +2699,17 @@ class AvatarFaceApp(FieldRuntime):
             "voice_channel": self._voice_status(),
             "mouth_owners": list(self._mouth_ownership.owners),
             "mouth_ownership": self._mouth_ownership.as_dict(),
+            "mean_speed": float(self._telemetry.mean_speed),
+            "peak_speed": float(self._telemetry.peak_speed),
+            "active_cells": int(self._telemetry.active_cells),
+            "tickfeed": {
+                "look_authority": bool(self._tickfeed_look_authority),
+                "open": float(getattr(self, "_ml_openness", 0.0) or 0.0),
+                "smile": float(getattr(self, "_ml_smile", 0.0) or 0.0),
+                "plate_open": float(getattr(self, "_plate_openness_current", 0.0) or 0.0),
+                "viseme": str(self._held_speech_viseme or ""),
+                "presence": str(getattr(self, "_presence", "")),
+            },
         }
 
     def _voice_status(self) -> dict[str, object]:
@@ -2626,19 +2774,52 @@ class AvatarFaceApp(FieldRuntime):
         if self._tickfeed_look_authority:
             # Brand-new TickFeed path: amounts from viseme table, not hard-snap 1.0.
             open_amt = float(VISEME_OPENNESS.get(key, 0.0))
-            smile_amt = 0.55 if (emotion or "").upper() in {"HAPPY", "JOY"} else 0.0
-            if key in {"REST", "CLOSED", "PP"}:
+            # Closed-lip smile only when mouth is not opening — smile+open muddy.
+            smile_amt = 0.0
+            if open_amt < 0.2 and (emotion or "").upper() in {"HAPPY", "JOY"}:
+                smile_amt = 0.55
+            if key in {"REST", "CLOSED", "PP", "MM"}:
                 open_amt = 0.0
             span = max(float(duration), 0.06)
             if next_due_at is not None:
-                span = max(span, min(float(next_due_at) - now, 0.20))
+                span = max(span, min(float(next_due_at) - now, 0.35))
+            # Hold long enough that timeline teacher cannot steal mid-word.
+            hold_floor = 0.32
+            if key in OPEN_TOOTH_VISEMES or open_amt >= 0.45:
+                hold_floor = 0.55
+            prev = self._tickfeed_live
+            # Do not let brief CLOSED/REST visemes erase an open hold — that made
+            # mouth flashes one frame then freeze closed (LOOK open, FIELD 0).
+            if (
+                open_amt < 0.12
+                and prev is not None
+                and str(prev.get("mode") or "") == "speech"
+                and float(prev.get("open") or 0.0) >= 0.2
+                and now < float(prev.get("until") or 0.0)
+            ):
+                self._presence = PRESENCE_SPEAKING
+                self._biomech.submit_phoneme(
+                    phoneme,
+                    tick=self.tick + 1,
+                    emotion_label=emotion,
+                    duration=max(float(duration), 0.10),
+                )
+                self._telemetry.last_phoneme = phoneme
+                self._telemetry.last_emotion = emotion
+                self._telemetry.impulses_fired += 1
+                self._telemetry.command_latency_ms = (
+                    time.perf_counter() - started
+                ) * 1000.0
+                return
+            self._presence = PRESENCE_SPEAKING
             self._tickfeed_live = {
                 "phoneme": key,
                 "open": open_amt,
                 "smile": smile_amt,
                 "surprise": 0.0,
                 "emotion": (emotion or "NEUTRAL").strip().upper() or "NEUTRAL",
-                "until": now + span,
+                "mode": "speech",
+                "until": now + max(span, hold_floor),
             }
             self._held_speech_viseme = key
             self._mouth_timeline.clear()
@@ -2660,6 +2841,7 @@ class AvatarFaceApp(FieldRuntime):
             hold_floor = float(getattr(self, "_mouth_hold_min", 0.36))
             if key in OPEN_TOOTH_VISEMES:
                 hold_floor = max(hold_floor, hold_floor * 1.15)
+            self._presence = PRESENCE_SPEAKING
             self._biomech.submit_phoneme(
                 phoneme,
                 tick=self.tick + 1,
@@ -2750,6 +2932,7 @@ class AvatarFaceApp(FieldRuntime):
                     if self._tickfeed.wire_loop
                     else None
                 ),
+                "presence": self._presence,
                 "wire": "KEY/DELTA full-face",
                 "labels": (
                     {
@@ -2811,7 +2994,11 @@ class AvatarFaceApp(FieldRuntime):
 
     def _step_biomechanics(self, frame_time: float) -> None:
         cpu_started = time.perf_counter()
-        render, specs = self._biomech.step(max(frame_time, 0.0), tick=self.tick + 1)
+        render, specs = self._biomech.step(
+            max(frame_time, 0.0),
+            tick=self.tick + 1,
+            tickfeed_field=bool(self._tickfeed_look_authority),
+        )
         self._render_state = render
         # expression.w drives smile.png in the shader. Use capture smile amount
         # (HAPPY or live width) — do not zero it for NEUTRAL speech.
@@ -2844,19 +3031,27 @@ class AvatarFaceApp(FieldRuntime):
 
     def _apply_tickfeed_labels_to_look(self, pkg) -> None:
         """B4 — LOOK plates owned by TickPackage labels (sole authority)."""
-        labels = getattr(pkg, "labels", None) if pkg is not None else None
-        if labels is None and self._tickfeed is not None:
-            labels = self._tickfeed.last_labels
+        # Miss must not use producer last_labels — with ring lead those are
+        # ahead of the master tick and open plates while FIELD is still empty.
+        if pkg is None:
+            return
+        labels = getattr(pkg, "labels", None)
         if labels is None:
             return
         smile = float(labels.smile_amt)
         open_amt = float(labels.open_amt)
         surprise = float(labels.surprise_amt)
+        brow = float(getattr(labels, "brow_amt", 0.0) or 0.0)
         self._tickfeed_look_authority = True
         self._ml_smile = smile
         self._ml_openness = open_amt
         self._plate_openness_current = open_amt
         self._expr_plate_blend = surprise
+        # Side B emotion LOOK: brow from look_drive (ANGRY/SURPRISE) — full-face
+        # FIELD already carries measured upper-face velocity in the timeline.
+        self._expr_target_brow = max(float(self._expr_target_brow), brow)
+        if surprise > 0.2 or brow > 0.35:
+            self._expr_target_widen = max(float(self._expr_target_widen), brow * 0.55)
         if getattr(labels, "viseme_id", None) is not None:
             from aiface.tickfeed.schema import VISEME_TABLE
 
@@ -2864,22 +3059,18 @@ class AvatarFaceApp(FieldRuntime):
             if 0 <= vid < len(VISEME_TABLE):
                 self._held_speech_viseme = VISEME_TABLE[vid]
         if self._plate_atlas is not None and self._atlas_textures:
-            from aiface.plates import HARD_SNAP_THRESHOLD
-
-            hard = float(self._display_recipe.plate_sharpness) >= HARD_SNAP_THRESHOLD
-            if hard:
-                ia, ib, mix = self._plate_atlas.pair_for_viseme(
-                    str(self._held_speech_viseme or "REST"), hard_snap=True
-                )
-            else:
-                ia, ib, mix = self._plate_atlas.pair_for_openness(
-                    open_amt, hard_snap=False
-                )
+            # Soft openness blend under TickFeed so capture open.png stays loud
+            # (hard atlas snap was muting the readable open mouth plate).
+            ia, ib, mix = self._plate_atlas.pair_for_openness(
+                open_amt, hard_snap=False
+            )
             ia = max(0, min(ia, len(self._atlas_textures) - 1))
             ib = max(0, min(ib, len(self._atlas_textures) - 1))
             self._plate_pair = (ia, ib)
             self._plate_blend = (float(mix), open_amt)
             self._plate_blend_current = (float(mix), open_amt)
+        if open_amt > 0.2:
+            self._ml_smile = 0.0
 
     def _simulate_tick(self) -> None:
         """Push ahead into ring → master pops current tick → GPU ingest (B1–B3)."""
@@ -2888,20 +3079,37 @@ class AvatarFaceApp(FieldRuntime):
         next_tick = self.tick + 1
         if self._tickfeed is not None and self._tickfeed.enabled:
             live = self._tickfeed_live_active()
-            if live and self._tickfeed_live is not None:
+            mode = self._tickfeed_live_mode()
+            # Keep speech overlay while visemes remain even if until lapsed —
+            # otherwise measured timeline steals mid-sentence LOOK/FIELD.
+            speech_pending = bool(self._visemes) or self._presence == PRESENCE_SPEAKING
+            if (live or speech_pending) and self._tickfeed_live is not None:
+                if not live and speech_pending:
+                    # Refresh hold so produce stays on live synth, not teacher.
+                    now = time.perf_counter() - self._clock0
+                    self._tickfeed_live["until"] = now + 0.20
+                    live = True
+                    mode = str(self._tickfeed_live.get("mode") or "speech")
                 open_amt = float(self._tickfeed_live.get("open", 0.0))
                 smile_amt = float(self._tickfeed_live.get("smile", 0.0))
                 surprise_amt = float(self._tickfeed_live.get("surprise", 0.0))
                 phoneme = str(self._tickfeed_live.get("phoneme") or "REST")
                 emotion = str(self._tickfeed_live.get("emotion") or "NEUTRAL")
             else:
+                # 0-state: closed lips, REST — blink comes from EyeSystem.
                 open_amt = 0.0
                 smile_amt = 0.0
                 surprise_amt = 0.0
                 phoneme = "REST"
                 emotion = "NEUTRAL"
-            # B3: schedule RING_DEPTH ticks ahead (~50 ms); master pops next_tick.
-            produce_tick = int(next_tick) + int(RING_DEPTH)
+            # Hearing + speech overlays both own LOOK; hearing keeps FIELD still.
+            live_overlay = live and mode in {"speech", "hearing"}
+            # Local-ring: produce the tick we consume (same 16.7 ms). Wire-loop
+            # keeps B3 producer lead so the transport can jitter.
+            if self._tickfeed.wire_loop:
+                produce_tick = int(next_tick) + int(RING_DEPTH)
+            else:
+                produce_tick = int(next_tick)
             self._tickfeed.push_drives(
                 tick=produce_tick,
                 open_amt=open_amt,
@@ -2909,7 +3117,7 @@ class AvatarFaceApp(FieldRuntime):
                 surprise_amt=surprise_amt,
                 phoneme=phoneme,
                 emotion=emotion,
-                live_speech=live,
+                live_speech=live_overlay,
             )
             # Wire-loop: produce only pushes transport; master ring is fed from wire.
             if self._tickfeed.wire_loop:
@@ -3004,6 +3212,7 @@ class AvatarFaceApp(FieldRuntime):
         self._drain_chat()
         self._drain_voice_channel()
         self._advance_visemes()
+        self._update_presence()
         # ML open/close first so jaw bias lands in this tick's biomechanics step.
         self._update_open_close_ml(frame_time)
         # Gate field/smile before impulses land this tick.

@@ -307,7 +307,10 @@ Producer clock and master clock are related but not the same step:
     → if missing: v_xy *= γ  (γ ≈ 0.82–0.88), no invented coast integrate
 
 Warm-up: first RING_DEPTH master ticks may damp until the lead fills.
-Never “push then pop the same tick” as a substitute for the ring.
+**Lab local-ring** produces `tick == master` (push then pop same tick) so Side B
+FIELD+labels land in the same 16.7 ms step — ring lead is for **wire-loop** /
+remote jitter only. Never apply producer `last_labels` on a master miss (LOOK
+would jump ahead of FIELD).
 Periodic KEY refresh clears drift.
 ```
 
@@ -319,10 +322,23 @@ amounts** (smile/open/surprise/…). Full look stack, not smile-only.
 **Label authority precedence (when TickFeed enabled):**
 
 ```text
-1. TickPackage labels (smile/open/surprise/viseme)     ← sole LOOK amounts
+1. TickPackage labels (smile/open/surprise/brow/viseme/emotion) ← sole LOOK amounts
 2. Emotion-catalog easing                              ← only if TickFeed off
 3. MouthLayerTimeline hard-snap                        ← disabled under TickFeed
 ```
+
+**Emotion → face:** Side B `look_drive` carries `emotion_id` + `brow`; measured
+`face_cell_timeline` velocity is full-face FIELD (brows/cheeks included). Labels
+drive LOOK (plates/brow ease); FIELD warps identity. Lab default
+`AIFACE_TICKFEED_ABSOLUTE=1` sends KEY every tick (`S:=vel`) so 16.7 ms frames
+do not accumulate Δ residue (blink lids use overlay only — no blink muscle warp
+on top of FIELD).
+
+**FIELD semantics (phase-1):** ch0/1 are **rest-relative displacement** of the
+face patch (Farneback from the first/rest frame → each frame), not frame-to-frame
+optical flow. The avatar samples them as warp vectors. Frame-Δ flow + constraint
+damping/neighbor blend left lower-lip residue; collect stores rest→frame, KEY
+preserve skips damp/blend on ingest ticks, and TickFeed LOOK sets jaw assist to 0.
 
 Catalog ease must not overwrite `_expr_plate_blend` / plate amounts while
 TickFeed owns LOOK.
@@ -479,6 +495,10 @@ Side B / ML → TickPackage (KEY|Δ, full-face, labels)
 Demo ``--wire-loop`` (default in run_tickfeed_demo.py): master ring is fed by
 ``ingest_from_wire`` (pull latest c_t → L4 expand, or lane-B package decode)
 instead of the in-process produce→submit path — proving the bandwidth claim.
+
+Demo presence (``app.py``): **0-state** = closed lips + natural blink; **hearing**
+while the user types or waits on the LLM; **speaking** during visemes/TTS; each
+chat turn returns to 0-state when speech ends.
 ```
 
 ---

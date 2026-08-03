@@ -18,6 +18,9 @@ layout(std430, binding = 2) readonly restrict buffer CommandBuffer {
 
 uniform uvec2 grid_size;
 uniform uint command_count;
+// 1 = TickFeed just assigned/added face velocity this tick — do not damp or
+// neighbor-blend ch0/1 (those fight KEY S:=vel and reintroduce residue).
+uniform int preserve_velocity;
 
 const float PRIORITY_TOLERANCE = 1e-4;
 
@@ -89,9 +92,12 @@ void main() {
         // dissipate it. Without this relaxation the impulse field only ever
         // climbs, pinning every mouth cell at the clamp after a few phonemes.
         // Landing exactly on rest keeps a resting world a fixed point on save.
-        for (int channel = 0; channel < VELOCITY_CHANNELS; ++channel) {
-            float relaxed = state[channel] * VELOCITY_DAMPING;
-            state[channel] = abs(relaxed) < EMPTY_EPSILON ? 0.0 : relaxed;
+        // Skip when TickFeed owns ch0/1 this tick (KEY/Δ already absolute).
+        if (preserve_velocity == 0) {
+            for (int channel = 0; channel < VELOCITY_CHANNELS; ++channel) {
+                float relaxed = state[channel] * VELOCITY_DAMPING;
+                state[channel] = abs(relaxed) < EMPTY_EPSILON ? 0.0 : relaxed;
+            }
         }
         // Quantisation is for matter, not for walls: a hard surface keeps the
         // exact material the seed gave it.
@@ -174,7 +180,14 @@ void main() {
     // Velocity-only neighbor couple for unlocked soft tissue. Cells can push
     // energy toward Moore neighbors without advecting albedo / density / lock
     // (those stay on this cell — identity Master Lock story intact).
-    if (!is_locked(state) && state[25] >= 0.5 && VELOCITY_NEIGHBOR_BLEND > 1e-6) {
+    // Disabled under TickFeed preserve: border cells otherwise suck stale
+    // outside-ROI velocity back into a just-zeroed KEY face.
+    if (
+        preserve_velocity == 0
+        && !is_locked(state)
+        && state[25] >= 0.5
+        && VELOCITY_NEIGHBOR_BLEND > 1e-6
+    ) {
         vec2 accum = vec2(0.0);
         float weight = 0.0;
         for (int oy = -1; oy <= 1; ++oy) {

@@ -48,6 +48,10 @@ MIN_EYE_APERTURE: Final = 0.12
 MIN_OPEN_DELTA: Final = 0.035
 #: Smile width must exceed rest by at least this amount (or fail closed).
 MIN_SMILE_WIDTH_DELTA: Final = 0.015
+#: Rest / identity must stay at or below this mouth_open (else lips look open forever).
+MAX_REST_MOUTH_OPEN: Final = 0.18
+#: Rest teeth visibility above this fails closed (visible enamel on identity).
+MAX_REST_TEETH: Final = 0.12
 #: Use scripted phase windows when the take is at least this long.
 PHASE_SPLIT_SECONDS: Final = 8.0
 
@@ -757,14 +761,24 @@ def load_still_as_sample(
 
 
 def _pick_rest(pool: Sequence[FrameSample]) -> FrameSample:
-    # Prefer closed lips, no teeth, lowest smile width — a smirk as identity
-    # is what users read as the permanent "hidden smile".
+    # Prefer closed lips first — teeth-before-open used to pick a wide-open
+    # "ah" with slightly lower teeth score as the immutable identity photo.
+    # Prefer frames that already pass rest gates when any exist.
+    closed = [
+        f
+        for f in pool
+        if f.metrics.mouth_open <= MAX_REST_MOUTH_OPEN
+        and f.metrics.teeth <= MAX_REST_TEETH
+    ]
+    use = closed if closed else list(pool)
+    # Among equal mouth_open (landmark floor ~0.15), prefer low smile width so
+    # a calm closed-lip frame beats a parted-lip worried look with less teeth.
     return min(
-        pool,
+        use,
         key=lambda f: (
-            f.metrics.teeth,
             f.metrics.mouth_open,
             f.metrics.smile_width,
+            f.metrics.teeth,
             -f.metrics.sharpness,
         ),
     )
@@ -839,6 +853,17 @@ def validate_selection(
     smile_w = selection.smile.metrics.smile_width
     open_delta = open_o - rest_o
     smile_delta = smile_w - rest_w
+    if rest_o > MAX_REST_MOUTH_OPEN:
+        raise CaptureError(
+            f"Rest/identity mouth_open={rest_o:.3f} > {MAX_REST_MOUTH_OPEN:.3f} "
+            "(identity would stay open when LOOK is REST). "
+            "Retake with a true closed-mouth neutral."
+        )
+    if selection.rest.metrics.teeth > MAX_REST_TEETH:
+        raise CaptureError(
+            f"Rest/identity shows teeth (teeth={selection.rest.metrics.teeth:.3f} > "
+            f"{MAX_REST_TEETH:.3f}). Retake with lips closed."
+        )
     if (not stills and selection.open.index == selection.rest.index) or open_delta < open_need:
         raise CaptureError(
             f"Open beat too similar to rest "
@@ -1350,10 +1375,14 @@ def write_capture_bundle(
         """Hi-res re-cut of the same source frame, or the frame itself."""
         return (hires or {}).get(int(frame.index), frame)
 
-    if selection.rest.metrics.teeth > 0.12:
+    if (
+        selection.rest.metrics.teeth > MAX_REST_TEETH
+        or selection.rest.metrics.mouth_open > MAX_REST_MOUTH_OPEN
+    ):
         print(
-            "warning: rest frame still shows teeth "
-            f"(teeth={selection.rest.metrics.teeth:.2f}). "
+            "warning: rest/identity not closed "
+            f"(mouth_open={selection.rest.metrics.mouth_open:.3f}, "
+            f"teeth={selection.rest.metrics.teeth:.3f}). "
             "Retake with a true closed-mouth neutral for a calm identity.",
             flush=True,
         )

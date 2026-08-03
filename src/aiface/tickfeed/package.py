@@ -43,12 +43,14 @@ class TickLabels:
     open_amt: float = 0.0
     surprise_amt: float = 0.0
     word: str = ""
+    # Packed into former reserved bytes (wire still LABELS_BYTES=48).
+    brow_amt: float = 0.0
 
     def pack(self) -> bytes:
         word = self.word.encode("utf-8")[:16]
         word = word + b"\x00" * (16 - len(word))
         return struct.pack(
-            "<BBBB fff 16s 16s",
+            "<BBBB fff 16s f 12s",
             int(self.beat_id) & 0xFF,
             int(self.emotion_id) & 0xFF,
             int(self.viseme_id) & 0xFF,
@@ -57,15 +59,16 @@ class TickLabels:
             float(self.open_amt),
             float(self.surprise_amt),
             word,
-            b"\x00" * 16,
+            float(self.brow_amt),
+            b"\x00" * 12,
         )
 
     @classmethod
     def unpack(cls, data: bytes) -> TickLabels:
         if len(data) < LABELS_BYTES:
             raise ValueError("labels block too short")
-        beat, emo, vis, conf, smile, open_, surprise, word, _res = struct.unpack(
-            "<BBBB fff 16s 16s", data[:LABELS_BYTES]
+        beat, emo, vis, conf, smile, open_, surprise, word, brow, _res = struct.unpack(
+            "<BBBB fff 16s f 12s", data[:LABELS_BYTES]
         )
         return cls(
             beat_id=beat,
@@ -76,6 +79,7 @@ class TickLabels:
             open_amt=float(open_),
             surprise_amt=float(surprise),
             word=word.split(b"\x00", 1)[0].decode("utf-8", errors="replace"),
+            brow_amt=float(brow),
         )
 
     @staticmethod

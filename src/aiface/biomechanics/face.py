@@ -184,7 +184,13 @@ class BiomechanicalFace:
                 self.last_phoneme = str(phonemes[0]).upper()
                 self.speaking_until = self.simulation_time + 0.2
 
-    def step(self, dt: float, *, tick: int) -> tuple[FaceRenderState, list[FieldImpulseSpec]]:
+    def step(
+        self,
+        dt: float,
+        *,
+        tick: int,
+        tickfeed_field: bool = False,
+    ) -> tuple[FaceRenderState, list[FieldImpulseSpec]]:
         if dt < 0.0:
             raise ValueError("dt must be non-negative")
         self.simulation_time += dt
@@ -196,7 +202,12 @@ class BiomechanicalFace:
         self.impulses.push_many(self.breathing.step(dt))
         self.impulses.push_many(self.idle.step(dt, speaking=speaking))
         self.impulses.push_many(
-            self.eyes.step(dt, arousal=self.emotion.state.arousal)
+            self.eyes.step(
+                dt,
+                arousal=self.emotion.state.arousal,
+                # Lid overlay only when TickFeed owns face velocity FIELD.
+                emit_impulses=not tickfeed_field,
+            )
         )
 
         drives = self.impulses.step(dt)

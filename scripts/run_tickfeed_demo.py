@@ -128,9 +128,20 @@ def _preflight() -> list[str]:
             print(f"  provenance: source=0 (measured) count={measured}/{len(src)}")
 
     print("  LOOK path: TickFeed labels (MouthLayerTimeline disabled when enabled)")
-    print("  ring: produce_tick = master + RING_DEPTH (B3 lead)")
+    print("  ring: local-ring produce=master (same tick); wire-loop uses RING_DEPTH lead")
     print("  transport: CHORUS lane A (c_t) + lane B (TickPackage frames/TPK_REF)")
-    print("  wire-loop: master pulls transport → expand/decode → ring (default on)")
+    print("  wire-loop: opt-in (--wire-loop); default local-ring for FPS")
+
+    catalog_path = WORLD / "expression_catalog.json"
+    if catalog_path.is_file():
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        rest_open = float((catalog.get("roles") or {}).get("rest", {}).get("mouth_open", 1.0))
+        print(f"  identity rest mouth_open={rest_open:.3f}")
+        if rest_open > 0.18:
+            fails.append(
+                f"identity rest mouth_open={rest_open:.3f} too high "
+                "(source_face would look open at REST)"
+            )
     return fails
 
 
@@ -144,10 +155,10 @@ def main() -> int:
     parser.add_argument(
         "--wire-loop",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
             "Master consumes c_t from transport (proves bandwidth path). "
-            "Use --no-wire-loop for local produce→ring only"
+            "Off by default — CHORUS per-tick spam tanks FPS on lab GPUs"
         ),
     )
     parser.add_argument(
@@ -193,6 +204,12 @@ def main() -> int:
         "--demo",
         "--tts",
         "--gpu-log",
+        "--bridge",
+        "--bridge-direct-speak",
+        "--bridge-token",
+        os.environ.get("AIFACE_BRIDGE_TOKEN", "tickfeed-lab"),
+        "--bridge-port",
+        os.environ.get("AIFACE_BRIDGE_PORT", "8766"),
         "--world",
         str(BDS),
         "--face-image",
