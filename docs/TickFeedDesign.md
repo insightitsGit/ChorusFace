@@ -507,6 +507,11 @@ LOOK moods: ``neutral`` (no impression), ``smile`` (closed-lip smile plate),
 ``POST /calibrate {"zero_mood":"neutral|smile|waiting"}``. Note: identity
 ``source_face.png`` on this take is already a soft smile — ``neutral`` removes
 the smile *plate* / brow drives, but cannot invent a flatter rest photo.
+
+Live speech LOOK overlay release uses **absolute audio span ends**
+(``speech_overlay_until`` / ``due_at + duration``, capped by next event) — not
+``now + vowel_hold_floor``. TickFeed disables cumulative ``viseme_min_hold``
+span shifting so word closures stay on the audio clock.
 ```
 
 ---

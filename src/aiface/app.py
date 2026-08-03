@@ -2097,14 +2097,17 @@ class AvatarFaceApp(FieldRuntime):
                 getattr(self, "_mouth_transition", "REST") or "REST"
             )
             vel = abs(float(getattr(self, "_plate_open_vel", 0.0) or 0.0))
-            if mouth_state in {"OPENING", "CLOSING"} and (
-                vel > 0.8 or 0.12 <= plate_o <= 0.60
-            ):
-                field_gain *= 0.08
+            # Single-owner mid-band: LOOK plate owns oral disk during motion;
+            # keep a little FIELD at steady OPEN so motion does not freeze.
+            if mouth_state in {"OPENING", "CLOSING"}:
+                if vel > 0.6 or 0.10 <= plate_o <= 0.65:
+                    field_gain *= 0.05
+                else:
+                    field_gain *= 0.12
             elif plate_o >= 0.45 or mouth_state == "OPEN":
-                field_gain *= 0.10
+                field_gain *= 0.12
             elif plate_o >= 0.12:
-                field_gain *= max(0.35, 1.0 - 0.70 * plate_o)
+                field_gain *= max(0.30, 1.0 - 0.75 * plate_o)
             # else REST / near-closed: full recipe gain
         self._field_gain_eff = float(field_gain)
         program["avatar_field_gain"].value = field_gain
@@ -2116,7 +2119,7 @@ class AvatarFaceApp(FieldRuntime):
             and str(getattr(self, "_mouth_transition", "REST"))
             in {"OPENING", "CLOSING", "OPEN"}
         ):
-            sharp = max(sharp, 0.92)
+            sharp = max(sharp, 0.95)
         program["avatar_plate_sharpness"].value = sharp
         # Cosmetic prefs (scaffolding) — grade only, never replace identity photo.
         if self._cosmetics is not None:
@@ -2508,9 +2511,18 @@ class AvatarFaceApp(FieldRuntime):
 
         pace = self._speech_pace()
         raw_dur = float(speech.duration)
-        speech = apply_speech_pace(
-            speech, pace, min_hold=self._viseme_min_hold()
+        # TickFeed word-lock: pace may stretch audio+spans together, but never
+        # cumulatively shift later spans via min_hold (that breaks absolute sync).
+        min_hold = (
+            0.0
+            if getattr(self, "_tickfeed_look_authority", False)
+            or (
+                self._tickfeed is not None
+                and getattr(self._tickfeed, "enabled", False)
+            )
+            else self._viseme_min_hold()
         )
+        speech = apply_speech_pace(speech, pace, min_hold=min_hold)
         if abs(pace - 1.0) > 1e-3:
             print(
                 f"Speech pace {pace:.3f}: audio "
@@ -2539,13 +2551,20 @@ class AvatarFaceApp(FieldRuntime):
         # that is no longer being spoken.
         self._visemes.clear()
         self._mouth_timeline.clear()
-        events = schedule_spans(speech.span_tuples(), emotion, start_at=start_at)
+        # Keep span durations close to measured audio; overlay release clamps
+        # to next_due anyway (see speech_overlay_until).
+        events = schedule_spans(
+            speech.span_tuples(),
+            emotion,
+            start_at=start_at,
+            minimum_hold=0.028,
+        )
         events.append(
             VisemeEvent(
                 phoneme="REST",
                 emotion=emotion,
                 due_at=start_at + speech.duration,
-                duration=0.12,
+                duration=0.08,
             )
         )
         self._telemetry.alignment = speech.alignment
@@ -3000,18 +3019,19 @@ class AvatarFaceApp(FieldRuntime):
         *,
         duration: float = 0.14,
         next_due_at: float | None = None,
+        due_at: float | None = None,
     ) -> None:
         """Speech does not write geometry. It injects muscle impulses."""
         started = time.perf_counter()
         from aiface.plates import OPEN_TOOTH_VISEMES, VISEME_OPENNESS
-        from aiface.speech import canonical_viseme
+        from aiface.speech import canonical_viseme, speech_overlay_until
 
         now = time.perf_counter() - self._clock0
         key = canonical_viseme(phoneme)
 
         if self._tickfeed_look_authority:
-            # TickFeed path: viseme table amounts; closures always interrupt opens
-            # (ChatGPT/Gemini roadmap — never skip PP/MM/CLOSED for word lock).
+            # TickFeed path: viseme table amounts; closures always interrupt opens.
+            # Overlay until = absolute audio span end (not now+vowel floor).
             open_amt = float(VISEME_OPENNESS.get(key, 0.0))
             smile_amt = 0.0
             if open_amt < 0.2 and (emotion or "").upper() in {"HAPPY", "JOY"}:
@@ -3021,23 +3041,13 @@ class AvatarFaceApp(FieldRuntime):
             if is_closure:
                 open_amt = 0.0
                 smile_amt = 0.0
-            pace = self._speech_pace()
-            span = max(float(duration), 0.05 * pace)
-            if next_due_at is not None:
-                span = max(span, min(float(next_due_at) - now, 0.28 * pace))
-            # Interruptible holds: closures get a short visible floor; vowels
-            # hold less aggressively so bilabials can land mid-word.
-            if is_closure:
-                hold_floor = max(0.040 * pace, 0.035)
-            else:
-                hold_floor = 0.18 * pace
-                if key in OPEN_TOOTH_VISEMES or open_amt >= 0.45:
-                    hold_floor = 0.28 * pace
-                # Cap recipe min_hold so pace=1.0 does not smear the sentence.
-                hold_floor = max(hold_floor, min(self._viseme_min_hold(), 0.06))
-            if is_closure:
-                # Closures always win over a prior open hold.
                 self._plate_open_hyst = 0.0
+            until = speech_overlay_until(
+                now=now,
+                due_at=due_at,
+                duration=float(duration),
+                next_due_at=next_due_at,
+            )
             self._presence = PRESENCE_SPEAKING
             self._tickfeed_live = {
                 "phoneme": key,
@@ -3046,7 +3056,9 @@ class AvatarFaceApp(FieldRuntime):
                 "surprise": 0.0,
                 "emotion": (emotion or "NEUTRAL").strip().upper() or "NEUTRAL",
                 "mode": "speech",
-                "until": now + max(span, hold_floor),
+                "until": until,
+                "due_at": float(due_at) if due_at is not None else now,
+                "end_at": until,
             }
             self._held_speech_viseme = key
             self._mouth_timeline.clear()
@@ -3055,7 +3067,7 @@ class AvatarFaceApp(FieldRuntime):
                 phoneme,
                 tick=self.tick + 1,
                 emotion_label=emotion,
-                duration=max(float(duration), 0.08),
+                duration=max(float(duration), 0.05),
             )
         else:
             self._mouth_timeline.fire(
@@ -3090,6 +3102,7 @@ class AvatarFaceApp(FieldRuntime):
                 event.emotion,
                 duration=event.duration,
                 next_due_at=next_due,
+                due_at=float(event.due_at),
             )
 
     def _upcoming_viseme(self) -> tuple[float | None, str | None]:
@@ -3388,11 +3401,13 @@ class AvatarFaceApp(FieldRuntime):
             )
             ia = max(0, min(ia, len(self._atlas_textures) - 1))
             ib = max(0, min(ib, len(self._atlas_textures) - 1))
-            # During OPENING/CLOSING, commit plate amount a bit earlier so the
-            # oral disk isn't half plate / half FIELD (ghost mid-band).
+            # During OPENING/CLOSING, commit plate amount earlier so the oral
+            # disk isn't half plate / half FIELD (ghost mid-band blur).
             amount = plate_amt
-            if state in {"OPENING", "CLOSING"} and amount > 0.08:
-                amount = max(amount, min(1.0, amount * 1.15 + 0.06))
+            if state in {"OPENING", "CLOSING"} and amount > 0.06:
+                amount = max(amount, min(1.0, amount * 1.25 + 0.10))
+            elif state == "OPEN" and amount > 0.35:
+                amount = max(amount, min(1.0, amount * 1.08))
             self._plate_pair = (ia, ib)
             self._plate_blend = (float(mix), amount)
             self._plate_blend_current = (float(mix), amount)

@@ -704,6 +704,30 @@ def schedule_spans(
     return events
 
 
+def speech_overlay_until(
+    *,
+    now: float,
+    due_at: float | None,
+    duration: float,
+    next_due_at: float | None,
+    frame: float = 1.0 / 60.0,
+) -> float:
+    """Absolute audio-clock release time for a TickFeed live LOOK overlay.
+
+    Fire times already use ``due_at = start_at + span.start``. Display must
+    release at the scheduled span end (capped by the next event), not at
+    ``now + vowel_hold_floor`` — those floors drifted lips past word closures.
+    """
+    due = float(due_at) if due_at is not None else float(now)
+    scheduled_end = due + max(float(duration), 0.0)
+    # Late fires still get one visible frame.
+    until = max(scheduled_end, float(now) + max(float(frame), 1e-4))
+    if next_due_at is not None:
+        # Never overrun the next scheduled speech event (interruptible).
+        until = min(until, max(float(next_due_at), float(now) + max(float(frame), 1e-4)))
+    return float(until)
+
+
 def compose_impulse(phoneme: str, emotion: str) -> tuple[float, float]:
     """Blend a viseme and a mood into one grid-space velocity impulse."""
     base = PHONEME_IMPULSES.get(canonical_viseme(phoneme), PHONEME_IMPULSES["REST"])
@@ -891,6 +915,7 @@ __all__ = [
     "phoneme_hold",
     "schedule_spans",
     "schedule_visemes",
+    "speech_overlay_until",
     "spoken_number",
     "strip_tags",
     "text_to_visemes",
