@@ -586,10 +586,28 @@ when frames exist; `MM` aliases to PP.
 | `scripts/_tmp_full_cycle.py` | Speak/preview capture for visual QA |
 | `tests/test_speech_overlay_until.py` | Absolute until contract |
 | `tests/test_bilabial_onset.py` | PP onset pin / borrow |
+| `tests/test_eye_blink.py` | Blink envelope + state machine + dt cap |
 
-### 14.7 Explicitly deferred (still after §14)
+### 14.7 Blink band (post-initial — same playbook as mouth)
 
-These remain **future** — not part of the post-initial mouth pass:
+> Same separation as §14.2–§14.3: **EyeSystem schedules**, L09 **owns** the
+> aperture while blinking, FIELD/widen/brow must not fight the lids.
+
+| Improvement | Behavior | Code |
+| --- | --- | --- |
+| Blink state machine | `OPEN` / `CLOSING` / `CLOSED` / `OPENING` | `biomechanics/eyes.py` |
+| dt cap on phase | Huge FPS hitch cannot skim the closed hold | `BLINK_MAX_STEP_S` |
+| Blink beats widen | Waiting/surprise widen muted during close | `app` expr upload + `avatar.frag` L09 |
+| Eye-disk FIELD mute | Mute FIELD (+ soft muscle) under lids while blinking | `total_displacement` in `avatar.frag` |
+| Harder lid commit | Earlier full shut; rest = photo (no soft globe bars) | L09 lid cover |
+| L08/L10 bow-out | Surprise plate + procedural brow ease under blink | L08/L10 |
+
+Non-goals (unchanged): no Orbicularis blink muscle under TickFeed FIELD; no
+invented closed-eye RGB plates.
+
+### 14.8 Explicitly deferred (still after §14)
+
+These remain **future** — not part of the post-initial mouth/blink pass:
 
 1. **Lab MFA** — full phoneme forced-align beyond Whisper words  
 2. **New capture take** — true neutral rest + tongue-visible TH  
@@ -671,8 +689,9 @@ Honest code pointers. Prefer these over stale early-draft §7 text.
 | Zero moods | `app._set_zero_mood`, `_apply_zero_mood_overlay` |
 | Priority plate select / rebuild | `plates.select_viseme_atlas_frames`, `scripts/rebuild_tickfeed_plates.py` |
 | Denser Farneback | `tickfeed/collect._optical_flow_face_series` |
+| Blink state + lid ownership | `biomechanics/eyes.py`, `avatar.frag` L09 / eye-disk FIELD mute |
 | Demo play (quiet defaults) | `scripts/run_tickfeed_demo.py` |
-| Sync/blur unit tests | `tests/test_speech_overlay_until.py`, `tests/test_bilabial_onset.py` |
+| Sync/blur/blink unit tests | `tests/test_speech_overlay_until.py`, `test_bilabial_onset.py`, `test_eye_blink.py` |
 
 Canonical world: `output/worlds/tickfeed/` (identity `source_face.png`, timeline,
 `ml/`, `plate_atlas.json`). Do not treat old `output/worlds/avatar*` demos as

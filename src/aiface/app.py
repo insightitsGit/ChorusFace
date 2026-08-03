@@ -2013,9 +2013,18 @@ class AvatarFaceApp(FieldRuntime):
         program["avatar_plates_ready"].value = 1 if self._use_plates else 0
         self._avatar_expr_plate_texture.use(location=8)
         program["avatar_expr_plate"].value = 8
+        # Blink owns the aperture — do not upload widen/brow fight during close.
+        blink_close = float(
+            1.0 - min(float(state.lid_left), float(state.lid_right))
+        )
+        widen_upload = float(self._expr_eye_widen)
+        brow_upload = float(self._expr_brow_raise)
+        if blink_close > 0.05:
+            widen_upload *= max(0.0, 1.0 - blink_close * 1.15)
+            brow_upload *= max(0.0, 1.0 - blink_close * 0.85)
         program["avatar_expr_state"].value = (
-            float(self._expr_eye_widen),
-            float(self._expr_brow_raise),
+            widen_upload,
+            brow_upload,
             float(self._expr_plate_blend),
             1.0 if self._expression_catalog is not None else 0.0,
         )
@@ -3264,6 +3273,26 @@ class AvatarFaceApp(FieldRuntime):
             zero_mood = self._set_zero_mood(
                 str(payload.get("zero_mood") or ""), announce=False
             )
+        blinked = False
+        if payload.get("blink"):
+            if hasattr(self, "_biomech") and self._biomech is not None:
+                from aiface.biomechanics.eyes import (
+                    BLINK_HOLD_S,
+                    BLINK_OPEN_S,
+                    BLINK_STATE_CLOSED,
+                )
+
+                eyes = self._biomech.eyes
+                eyes.request_blink()
+                # Park at full close so /preview can inspect lids (blink is
+                # shorter than a slow bridge round-trip at lab FPS).
+                eyes.state.blink_phase = float(BLINK_OPEN_S + BLINK_HOLD_S)
+                eyes.state.blink_state = BLINK_STATE_CLOSED
+                eyes.state.lid_left = 0.0
+                eyes.state.lid_right = 0.0
+                eyes.state.lid_tension = 1.0
+                eyes.state.blink_pause_s = float(payload.get("blink_hold", 1.25) or 1.25)
+                blinked = True
         return {
             "ok": True,
             "mode": mode,
@@ -3271,6 +3300,7 @@ class AvatarFaceApp(FieldRuntime):
             "viseme_min_hold": float(self._display_recipe.viseme_min_hold),
             "zero_mood": zero_mood,
             "zero_moods": list(ZERO_MOODS),
+            "blink": blinked,
             "note": {
                 "normal": "LOOK plates + FIELD gain mute as usual",
                 "plate_only": "FIELD warp gain forced 0 — plates only",

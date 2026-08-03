@@ -287,6 +287,18 @@ vec2 total_displacement(vec2 grid_position) {
         distance(grid_position, avatar_mouth_line.xy)
     ));
     field *= (1.0 - plate_disk);
+    // Single-owner eye disk during blink (mouth-band analogue): mute FIELD
+    // under closing lids so brow/cheek teacher motion cannot smear L09.
+    float blink_amt = clamp(avatar_eye_state.w, 0.0, 1.0);
+    if (blink_amt > 0.04) {
+        float eye_r = max(avatar_eye_shape.x, avatar_eye_shape.y) * 2.35;
+        float d_l = distance(grid_position, avatar_eye_centers.xy);
+        float d_r = distance(grid_position, avatar_eye_centers.zw);
+        float near_eye = 1.0 - smoothstep(eye_r * 0.65, eye_r * 1.35, min(d_l, d_r));
+        field *= (1.0 - blink_amt * near_eye);
+        // Soften muscle twitches in the same disk (TickFeed usually has none).
+        muscles *= (1.0 - blink_amt * near_eye * 0.85);
+    }
     return muscles + jaw + field;
 }
 
@@ -638,57 +650,64 @@ void main() {
         }
 
         // L08: upper-face expression plate (surprise brows / wider lids).
+        // Bow out under a blink so L09 lids stay single-owner.
         if (avatar_expr_state.w > 0.5 && avatar_expr_state.z > 0.001) {
             vec4 expr = texture(avatar_expr_plate, to_uv(grid_position));
             float expr_a = expr.a * clamp(avatar_expr_state.z, 0.0, 1.0);
+            expr_a *= (1.0 - smoothstep(0.08, 0.40, clamp(avatar_eye_state.w, 0.0, 1.0)));
             color = mix(color, expr.rgb, expr_a);
             face_alpha = max(face_alpha, expr_a);
         }
 
-        // L09: eyes — lid sliding over a fixed globe (presentation plane).
+        // L09: eyes — presentation lids (TickFeed: no blink muscle on FIELD).
+        // Post-initial blink band: rest = photo; blink owns aperture; widen
+        // cannot steal closure; hard lid commit (mouth single-owner analogue).
         float aperture = tissue_at(source).a;
         if (aperture > 0.004) {
+            float blink = clamp(avatar_eye_state.w, 0.0, 1.0);
             float widen = clamp(avatar_expr_state.x, 0.0, 1.0);
-            // Surprise holds lids open against blink and expands the aperture.
-            float blink = clamp(avatar_eye_state.w - widen * 0.90, 0.0, 1.0);
+            // Blink beats widen — waiting/surprise must not leave a slit.
+            widen *= (1.0 - smoothstep(0.04, 0.22, blink));
             float half_height = max(avatar_eye_shape.y, 1.0) * (1.0 + widen * 0.45);
             float half_width = max(avatar_eye_shape.x, 1.0) * (1.0 + widen * 0.18);
             vec2 centre = grid_position.x < avatar_eye_centers.z
                 ? avatar_eye_centers.xy
                 : avatar_eye_centers.zw;
 
-            // At rest, keep the photograph. Globe/lid sampling on a slightly
-            // misplaced aperture was painting dark bars under the pupils.
+            // Rest / idle: keep the photograph. Only widen samples globe a bit.
             vec2 gaze = vec2(avatar_eye_state.x, avatar_eye_state.y) * avatar_eye_shape.z;
-            // Wider eyes sample a bit more of the globe toward the lid edge.
             vec2 wide_source = source + vec2(0.0, -widen * half_height * 0.22);
             vec3 globe = photo_at(wide_source - gaze);
-            float globe_w = aperture * (1.0 - blink)
-                * mix(0.12, 0.85, blink)
-                * (1.0 + widen * 0.55);
-            // Soft radial gate so widen does not smear cheek flesh.
+            float globe_w = aperture * (1.0 - blink) * widen * 0.55;
             vec2 d_eye = (grid_position - centre) / vec2(half_width, half_height);
             float eye_gate = 1.0 - smoothstep(0.85, 1.35, length(d_eye));
             color = mix(color, globe, clamp(globe_w * max(eye_gate, aperture), 0.0, 1.0));
 
-            // Lid skin only while blinking — never at open rest.
-            // At high blink commit the whole aperture so a slow blink actually
-            // reads as fully closed (soft covered*blink alone left a slit).
-            if (blink > 0.04) {
-                float lid_y = centre.y + half_height - blink * (2.35 * half_height);
-                float covered = smoothstep(lid_y - 1.1, lid_y + 1.1, grid_position.y);
-                float lid_cover = mix(
-                    covered * blink,
-                    1.0,
-                    smoothstep(0.72, 0.96, blink)
+            // Lid skin while blinking — hard edge + early full shut.
+            if (blink > 0.02) {
+                float lid_y = centre.y + half_height - blink * (2.25 * half_height);
+                float covered = smoothstep(lid_y - 0.45, lid_y + 0.55, grid_position.y);
+                float lid_cover = max(
+                    covered,
+                    smoothstep(0.42, 0.72, blink)
                 );
-                vec3 lid_skin = photo_at(source + vec2(0.0, half_height * 1.9));
+                // Sample fixed upper-lid band relative to the eye centre.
+                // Sampling ``source + (0, k*hh)`` still hits brow hairs on
+                // fragments already near the top of the aperture.
+                float lid_band = half_height * mix(0.42, 0.78, blink);
+                vec2 lid_src = vec2(
+                    mix(source.x, centre.x, 0.18),
+                    centre.y + lid_band
+                );
+                vec3 lid_skin = photo_at(lid_src);
                 color = mix(color, lid_skin, clamp(aperture * lid_cover, 0.0, 1.0));
             }
         }
 
         // L10: brow raise without a plate — display-only, not Master-Lock gated.
+        // Mute brow lift inside a blink so lids stay the single owner.
         float brow = clamp(avatar_expr_state.y, 0.0, 1.0);
+        brow *= (1.0 - smoothstep(0.08, 0.35, clamp(avatar_eye_state.w, 0.0, 1.0)));
         if (brow > 0.04 && avatar_expr_state.z < 0.15) {
             int part = part_at(grid_position);
             if (part == PART_LEFT_BROW || part == PART_RIGHT_BROW || part == PART_FACE) {

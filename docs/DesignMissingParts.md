@@ -43,6 +43,7 @@ TickPackage contract. Full narrative: [`TickFeedDesign.md`](TickFeedDesign.md) ย
 | Priority distinct plate bank + rebuild script | **DONE** | `rebuild_tickfeed_plates.py` |
 | Denser Farneback for teacher timeline | **DONE** | `collect.py` + `--timeline` |
 | Quiet demo logs (FPS) | **DONE** | `--gpu-log` / `--tickfeed-debug` opt-in |
+| Blink state + eye-disk FIELD mute + hard lids | **DONE** | `eyes.py`, `avatar.frag` L09 (ยง14.7) |
 
 ---
 
