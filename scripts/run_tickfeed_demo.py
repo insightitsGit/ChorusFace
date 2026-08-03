@@ -176,6 +176,16 @@ def main() -> int:
             "0 = recipe default"
         ),
     )
+    parser.add_argument(
+        "--gpu-log",
+        action="store_true",
+        help="Enable 60 Hz GPU tick log (stdout+file) — costs FPS",
+    )
+    parser.add_argument(
+        "--tickfeed-debug",
+        action="store_true",
+        help="Enable Side A JSONL debug ingest log — costs FPS",
+    )
     args = parser.parse_args()
 
     print("TickFeed demo preflight")
@@ -212,10 +222,8 @@ def main() -> int:
         "aiface",
         "--demo",
         "--tts",
-        "--gpu-log",
         "--bridge",
         "--bridge-direct-speak",
-        "--tickfeed-debug",
         "--bridge-token",
         os.environ.get("AIFACE_BRIDGE_TOKEN", "tickfeed-lab"),
         "--bridge-port",
@@ -227,6 +235,11 @@ def main() -> int:
         "--wire-loop-source",
         str(args.wire_loop_source),
     ]
+    # Hot-path logs off by default — they were tanking lab FPS (~6–7).
+    if args.gpu_log:
+        cmd.append("--gpu-log")
+    if args.tickfeed_debug:
+        cmd.append("--tickfeed-debug")
     cmd.append("--wire-loop" if args.wire_loop else "--no-wire-loop")
     if float(args.speech_pace) > 0.0:
         cmd.extend(["--speech-pace", str(float(args.speech_pace))])

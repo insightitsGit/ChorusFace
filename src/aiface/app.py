@@ -679,6 +679,8 @@ class AvatarFaceApp(FieldRuntime):
         self._speech: SpeechSynthesizer | None = None
         self._audio: AudioSink | None = None
         self._speech_trim = float(getattr(self.argv, "tts_latency", 0.0))
+        # Wall-clock anchor for audio media_time → viseme due_at (playback sync).
+        self._audio_anchor: float | None = None
         self._start_speech_engine()
         self._bridge: FaceBridge | None = None
         self._open_voice_channel()
@@ -1390,7 +1392,7 @@ class AvatarFaceApp(FieldRuntime):
         live = self._tickfeed_live
         if live is None:
             return False
-        now = time.perf_counter() - self._clock0
+        now = self._speech_now()
         return now <= float(live.get("until", 0.0))
 
     def _tickfeed_live_mode(self) -> str:
@@ -2531,9 +2533,15 @@ class AvatarFaceApp(FieldRuntime):
         sink = self._audio
         if sink is not None:
             sink.play(speech.clip)
-        # Sample the clock after the call: the clip is running from now on.
-        latency = (sink.startup_latency if sink is not None else 0.0)
-        start_at = time.perf_counter() - self._clock0 + latency + self._speech_trim
+        # Anchor at play return; prefer sink.media_time() over fixed latency.
+        self._audio_anchor = time.perf_counter() - self._clock0
+        has_media = (
+            sink is not None and callable(getattr(sink, "media_time", None))
+        )
+        latency = 0.0 if has_media else (
+            sink.startup_latency if sink is not None else 0.0
+        )
+        start_at = float(self._audio_anchor) + latency + self._speech_trim
         # Open/close ML tracks this clip's RMS envelope on the same clock.
         self._open_close_envelope = rms_envelope(speech.clip)
         self._open_close_start = start_at
@@ -3026,7 +3034,7 @@ class AvatarFaceApp(FieldRuntime):
         from aiface.plates import OPEN_TOOTH_VISEMES, VISEME_OPENNESS
         from aiface.speech import canonical_viseme, speech_overlay_until
 
-        now = time.perf_counter() - self._clock0
+        now = self._speech_now()
         key = canonical_viseme(phoneme)
 
         if self._tickfeed_look_authority:
@@ -3092,8 +3100,19 @@ class AvatarFaceApp(FieldRuntime):
         self._telemetry.impulses_fired += 1
         self._telemetry.command_latency_ms = (time.perf_counter() - started) * 1000.0
 
+    def _speech_now(self) -> float:
+        """Clock for viseme fire — prefer audio media_time when playing."""
+        anchor = getattr(self, "_audio_anchor", None)
+        sink = self._audio
+        media_fn = getattr(sink, "media_time", None) if sink is not None else None
+        if anchor is not None and callable(media_fn):
+            media = media_fn()
+            if media is not None:
+                return float(anchor) + float(media) + float(self._speech_trim)
+        return time.perf_counter() - self._clock0
+
     def _advance_visemes(self) -> None:
-        now = time.perf_counter() - self._clock0
+        now = self._speech_now()
         while self._visemes and self._visemes[0].due_at <= now:
             event = self._visemes.popleft()
             next_due, _next_ph = self._upcoming_viseme()

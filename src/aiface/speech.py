@@ -121,7 +121,7 @@ EMOTION_IMPULSES: Final[dict[str, tuple[float, float]]] = {
 PHONEME_DURATION_SCALE: Final[dict[str, float]] = {
     "REST": 0.70,
     "CLOSED": 0.85,
-    "PP": 0.55,
+    "PP": 0.85,
     "FF": 0.75,
     "TH": 0.75,
     "DD": 0.50,

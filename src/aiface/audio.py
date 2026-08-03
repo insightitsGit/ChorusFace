@@ -26,6 +26,7 @@ import struct
 import subprocess
 import tempfile
 import threading
+import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -387,6 +388,10 @@ class AudioSink(Protocol):
 
     def close(self) -> None: ...
 
+    def media_time(self) -> float | None:
+        """Seconds since current clip started, or None if unknown."""
+        ...
+
 
 class NullSink:
     """Swallows audio. Used by ``--no-audio`` and by headless tests."""
@@ -396,15 +401,26 @@ class NullSink:
 
     def __init__(self) -> None:
         self.played: list[AudioClip] = []
+        self._t0: float | None = None
 
     def play(self, clip: AudioClip) -> None:
+        import time as _time
+
         self.played.append(clip)
+        self._t0 = _time.perf_counter()
+
+    def media_time(self) -> float | None:
+        import time as _time
+
+        if self._t0 is None:
+            return None
+        return max(0.0, _time.perf_counter() - self._t0)
 
     def stop(self) -> None:
-        return None
+        self._t0 = None
 
     def close(self) -> None:
-        return None
+        self.stop()
 
 
 class SoundDeviceSink:
@@ -419,12 +435,26 @@ class SoundDeviceSink:
             raise AudioError(f"sounddevice unavailable ({exc})") from exc
         self._module = sounddevice
         self.startup_latency = SOUNDDEVICE_LATENCY
+        self._t0: float | None = None
 
     def play(self, clip: AudioClip) -> None:
+        import time as _time
+
         self._module.stop()
         self._module.play(clip.samples, clip.sample_rate, blocking=False)
+        # Anchor after play() returns — media_time tracks clip progress for
+        # viseme fire instead of a fixed startup_latency guess alone.
+        self._t0 = _time.perf_counter()
+
+    def media_time(self) -> float | None:
+        import time as _time
+
+        if self._t0 is None:
+            return None
+        return max(0.0, _time.perf_counter() - self._t0)
 
     def stop(self) -> None:
+        self._t0 = None
         self._module.stop()
 
     def close(self) -> None:
@@ -441,6 +471,7 @@ class _TempWavSink:
         self._directory = Path(tempfile.mkdtemp(prefix="aiface-audio-"))
         self._lock = threading.Lock()
         self._slot = 0
+        self._t0: float | None = None
 
     def _write(self, clip: AudioClip) -> Path:
         # Alternate two files: a backend may still hold the previous one open.
@@ -449,11 +480,19 @@ class _TempWavSink:
         path.write_bytes(clip.to_wav_bytes())
         return path
 
+    def _mark_started(self) -> None:
+        self._t0 = time.perf_counter()
+
+    def media_time(self) -> float | None:
+        if self._t0 is None:
+            return None
+        return max(0.0, time.perf_counter() - self._t0)
+
     def play(self, clip: AudioClip) -> None:
         raise NotImplementedError
 
     def stop(self) -> None:
-        raise NotImplementedError
+        self._t0 = None
 
     def close(self) -> None:
         self.stop()
@@ -483,10 +522,12 @@ class WinsoundSink(_TempWavSink):
                 | self._module.SND_NODEFAULT
             )
             self._module.PlaySound(str(path), flags)
+            self._mark_started()
 
     def stop(self) -> None:
         with self._lock:
             self._module.PlaySound(None, self._module.SND_PURGE)
+            self._t0 = None
 
 
 class CommandSink(_TempWavSink):
@@ -532,6 +573,7 @@ class CommandSink(_TempWavSink):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            self._mark_started()
 
     def _terminate(self) -> None:
         process = self._process

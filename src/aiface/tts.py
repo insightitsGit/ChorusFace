@@ -208,6 +208,12 @@ def _viseme_weights(token: SpokenToken) -> list[float]:
     ]
 
 
+#: Bilabial / closed-lip onset pin (seconds). Energy warp otherwise buries
+#: PP inside the following vowel so "Peter/picked/pepper" never seals.
+BILABIAL_ONSET_PIN: Final = 0.045
+BILABIAL_VISEMES: Final = frozenset({"PP", "MM", "CLOSED"})
+
+
 def _subdivide(
     token: SpokenToken, start: float, end: float
 ) -> list[PhonemeSpan]:
@@ -217,13 +223,58 @@ def _subdivide(
     window = max(end - start, 0.0)
     spans: list[PhonemeSpan] = []
     cursor = start
-    for name, weight in zip(token.visemes, weights):
+    names = list(token.visemes)
+    # Pin leading bilabial to word onset so P/B/M read before the vowel.
+    if names and names[0] in BILABIAL_VISEMES and window > BILABIAL_ONSET_PIN + 0.02:
+        pin = min(BILABIAL_ONSET_PIN, window * 0.45)
+        spans.append(PhonemeSpan(names[0], start, start + pin))
+        cursor = start + pin
+        names = names[1:]
+        weights = weights[1:]
+        total = sum(weights)
+        window = max(end - cursor, 0.0)
+    for name, weight in zip(names, weights):
         share = window * (weight / total) if total > 0.0 else 0.0
         spans.append(PhonemeSpan(name, cursor, cursor + share))
         cursor += share
     if spans:
         spans[-1] = PhonemeSpan(spans[-1].phoneme, spans[-1].start, end)
     return spans
+
+
+def bias_bilabial_onsets(
+    spans: Sequence[PhonemeSpan],
+    *,
+    pin: float = BILABIAL_ONSET_PIN,
+) -> list[PhonemeSpan]:
+    """Ensure PP/MM/CLOSED spans keep a readable onset before the next vowel.
+
+    Applied after energy warp: if a bilabial is shorter than ``pin`` and the
+    following span is a vowel/open shape, borrow time from the follower
+    without shifting later absolute starts of unrelated spans.
+    """
+    if not spans:
+        return []
+    out = [PhonemeSpan(s.phoneme, float(s.start), float(s.end)) for s in spans]
+    for i, span in enumerate(out):
+        if span.phoneme not in BILABIAL_VISEMES:
+            continue
+        width = span.end - span.start
+        if width >= pin - 1e-6:
+            continue
+        if i + 1 >= len(out):
+            continue
+        nxt = out[i + 1]
+        if nxt.phoneme in BILABIAL_VISEMES:
+            continue
+        need = pin - width
+        borrow = min(need, max(0.0, (nxt.end - nxt.start) - MIN_SPAN))
+        if borrow <= 1e-6:
+            continue
+        new_end = span.end + borrow
+        out[i] = PhonemeSpan(span.phoneme, span.start, new_end)
+        out[i + 1] = PhonemeSpan(nxt.phoneme, new_end, nxt.end)
+    return out
 
 
 def _enforce_minimum(spans: Sequence[PhonemeSpan], limit: float) -> list[PhonemeSpan]:
@@ -239,7 +290,7 @@ def _enforce_minimum(spans: Sequence[PhonemeSpan], limit: float) -> list[Phoneme
             continue
         end = max(span.end, span.start + MIN_SPAN)
         result.append(PhonemeSpan(span.phoneme, span.start, min(end, limit)))
-    return result
+    return bias_bilabial_onsets(result)
 
 
 def _flatten(tokens: Sequence[SpokenToken]) -> tuple[list[str], list[float]]:
@@ -1067,6 +1118,7 @@ __all__ = [
     "align_linear",
     "align_text",
     "apply_speech_pace",
+    "bias_bilabial_onsets",
     "build_synthesizer",
     "detect_local_voice",
     "local_voice_available",

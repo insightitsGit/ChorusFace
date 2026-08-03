@@ -521,13 +521,23 @@ span shifting so word closures stay on the audio clock.
 **Done on branch:** compute ingest, ring lead, label LOOK, CHORUS two-lane push,
 energy force-align, measured provenance, PCA L4.
 
-Still useful next:
+**Pre-MFA mouth accuracy (done this pass):**
+- Absolute LOOK overlay release (`speech_overlay_until`)
+- Interruptible closures (never skip PP/MM/CLOSED)
+- Velocity-aware FIELD mute + early atlas commitment
+- Bilabial onset pin in live TTS align (`bias_bilabial_onsets`)
+- Playback `media_time` clock for viseme fire
+- Demo hot logs off by default (`--gpu-log` / `--tickfeed-debug` opt-in)
+- Atlas: closed plate openness 0; TH→FF plate (nearest lip constriction)
 
-1. Stronger dense face tracker than Farneback  
-2. MFA (or better) speech align vs energy placement  
-3. Multi-host HELLO_ACK + remote master consumer  
-4. L4 AE if PCA quality is insufficient  
-5. Per-avatar L3 size vs quality on more takes  
+**Next (in order):**
+
+1. **MFA (or Whisper word timestamps as default when keyed)** — true phoneme onsets vs energy  
+2. **Denser capture plate bank** — dedicated TH tongue, true neutral rest (not soft-smile identity), stronger PP seal frame  
+3. **Stronger dense face tracker** than Farneback (FIELD quality)  
+4. Multi-host HELLO_ACK + remote master consumer  
+5. L4 AE if PCA quality is insufficient  
+6. Per-avatar L3 size vs quality on more takes  
 
 ---
 
