@@ -9,7 +9,9 @@ from aiface.mouth_owner import (
     mute_smile_under_open,
     plate_amount_for_openness,
     resolve_mouth_ownership,
+    snap_midband_openness,
     snap_smile_drive,
+    viseme_instant_openness,
 )
 
 
@@ -119,7 +121,23 @@ def test_look_field_gain_full_at_rest() -> None:
     ) == 1.0
 
 
-def test_commit_plate_amount_boosts_transition() -> None:
-    boosted = commit_plate_amount(0.20, "OPENING")
-    assert boosted > 0.20
-    assert commit_plate_amount(0.02, "OPENING") == 0.02
+def test_commit_plate_amount_hard_on_transition() -> None:
+    assert commit_plate_amount(0.20, "OPENING") == 1.0
+    assert commit_plate_amount(0.02, "OPENING") == 0.0
+    assert commit_plate_amount(0.40, "OPEN") == 1.0
+
+
+def test_snap_midband_kills_soft_veil() -> None:
+    assert snap_midband_openness(0.10) == 0.0
+    assert snap_midband_openness(0.25) == 0.0
+    assert snap_midband_openness(0.40) == 1.0
+    assert snap_midband_openness(0.70) == 1.0
+
+
+def test_viseme_instant_openness_high_energy() -> None:
+    assert viseme_instant_openness("AA") == 1.0
+    assert viseme_instant_openness("OH") == 1.0
+    assert viseme_instant_openness("PP") == 0.0
+    # Mid consonants hard-commit out of soft band.
+    assert viseme_instant_openness("FF") in {0.0, 1.0}
+    assert viseme_instant_openness("FF") == 1.0

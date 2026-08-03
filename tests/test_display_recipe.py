@@ -86,23 +86,21 @@ def test_shader_warps_from_nwr_field() -> None:
     assert "uniform float avatar_field_gain;" in source
     assert "field_displacement" in source
     # The field term must be part of the visible deformation, not debug-only.
-    total = source.split("vec2 total_displacement", 1)[1].split("}", 1)[0]
-    assert "field_displacement" in total
-    assert "muscles + jaw + field" in total
+    assert "vec2 total_displacement" in source
+    assert "return muscles + jaw + field;" in source
     assert DisplayRecipe().field_warp_gain > 0.0
 
 
 def test_shader_snaps_plates_with_recipe_knob() -> None:
-    """AMIN step 12: the plate-snap knob is a real uniform used by the blend."""
+    """AMIN step 12 / Task 1: hard step ownership under plate_sharpness."""
     source = SHADER.read_text(encoding="utf-8")
     assert "uniform float avatar_plate_sharpness;" in source
-    # Loaded once into `snap`, then applied to capture drives + atlas matte.
     assert "float snap = clamp(avatar_plate_sharpness" in source
-    assert "smoothstep(0.18, 0.82, open_drive), snap)" in source
-    assert "harden_matte(max(pa.a, pb.a), snap)" in source
+    assert "step(0.32, open_drive)" in source
+    assert "step(0.50, mix_ab)" in source
+    assert "step(0.55, layer_open)" in source
     recipe = DisplayRecipe()
     assert 0.0 < recipe.plate_sharpness <= 1.0
-    # The knob rides the same serialized contract as every other knob.
     restored = DisplayRecipe.from_payload(
         DisplayRecipe(plate_sharpness=0.9).to_payload()
     )

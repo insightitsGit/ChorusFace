@@ -85,17 +85,28 @@ class MouthLayerTimeline:
         duration: float,
         emotion: str = "NEUTRAL",
         next_due_at: float | None = None,
+        due_at: float | None = None,
     ) -> None:
-        """Start a layer span. ``duration`` is the schedule span, not hold_floor."""
+        """Start a layer span on the wall-clock / audio timeline.
+
+        Prefer absolute ``due_at + duration`` when the scheduler provides it —
+        ``now + duration`` drifts when fires are late under frame jitter.
+        """
         key = canonical_viseme(phoneme)
         self._phoneme = key
         self._emotion = (emotion or "NEUTRAL").strip().upper() or "NEUTRAL"
         self._bridged = False
 
-        span_end = float(now) + max(float(duration), 1e-3)
+        if due_at is not None:
+            span_end = float(due_at) + max(float(duration), 1e-3)
+            # Late fire: still show at least one frame from now.
+            span_end = max(span_end, float(now) + 1.0 / 60.0)
+        else:
+            span_end = float(now) + max(float(duration), 1e-3)
         if key not in CLOSED_VISEMES and key != "REST":
-            # Consonants from energy align can be 1–2 ticks — unreadable.
-            span_end = max(span_end, float(now) + float(self.min_dwell_s))
+            # Absolute path already used span length; only pad when due_at missing.
+            if due_at is None:
+                span_end = max(span_end, float(now) + float(self.min_dwell_s))
             # Fill tiny holes before the next scheduled speech event.
             if next_due_at is not None:
                 nxt = float(next_due_at)

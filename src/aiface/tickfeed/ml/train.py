@@ -8,11 +8,11 @@ from typing import Any
 
 import numpy as np
 
+from aiface.tickfeed.audio_feat import AUDIO_FEAT, load_audio_feat
 from aiface.tickfeed.calibration import load_calibration_script, beat_at_time
 from aiface.tickfeed.schema import TICK_RATE_HZ, VISEME_TABLE
 
 CODE_DIM = 64
-AUDIO_FEAT = 8
 ML_DIR = "ml"
 
 
@@ -55,7 +55,7 @@ def _patch_stats(vel: np.ndarray) -> np.ndarray:
 
 
 def _audio_proxy(open_amt: float, smile_amt: float, t: float) -> np.ndarray:
-    """Deterministic 8-D audio-like features when WAV align unavailable."""
+    """Legacy fallback only when WAV features are missing — never claim as audio."""
     return np.asarray(
         [
             open_amt,
@@ -101,10 +101,8 @@ def _viseme_from_open(open_amt: float, beat_id: str) -> int:
     return VISEME_TABLE.index("AA")
 
 
-def build_training_tables(world: Path | str) -> dict[str, np.ndarray]:
-    """Build X/y tables from FaceCellTimeline + speech_align + look_drive."""
-    import json
-
+def build_training_tables(world: Path | str) -> dict[str, np.ndarray | str]:
+    """Build X/y tables from FaceCellTimeline + speech_align + look_drive + audio."""
     world = Path(world)
     ticks, vel, _box = _load_timeline(world)
     script = load_calibration_script(world)
@@ -119,6 +117,15 @@ def build_training_tables(world: Path | str) -> dict[str, np.ndarray]:
     if look_path.is_file():
         for row in json.loads(look_path.read_text(encoding="utf-8")).get("ticks") or []:
             look_by_tick[int(row["tick"])] = row
+
+    audio_loaded = load_audio_feat(tdir)
+    audio_source = "proxy_fallback"
+    audio_table: np.ndarray | None = None
+    if audio_loaded is not None:
+        audio_table, audio_source = audio_loaded
+        if audio_source == "zeros":
+            audio_source = "proxy_fallback"
+            audio_table = None
 
     n = len(ticks)
     x_audio = np.zeros((n, AUDIO_FEAT), dtype=np.float64)
@@ -151,24 +158,50 @@ def build_training_tables(world: Path | str) -> dict[str, np.ndarray]:
             if bid == "OPEN":
                 open_amt = max(open_amt, 0.75)
             y_look[i] = _look_from_beat(bid, open_amt, smile_amt)
-        x_audio[i] = _audio_proxy(open_amt, smile_amt, t)
+        if (
+            audio_table is not None
+            and audio_source == "wav_rms"
+            and int(tick) < len(audio_table)
+        ):
+            x_audio[i] = np.asarray(audio_table[int(tick)], dtype=np.float64)
+        elif (
+            audio_table is not None
+            and audio_source == "wav_rms"
+            and i < len(audio_table)
+        ):
+            x_audio[i] = np.asarray(audio_table[i], dtype=np.float64)
+        else:
+            x_audio[i] = _audio_proxy(open_amt, smile_amt, t)
         if tick in speech_by_tick:
             y_viseme[i] = int(speech_by_tick[int(tick)].get("viseme_id") or 0)
         else:
             y_viseme[i] = _viseme_from_open(open_amt, bid)
         patches.append(vel[i].reshape(-1))
     y_patch = np.stack(patches, axis=0).astype(np.float32)
+    if audio_table is None or audio_source != "wav_rms":
+        audio_source = "proxy_fallback"
     return {
         "x_audio": x_audio,
         "y_viseme": y_viseme,
         "y_look": y_look,
         "y_patch": y_patch,
         "ticks": ticks.astype(np.int32),
+        "audio_feat_source": audio_source,
     }
 
 
+def _holdout_split(n: int, *, seed: int, frac: float = 0.85) -> tuple[np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(seed)
+    idx = rng.permutation(int(n))
+    if n < 12:
+        return idx, idx
+    split = max(4, int(n * frac))
+    split = min(split, n - max(2, n // 10))
+    return idx[:split], idx[split:]
+
+
 def fit_all_layers(world: Path | str, *, seed: int = 17) -> dict[str, Any]:
-    """Train L1–L5 into world/ml/ and return metrics."""
+    """Train L1–L5 into world/ml/ and return metrics (train + holdout)."""
     from sklearn.decomposition import PCA
     from sklearn.neural_network import MLPClassifier, MLPRegressor
     from sklearn.pipeline import Pipeline
@@ -178,24 +211,39 @@ def fit_all_layers(world: Path | str, *, seed: int = 17) -> dict[str, Any]:
     world = Path(world)
     root = _ml_root(world)
     tables = build_training_tables(world)
-    x_audio = tables["x_audio"]
-    y_viseme = tables["y_viseme"]
-    y_look = tables["y_look"]
-    y_patch = tables["y_patch"]
+    x_audio = np.asarray(tables["x_audio"], dtype=np.float64)
+    y_viseme = np.asarray(tables["y_viseme"], dtype=np.int64)
+    y_look = np.asarray(tables["y_look"], dtype=np.float64)
+    y_patch = np.asarray(tables["y_patch"], dtype=np.float32)
+    audio_source = str(tables["audio_feat_source"])
     rng = np.random.default_rng(seed)
+    train_idx, test_idx = _holdout_split(len(y_patch), seed=seed)
 
-    meta: dict[str, Any] = {"layers": {}, "code_dim": CODE_DIM, "n": int(len(y_patch))}
+    meta: dict[str, Any] = {
+        "layers": {},
+        "code_dim": CODE_DIM,
+        "n": int(len(y_patch)),
+        "n_train": int(len(train_idx)),
+        "n_holdout": int(len(test_idx)),
+        "audio_feat_source": audio_source,
+    }
 
-    # L4 codec first (teacher for L3)
-    n_comp = min(CODE_DIM, max(4, len(y_patch) - 1), y_patch.shape[1])
+    # L4 codec first (teacher for L3/L5)
+    n_comp = min(CODE_DIM, max(4, len(train_idx) - 1), y_patch.shape[1])
     pca = PCA(n_components=n_comp, random_state=seed)
-    codes = pca.fit_transform(y_patch)
+    pca.fit(y_patch[train_idx])
+    codes = pca.transform(y_patch)
     recon = pca.inverse_transform(codes)
-    l4_mae = float(np.mean(np.abs(recon - y_patch)))
+    l4_mae_train = float(np.mean(np.abs(recon[train_idx] - y_patch[train_idx])))
+    l4_mae_hold = float(np.mean(np.abs(recon[test_idx] - y_patch[test_idx])))
     joblib.dump({"pca": pca, "patch_dim": int(y_patch.shape[1])}, root / "l4_tick_codec.joblib")
-    meta["layers"]["l4"] = {"mae": l4_mae, "n_components": n_comp}
+    meta["layers"]["l4"] = {
+        "mae": l4_mae_train,
+        "holdout_mae": l4_mae_hold,
+        "n_components": n_comp,
+    }
 
-    # L1 speech clock
+    # L1 speech clock — real WAV features when available
     l1 = Pipeline(
         [
             ("scaler", StandardScaler()),
@@ -209,10 +257,15 @@ def fit_all_layers(world: Path | str, *, seed: int = 17) -> dict[str, Any]:
             ),
         ]
     )
-    l1.fit(x_audio, y_viseme)
-    l1_acc = float((l1.predict(x_audio) == y_viseme).mean())
+    l1.fit(x_audio[train_idx], y_viseme[train_idx])
+    l1_acc = float((l1.predict(x_audio[train_idx]) == y_viseme[train_idx]).mean())
+    l1_hold = float((l1.predict(x_audio[test_idx]) == y_viseme[test_idx]).mean())
     joblib.dump(l1, root / "l1_speech_clock.joblib")
-    meta["layers"]["l1"] = {"train_acc": l1_acc}
+    meta["layers"]["l1"] = {
+        "train_acc": l1_acc,
+        "holdout_acc": l1_hold,
+        "feat_source": audio_source,
+    }
 
     # L2 look drive
     l2 = Pipeline(
@@ -228,14 +281,14 @@ def fit_all_layers(world: Path | str, *, seed: int = 17) -> dict[str, Any]:
             ),
         ]
     )
-    # features: audio + viseme id
     x_l2 = np.concatenate(
         [x_audio, y_viseme.reshape(-1, 1).astype(np.float64)], axis=1
     )
-    l2.fit(x_l2, y_look)
-    l2_mae = float(np.mean(np.abs(l2.predict(x_l2) - y_look)))
+    l2.fit(x_l2[train_idx], y_look[train_idx])
+    l2_mae = float(np.mean(np.abs(l2.predict(x_l2[train_idx]) - y_look[train_idx])))
+    l2_hold = float(np.mean(np.abs(l2.predict(x_l2[test_idx]) - y_look[test_idx])))
     joblib.dump(l2, root / "l2_look_drive.joblib")
-    meta["layers"]["l2"] = {"mae": l2_mae}
+    meta["layers"]["l2"] = {"mae": l2_mae, "holdout_mae": l2_hold}
 
     # L3 face motion → code
     x_l3 = np.concatenate([x_l2, y_look], axis=1)
@@ -252,16 +305,19 @@ def fit_all_layers(world: Path | str, *, seed: int = 17) -> dict[str, Any]:
             ),
         ]
     )
-    l3.fit(x_l3, codes)
-    pred_codes = l3.predict(x_l3)
-    l3_mae = float(np.mean(np.abs(pred_codes - codes)))
+    l3.fit(x_l3[train_idx], codes[train_idx])
+    pred_tr = l3.predict(x_l3[train_idx])
+    pred_te = l3.predict(x_l3[test_idx])
+    l3_mae = float(np.mean(np.abs(pred_tr - codes[train_idx])))
+    l3_hold = float(np.mean(np.abs(pred_te - codes[test_idx])))
     joblib.dump(l3, root / "l3_face_motion.joblib")
-    meta["layers"]["l3"] = {"code_mae": l3_mae}
+    meta["layers"]["l3"] = {"code_mae": l3_mae, "holdout_code_mae": l3_hold}
 
-    # L5 gap prior: recover code from punched holes in features
-    x_l5 = x_l3.copy()
-    mask = rng.random(x_l5.shape) < 0.25
-    x_l5[mask] = 0.0
+    # L5 gap prior: recover full PCA code from punched holes in the *patch*
+    hole_patches = y_patch.copy()
+    cell_mask = rng.random(hole_patches.shape) < 0.25
+    hole_patches[cell_mask] = 0.0
+    codes_holes = pca.transform(hole_patches)
     l5 = Pipeline(
         [
             ("scaler", StandardScaler()),
@@ -275,22 +331,28 @@ def fit_all_layers(world: Path | str, *, seed: int = 17) -> dict[str, Any]:
             ),
         ]
     )
-    l5.fit(x_l5, codes)
-    l5_mae = float(np.mean(np.abs(l5.predict(x_l5) - codes)))
+    l5.fit(codes_holes[train_idx], codes[train_idx])
+    l5_mae = float(
+        np.mean(np.abs(l5.predict(codes_holes[train_idx]) - codes[train_idx]))
+    )
+    l5_hold = float(
+        np.mean(np.abs(l5.predict(codes_holes[test_idx]) - codes[test_idx]))
+    )
     joblib.dump(l5, root / "l5_gap_prior.joblib")
-    meta["layers"]["l5"] = {"code_mae": l5_mae}
+    meta["layers"]["l5"] = {
+        "code_mae": l5_mae,
+        "holdout_code_mae": l5_hold,
+        "task": "patch_hole_code_recover",
+    }
 
     meta_path = root / "tickfeed_ml.meta.json"
     meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
-    print(f"TickFeed ML: trained L1–L5 → {root} ({meta})")
+    print(f"TickFeed ML: trained L1-L5 -> {root} ({meta})")
     return meta
 
 
 def fit_layer(world: Path | str, layer: str, *, seed: int = 17) -> dict[str, Any]:
-    """Retrain a single layer (l1…l5) via abstract packet tables.
-
-    L3/L5 need an existing L4 codec on disk (or train l4 first).
-    """
+    """Retrain a single layer (l1…l5). L3/L5 need L4 on disk."""
     from sklearn.decomposition import PCA
     from sklearn.neural_network import MLPClassifier, MLPRegressor
     from sklearn.pipeline import Pipeline
@@ -307,24 +369,35 @@ def fit_layer(world: Path | str, layer: str, *, seed: int = 17) -> dict[str, Any
     world = Path(world)
     root = _ml_root(world)
     tables = build_training_tables(world)
-    x_audio = tables["x_audio"]
-    y_viseme = tables["y_viseme"]
-    y_look = tables["y_look"]
-    y_patch = tables["y_patch"]
+    x_audio = np.asarray(tables["x_audio"], dtype=np.float64)
+    y_viseme = np.asarray(tables["y_viseme"], dtype=np.int64)
+    y_look = np.asarray(tables["y_look"], dtype=np.float64)
+    y_patch = np.asarray(tables["y_patch"], dtype=np.float32)
+    audio_source = str(tables["audio_feat_source"])
     rng = np.random.default_rng(seed)
-    out: dict[str, Any] = {"layer": layer, "n": int(len(y_patch))}
+    train_idx, test_idx = _holdout_split(len(y_patch), seed=seed)
+    out: dict[str, Any] = {
+        "layer": layer,
+        "n": int(len(y_patch)),
+        "audio_feat_source": audio_source,
+    }
 
     if layer == "l4":
-        n_comp = min(CODE_DIM, max(4, len(y_patch) - 1), y_patch.shape[1])
+        n_comp = min(CODE_DIM, max(4, len(train_idx) - 1), y_patch.shape[1])
         pca = PCA(n_components=n_comp, random_state=seed)
-        codes = pca.fit_transform(y_patch)
+        pca.fit(y_patch[train_idx])
+        codes = pca.transform(y_patch)
         recon = pca.inverse_transform(codes)
-        mae = float(np.mean(np.abs(recon - y_patch)))
+        out["metrics"] = {
+            "mae": float(np.mean(np.abs(recon[train_idx] - y_patch[train_idx]))),
+            "holdout_mae": float(np.mean(np.abs(recon[test_idx] - y_patch[test_idx]))),
+            "n_components": n_comp,
+        }
         joblib.dump(
             {"pca": pca, "patch_dim": int(y_patch.shape[1])},
             root / "l4_tick_codec.joblib",
         )
-        out["metrics"] = {"mae": mae, "n_components": n_comp}
+        print(f"TickFeed ML: retrained {layer} -> {root} ({out.get('metrics')})")
         return out
 
     l4_path = root / "l4_tick_codec.joblib"
@@ -351,10 +424,17 @@ def fit_layer(world: Path | str, layer: str, *, seed: int = 17) -> dict[str, Any
                 ),
             ]
         )
-        model.fit(x_audio, y_viseme)
-        acc = float((model.predict(x_audio) == y_viseme).mean())
+        model.fit(x_audio[train_idx], y_viseme[train_idx])
         joblib.dump(model, root / "l1_speech_clock.joblib")
-        out["metrics"] = {"train_acc": acc}
+        out["metrics"] = {
+            "train_acc": float(
+                (model.predict(x_audio[train_idx]) == y_viseme[train_idx]).mean()
+            ),
+            "holdout_acc": float(
+                (model.predict(x_audio[test_idx]) == y_viseme[test_idx]).mean()
+            ),
+            "feat_source": audio_source,
+        }
     elif layer == "l2":
         model = Pipeline(
             [
@@ -369,10 +449,16 @@ def fit_layer(world: Path | str, layer: str, *, seed: int = 17) -> dict[str, Any
                 ),
             ]
         )
-        model.fit(x_l2, y_look)
-        mae = float(np.mean(np.abs(model.predict(x_l2) - y_look)))
+        model.fit(x_l2[train_idx], y_look[train_idx])
         joblib.dump(model, root / "l2_look_drive.joblib")
-        out["metrics"] = {"mae": mae}
+        out["metrics"] = {
+            "mae": float(
+                np.mean(np.abs(model.predict(x_l2[train_idx]) - y_look[train_idx]))
+            ),
+            "holdout_mae": float(
+                np.mean(np.abs(model.predict(x_l2[test_idx]) - y_look[test_idx]))
+            ),
+        }
     elif layer == "l3":
         model = Pipeline(
             [
@@ -387,14 +473,21 @@ def fit_layer(world: Path | str, layer: str, *, seed: int = 17) -> dict[str, Any
                 ),
             ]
         )
-        model.fit(x_l3, codes)
-        mae = float(np.mean(np.abs(model.predict(x_l3) - codes)))
+        model.fit(x_l3[train_idx], codes[train_idx])
         joblib.dump(model, root / "l3_face_motion.joblib")
-        out["metrics"] = {"code_mae": mae}
-    else:  # l5
-        x_l5 = x_l3.copy()
-        mask = rng.random(x_l5.shape) < 0.25
-        x_l5[mask] = 0.0
+        out["metrics"] = {
+            "code_mae": float(
+                np.mean(np.abs(model.predict(x_l3[train_idx]) - codes[train_idx]))
+            ),
+            "holdout_code_mae": float(
+                np.mean(np.abs(model.predict(x_l3[test_idx]) - codes[test_idx]))
+            ),
+        }
+    else:  # l5 — patch-hole code recovery
+        hole_patches = y_patch.copy()
+        cell_mask = rng.random(hole_patches.shape) < 0.25
+        hole_patches[cell_mask] = 0.0
+        codes_holes = l4["pca"].transform(hole_patches)
         model = Pipeline(
             [
                 ("scaler", StandardScaler()),
@@ -408,13 +501,24 @@ def fit_layer(world: Path | str, layer: str, *, seed: int = 17) -> dict[str, Any
                 ),
             ]
         )
-        model.fit(x_l5, codes)
-        mae = float(np.mean(np.abs(model.predict(x_l5) - codes)))
+        model.fit(codes_holes[train_idx], codes[train_idx])
         joblib.dump(model, root / "l5_gap_prior.joblib")
-        out["metrics"] = {"code_mae": mae}
+        out["metrics"] = {
+            "code_mae": float(
+                np.mean(
+                    np.abs(model.predict(codes_holes[train_idx]) - codes[train_idx])
+                )
+            ),
+            "holdout_code_mae": float(
+                np.mean(
+                    np.abs(model.predict(codes_holes[test_idx]) - codes[test_idx])
+                )
+            ),
+            "task": "patch_hole_code_recover",
+        }
 
-    print(f"TickFeed ML: retrained {layer} → {root} ({out.get('metrics')})")
+    print(f"TickFeed ML: retrained {layer} -> {root} ({out.get('metrics')})")
     return out
 
 
-__all__ = ["CODE_DIM", "build_training_tables", "fit_all_layers", "fit_layer"]
+__all__ = ["AUDIO_FEAT", "CODE_DIM", "build_training_tables", "fit_all_layers", "fit_layer"]

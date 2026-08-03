@@ -25,6 +25,10 @@ from numpy.typing import NDArray
 from aiface.tickfeed.package import FaceBox
 from aiface.tickfeed.qa import qa_beat_motion
 from aiface.tickfeed.schema import CHANNEL_MASK_VELOCITY, TICK_RATE_HZ
+from aiface.tickfeed.audio_feat import (
+    extract_audio_feat_table,
+    write_audio_feat,
+)
 from aiface.tickfeed.force_align import force_align_speech
 from aiface.tickfeed.speech_align import (
     build_look_drive,
@@ -58,6 +62,7 @@ def write_face_cell_timeline(
     open_curve: list[float] | None = None,
     smile_curve: list[float] | None = None,
     source: NDArray[np.uint8] | None = None,
+    lid_curve: list[float] | None = None,
 ) -> Path:
     """Write full Side B artifact tree + flat npz mirror."""
     root = Path(world)
@@ -112,16 +117,32 @@ def write_face_cell_timeline(
         )
 
     video_path = root / "calibration_take.mp4"
+    if not video_path.is_file() and video_name:
+        cand = root / video_name
+        if cand.is_file():
+            video_path = cand
     speech = force_align_speech(
         root,
         video_path if video_path.is_file() else None,
         n_ticks=n_ticks,
     )
     look = build_look_drive(
-        root, n_ticks=n_ticks, open_curve=open_curve, smile_curve=smile_curve
+        root,
+        n_ticks=n_ticks,
+        open_curve=open_curve,
+        smile_curve=smile_curve,
+        lid_curve=lid_curve,
     )
     write_speech_align(out / "speech_align.json", speech)
     write_look_drive(out / "look_drive.json", look)
+
+    audio_feats, audio_source = extract_audio_feat_table(
+        video_path if video_path.is_file() else None,
+        n_ticks,
+    )
+    write_audio_feat(root, audio_feats, source=audio_source)
+    meta["audio_feat_source"] = audio_source
+    (out / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
     # Flat mirror for fast driver load
     flat = root / "face_cell_timeline.npz"
@@ -139,6 +160,7 @@ def write_face_cell_timeline(
     qa = qa_beat_motion(root)
     qa["speech_align"] = {"n": speech["n_ticks"], "method": speech["method"]}
     qa["look_drive"] = {"n": look["n_ticks"]}
+    qa["audio_feat_source"] = audio_source
     (out / "qa_report.json").write_text(json.dumps(qa, indent=2) + "\n", encoding="utf-8")
     return out
 

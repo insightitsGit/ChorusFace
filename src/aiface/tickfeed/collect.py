@@ -205,6 +205,30 @@ def prepare_face_timeline(
                     o = max(o, 0.25)
                 open_curve[t] = o
                 smile_curve[t] = s
+        lid_curve: list[float] | None = None
+        if vid is not None and vid.is_file():
+            try:
+                from aiface.tickfeed.lid_measure import measure_lid_series
+
+                lid_series = measure_lid_series(vid)
+                if lid_series is not None:
+                    lid_t, lid_v = lid_series
+                    t_lid = np.asarray(lid_t, dtype=np.float64)
+                    v_lid = np.asarray(lid_v, dtype=np.float64)
+                    lid_curve = [
+                        float(
+                            np.interp(
+                                float(t) / float(TICK_RATE_HZ),
+                                t_lid,
+                                v_lid,
+                                left=float(v_lid[0]),
+                                right=float(v_lid[-1]),
+                            )
+                        )
+                        for t in range(n_ticks)
+                    ]
+            except Exception as exc:  # noqa: BLE001
+                print(f"TickFeed collect: lid measure skipped ({exc})")
         out = write_face_cell_timeline(
             root,
             face=face,
@@ -214,6 +238,7 @@ def prepare_face_timeline(
             open_curve=open_curve,
             smile_curve=smile_curve,
             source=source,
+            lid_curve=lid_curve,
         )
         print(
             f"TickFeed collect: wrote {out} ticks={n_ticks} "

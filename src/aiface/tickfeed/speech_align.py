@@ -118,6 +118,7 @@ def build_look_drive(
     n_ticks: int,
     open_curve: list[float] | None = None,
     smile_curve: list[float] | None = None,
+    lid_curve: list[float] | None = None,
 ) -> dict[str, Any]:
     """Per-tick LOOK amounts from calibration beats + optional measured curves.
 
@@ -138,6 +139,11 @@ def build_look_drive(
         open_ = 0.0
         surprise = 0.0
         brow = 0.0
+        lid = (
+            float(lid_curve[t])
+            if lid_curve is not None and t < len(lid_curve)
+            else 1.0
+        )
         emotion = int(EmotionId.NEUTRAL)
         curve_o = (
             float(open_curve[t])
@@ -165,6 +171,7 @@ def build_look_drive(
             surprise = 0.8
             brow = 0.7
             emotion = int(EmotionId.SURPRISED)
+            lid = max(lid, 0.95)
         elif beat_id == "ANGRY":
             open_ = 0.0
             smile = 0.0
@@ -185,12 +192,13 @@ def build_look_drive(
                 "open": float(open_),
                 "surprise": float(surprise),
                 "brow": float(brow),
+                "lid": float(max(0.0, min(1.0, lid))),
                 "emotion_id": emotion,
                 "beat": beat_id,
             }
         )
     return {
-        "schema": "aiface.look_drive.v2",
+        "schema": "aiface.look_drive.v3",
         "tick_rate": TICK_RATE_HZ,
         "n_ticks": int(n_ticks),
         "ticks": ticks,

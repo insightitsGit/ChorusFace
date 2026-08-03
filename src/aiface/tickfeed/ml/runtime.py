@@ -9,8 +9,9 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from aiface.tickfeed.ml.packets import FaceMotionCode, LookDrive, SpeechClock
-from aiface.tickfeed.ml.train import AUDIO_FEAT, CODE_DIM, ML_DIR
+from aiface.tickfeed.audio_feat import load_audio_feat
+from aiface.tickfeed.ml.packets import LookDrive, SpeechClock
+from aiface.tickfeed.ml.train import ML_DIR, _audio_proxy
 from aiface.tickfeed.schema import VISEME_TABLE
 
 
@@ -23,6 +24,8 @@ class TickFeedMLStack:
     l4: Any = None
     l5: Any = None
     meta: dict | None = None
+    audio_feats: NDArray[np.float32] | None = None
+    audio_feat_source: str = "proxy_fallback"
 
     @classmethod
     def try_load(cls, world: Path | str) -> TickFeedMLStack | None:
@@ -45,14 +48,36 @@ class TickFeedMLStack:
             import json
 
             stack.meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        print(f"TickFeed ML: loaded L1–L5 from {ml}")
+            stack.audio_feat_source = str(
+                (stack.meta or {}).get("audio_feat_source") or "proxy_fallback"
+            )
+        loaded = load_audio_feat(root)
+        if loaded is not None:
+            stack.audio_feats, src = loaded
+            if src == "wav_rms":
+                stack.audio_feat_source = "wav_rms"
+        print(
+            f"TickFeed ML: loaded L1–L5 from {ml} "
+            f"(audio_feat={stack.audio_feat_source})"
+        )
         return stack
 
     def _audio_feat(
-        self, open_amt: float, smile_amt: float, t: float
+        self,
+        open_amt: float,
+        smile_amt: float,
+        t: float,
+        *,
+        tick: int | None = None,
     ) -> NDArray[np.float64]:
-        from aiface.tickfeed.ml.train import _audio_proxy
-
+        if (
+            self.audio_feats is not None
+            and self.audio_feat_source == "wav_rms"
+            and tick is not None
+            and 0 <= int(tick) < len(self.audio_feats)
+        ):
+            return np.asarray(self.audio_feats[int(tick)], dtype=np.float64)
+        # Live / off-timeline: no calibration WAV row — use drive proxy honestly.
         return _audio_proxy(open_amt, smile_amt, t)
 
     def resolve(
@@ -67,13 +92,15 @@ class TickFeedMLStack:
     ) -> tuple[SpeechClock, LookDrive, NDArray[np.float32], list[float]]:
         """Return packets + decoded face velocity flat + compact code."""
         t = float(time_seconds if time_seconds is not None else tick / 60.0)
-        audio = self._audio_feat(open_amt, smile_amt, t).reshape(1, -1)
+        audio = self._audio_feat(
+            open_amt, smile_amt, t, tick=tick
+        ).reshape(1, -1)
         viseme_id = int(self.l1.predict(audio)[0])
         speech = SpeechClock(
             tick=tick,
             viseme_id=viseme_id,
             word=VISEME_TABLE[viseme_id] if 0 <= viseme_id < len(VISEME_TABLE) else "REST",
-            conf=0.8,
+            conf=0.85 if self.audio_feat_source == "wav_rms" else 0.55,
             audio_feat=audio.reshape(-1).tolist(),
         )
         x_l2 = np.concatenate(
@@ -93,12 +120,14 @@ class TickFeedMLStack:
             conf=0.8,
         )
         x_l3 = np.concatenate([x_l2, look_v.reshape(1, -1)], axis=1)
+        code = np.asarray(self.l3.predict(x_l3)[0], dtype=np.float64)
+        # L5 recovers full code from an incomplete/holey code estimate.
         if use_gap_prior and self.l5 is not None:
-            code = np.asarray(self.l5.predict(x_l3)[0], dtype=np.float64)
-        else:
-            code = np.asarray(self.l3.predict(x_l3)[0], dtype=np.float64)
+            try:
+                code = np.asarray(self.l5.predict(code.reshape(1, -1))[0], dtype=np.float64)
+            except Exception:  # noqa: BLE001
+                pass
         pca = self.l4["pca"]
-        # Pad/truncate code to PCA components
         n = int(pca.n_components_)
         if code.shape[0] < n:
             code = np.pad(code, (0, n - code.shape[0]))

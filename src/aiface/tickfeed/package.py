@@ -10,11 +10,13 @@ import numpy as np
 from numpy.typing import NDArray
 
 from aiface.tickfeed.schema import (
+    APPLY_MODE_DISP_VS_REST,
     CHANNEL_MASK_VELOCITY,
     DELTA_EPS,
     DeltaEncoding,
     FLAG_HAS_CONF,
     FLAG_HAS_LABELS,
+    FLAG_VS_REST,
     HEADER_BYTES,
     LABELS_BYTES,
     MAGIC,
@@ -45,12 +47,14 @@ class TickLabels:
     word: str = ""
     # Packed into former reserved bytes (wire still LABELS_BYTES=48).
     brow_amt: float = 0.0
+    # Lid aperture: 1 = open, 0 = closed (same polarity as open_amt).
+    lid_amt: float = 1.0
 
     def pack(self) -> bytes:
         word = self.word.encode("utf-8")[:16]
         word = word + b"\x00" * (16 - len(word))
         return struct.pack(
-            "<BBBB fff 16s f 12s",
+            "<BBBB fff 16s ff 8s",
             int(self.beat_id) & 0xFF,
             int(self.emotion_id) & 0xFF,
             int(self.viseme_id) & 0xFF,
@@ -60,15 +64,16 @@ class TickLabels:
             float(self.surprise_amt),
             word,
             float(self.brow_amt),
-            b"\x00" * 12,
+            float(self.lid_amt),
+            b"\x00" * 8,
         )
 
     @classmethod
     def unpack(cls, data: bytes) -> TickLabels:
         if len(data) < LABELS_BYTES:
             raise ValueError("labels block too short")
-        beat, emo, vis, conf, smile, open_, surprise, word, brow, _res = struct.unpack(
-            "<BBBB fff 16s f 12s", data[:LABELS_BYTES]
+        beat, emo, vis, conf, smile, open_, surprise, word, brow, lid, _res = (
+            struct.unpack("<BBBB fff 16s ff 8s", data[:LABELS_BYTES])
         )
         return cls(
             beat_id=beat,
@@ -80,6 +85,7 @@ class TickLabels:
             surprise_amt=float(surprise),
             word=word.split(b"\x00", 1)[0].decode("utf-8", errors="replace"),
             brow_amt=float(brow),
+            lid_amt=float(lid),
         )
 
     @staticmethod
@@ -131,7 +137,7 @@ class HelloPayload:
     is_ack: bool = False
     ok: bool = True
     max_payload: int = 512 * 1024
-    apply_mode: str = "velocity_write"
+    apply_mode: str = APPLY_MODE_DISP_VS_REST
 
     def pack(self) -> bytes:
         wid = self.world_id.encode("utf-8")[:32]
@@ -185,7 +191,7 @@ class HelloPayload:
             ok=bool(ok),
             max_payload=int(max_payload),
             apply_mode=mode.split(b"\x00", 1)[0].decode("utf-8", errors="replace")
-            or "velocity_write",
+            or APPLY_MODE_DISP_VS_REST,
         )
 
 
@@ -262,7 +268,7 @@ def build_keyframe(
     world_hash: int = 0,
 ) -> TickPackage:
     hw2 = _as_hw2(values, face)
-    flags = 0
+    flags = FLAG_VS_REST
     if labels is not None:
         flags |= FLAG_HAS_LABELS
     if conf is not None:
@@ -301,7 +307,7 @@ def build_hello(
         world_id=world_id,
         is_ack=False,
         ok=True,
-        apply_mode="velocity_write",
+        apply_mode=APPLY_MODE_DISP_VS_REST,
     )
     return TickPackage(
         kind=PackageKind.HELLO,
@@ -310,6 +316,7 @@ def build_hello(
         hello=hello,
         value_dtype=value_dtype,
         channel_mask=CHANNEL_MASK_VELOCITY,
+        flags=FLAG_VS_REST,
         world_hash=int(world_hash) & 0xFFFFFFFFFFFFFFFF,
         time_seconds=0.0,
     )
@@ -320,7 +327,7 @@ def build_hello_ack(
     *,
     ok: bool = True,
     max_payload: int = 512 * 1024,
-    apply_mode: str = "velocity_write",
+    apply_mode: str = APPLY_MODE_DISP_VS_REST,
     world_hash: int = 0,
     tick: int = 0,
 ) -> TickPackage:
@@ -363,7 +370,7 @@ def negotiate_hello(hello_pkg: TickPackage) -> TickPackage:
     return build_hello_ack(
         req,
         ok=ok,
-        apply_mode="velocity_write",
+        apply_mode=APPLY_MODE_DISP_VS_REST,
         world_hash=hello_pkg.world_hash,
         tick=hello_pkg.tick,
     )
@@ -381,14 +388,16 @@ def build_delta(
     world_hash: int = 0,
     eps: float = DELTA_EPS,
 ) -> TickPackage:
-    """Build DELTA of curr − prev (velocity snapshots)."""
+    """Build DELTA of curr − prev (rest-relative displacement snapshots)."""
     a = _as_hw2(prev, face)
     b = _as_hw2(curr, face)
     d = b - a
     flat = d.reshape(-1, PHASE1_CHANNELS)
     mag = np.max(np.abs(flat), axis=1)
     changed = np.flatnonzero(mag >= float(eps)).astype(np.uint16)
-    flags = FLAG_HAS_LABELS if labels is not None else 0
+    flags = FLAG_VS_REST
+    if labels is not None:
+        flags |= FLAG_HAS_LABELS
     conf_u8 = None
     if conf is not None:
         flags |= FLAG_HAS_CONF

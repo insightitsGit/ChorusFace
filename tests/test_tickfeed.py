@@ -116,7 +116,7 @@ def test_hello_negotiate_roundtrip() -> None:
     assert back.hello.is_ack is False
     ack = negotiate_hello(back)
     assert ack.hello is not None and ack.hello.ok is True
-    assert ack.hello.apply_mode == "velocity_write"
+    assert ack.hello.apply_mode == "disp_vs_rest"
     ack2 = decode(encode(ack))
     assert ack2.hello is not None and ack2.hello.is_ack is True
 

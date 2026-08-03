@@ -182,19 +182,74 @@ def look_field_gain_scale(
     return 1.0
 
 
+# Soft double-exposure zone — never park plate amount here (handoff Task 1).
+MID_BAND_LO: Final = 0.15
+MID_BAND_HI: Final = 0.55
+MID_BAND_SPLIT: Final = 0.32
+
+
+def snap_midband_openness(open_amt: float) -> float:
+    """Kill soft mid-band plate amounts (0.15–0.55) — binary commit only.
+
+    Below the smear band → closed (0). Inside or above → full plate (1).
+    Transitions never linger at 30–50% veil.
+    """
+    amount = max(0.0, min(1.0, float(open_amt)))
+    if amount <= PLATE_OPEN_FLOOR:
+        return 0.0
+    if amount < MID_BAND_LO:
+        # Tiny crack — still commit closed to avoid soft veil.
+        return 0.0
+    if amount <= MID_BAND_HI:
+        return 0.0 if amount < MID_BAND_SPLIT else 1.0
+    return 1.0
+
+
 def commit_plate_amount(plate_amt: float, mouth_state: str) -> float:
-    """Boost LOOK plate amount during transitions so mid-band is not 50/50."""
+    """Hard-commit LOOK plate amount — mid-band / transitions are never 50/50."""
     amount = max(0.0, min(1.0, float(plate_amt)))
     state = str(mouth_state or "REST").upper()
-    if state in {"OPENING", "CLOSING"} and amount > 0.06:
-        return max(amount, min(1.0, amount * 1.25 + 0.10))
-    if state == "OPEN" and amount > 0.35:
-        return max(amount, min(1.0, amount * 1.08))
-    return amount
+    if amount <= PLATE_OPEN_FLOOR:
+        return 0.0
+    # Transitions: full plate ownership immediately (no soft ramp through mid).
+    if state in {"OPENING", "CLOSING"}:
+        return 1.0
+    if MID_BAND_LO <= amount <= MID_BAND_HI:
+        return snap_midband_openness(amount)
+    if state == "OPEN" or amount >= MID_BAND_HI:
+        return 1.0
+    return snap_midband_openness(amount)
+
+
+def viseme_instant_openness(phoneme: str, table: dict[str, float] | None = None) -> float:
+    """Viseme → LOOK openness with instant high-energy commit (no linear ramp).
+
+    High-energy vowels jump to full open. Mid consonants snap out of the
+    soft 0.15–0.55 band via :func:`snap_midband_openness`.
+    """
+    from aiface.plates import OPEN_TOOTH_VISEMES, VISEME_OPENNESS
+
+    key = canonical_viseme(phoneme or "REST")
+    src = table if table is not None else VISEME_OPENNESS
+    raw = float(src.get(key, VISEME_OPENNESS.get(key, 0.0)))
+    if key in CLOSED_VISEMES or key in {"REST", "SIL"}:
+        return 0.0
+    if key in OPEN_TOOTH_VISEMES:
+        # Instant full open — never wait for a ramp through mid-band.
+        return 1.0
+    # Consonant / mid shapes: atlas-primary band but hard amount (not soft veil).
+    if raw <= 0.0:
+        return 0.0
+    # Land just below open.png primary threshold after hard snap → atlas owns
+    # at amount 1.0 (see avatar.frag step(0.55, layer_open)).
+    return snap_midband_openness(max(raw, MID_BAND_SPLIT))
 
 
 __all__ = [
     "CLOSED_VISEMES",
+    "MID_BAND_HI",
+    "MID_BAND_LO",
+    "MID_BAND_SPLIT",
     "MouthOwnership",
     "PLATE_OPEN_FLOOR",
     "PLATE_OPEN_FULL",
@@ -204,5 +259,7 @@ __all__ = [
     "mute_smile_under_open",
     "plate_amount_for_openness",
     "resolve_mouth_ownership",
+    "snap_midband_openness",
     "snap_smile_drive",
+    "viseme_instant_openness",
 ]

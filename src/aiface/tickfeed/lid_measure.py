@@ -119,7 +119,7 @@ def measure_lid_series(
         lid = 0.25 * pad[:-2] + 0.50 * pad[1:-1] + 0.25 * pad[2:]
     print(
         f"TickFeed lid: measured n={len(lid)} ear "
-        f"min={arr.min():.4f} max={arr.max():.4f} → "
+        f"min={arr.min():.4f} max={arr.max():.4f} -> "
         f"lid min={float(lid.min()):.3f} max={float(lid.max()):.3f} "
         f"model={model_path.name}"
     )

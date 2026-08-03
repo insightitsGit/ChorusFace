@@ -27,14 +27,34 @@ def test_synth_and_driver_key_then_delta(monkeypatch) -> None:
     assert float(np.abs(vel).max()) > 0.0
 
 
-def test_absolute_key_every_tick_by_default() -> None:
-    """Default fidelity mode: each 16.7 ms tick is KEY assign, not Δ residue."""
+def test_absolute_key_opt_in(monkeypatch) -> None:
+    """Absolute KEY every tick is QA-only (AIFACE_TICKFEED_ABSOLUTE=1)."""
+    monkeypatch.setenv("AIFACE_TICKFEED_ABSOLUTE", "1")
     face = FaceBox(10, 20, 8, 8)
     drv = TickFeedDriver.create(face, mouth_uv=(14.0, 24.0))
     k0 = drv.push_drives(tick=0, open_amt=0.5, smile_amt=0.0, phoneme="AH")
     k1 = drv.push_drives(tick=1, open_amt=0.6, smile_amt=0.0, phoneme="AH")
     assert k0.kind == PackageKind.KEYFRAME
     assert k1.kind == PackageKind.KEYFRAME
+
+
+def test_lid_amt_roundtrips_in_labels() -> None:
+    from aiface.tickfeed.package import TickLabels
+
+    labels = TickLabels(lid_amt=0.35, brow_amt=0.5, open_amt=0.2)
+    back = TickLabels.unpack(labels.pack())
+    assert abs(back.lid_amt - 0.35) < 1e-5
+    assert abs(back.brow_amt - 0.5) < 1e-5
+
+
+def test_keyframe_sets_flag_vs_rest() -> None:
+    from aiface.tickfeed.package import build_keyframe
+    from aiface.tickfeed.schema import FLAG_VS_REST
+
+    face = FaceBox(0, 0, 4, 4)
+    vel = np.zeros((4, 4, 2), dtype=np.float32)
+    pkg = build_keyframe(0, face, vel)
+    assert pkg.flags & FLAG_VS_REST
 
 
 def test_synth_open_moves_both_lips() -> None:
@@ -211,7 +231,8 @@ def test_local_ring_same_tick_has_no_misses() -> None:
         pkg = drv.pop_for_master(master)
         assert pkg is not None
         assert int(pkg.tick) == master
-        assert pkg.kind == PackageKind.KEYFRAME
+        # Steady path: first KEY then Δ; either is a hit (not a ring miss).
+        assert pkg.kind in {PackageKind.KEYFRAME, PackageKind.DELTA}
 
 
 def test_package_bytes_spool_lane_b(tmp_path) -> None:

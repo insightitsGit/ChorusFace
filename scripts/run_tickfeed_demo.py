@@ -164,8 +164,11 @@ def main() -> int:
     parser.add_argument(
         "--wire-loop-source",
         choices=("code", "package"),
-        default="code",
-        help="Wire-loop feed: lane-A c_t (default) or lane-B package bytes",
+        default="package",
+        help=(
+            "Wire-loop feed: lane-B TickPackage (fidelity default) "
+            "or lane-A c_t (lossy PCA)"
+        ),
     )
     parser.add_argument(
         "--speech-pace",

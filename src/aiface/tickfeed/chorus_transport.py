@@ -103,6 +103,9 @@ class TickFeedTransport:
         # In-process latest — wire-loop pulls these without per-tick disk I/O.
         self._latest_code: np.ndarray | None = None
         self._latest_package: bytes | None = None
+        # Lane-B framed CHUNK buffer for runtime reassemble (not tests-only).
+        self._lane_b_frames: list[np.ndarray] = []
+        self._lane_b_tick: int | None = None
         if use_chorus:
             self._try_chorus()
 
@@ -240,7 +243,10 @@ class TickFeedTransport:
             if self._client is not None:
                 compressed = zlib.compress(blob, level=6)
                 if len(compressed) <= self.inline_max:
-                    for vec in self._frame_chunks(blob, tick):
+                    frames = self._frame_chunks(blob, tick)
+                    self._lane_b_frames = [f.copy() for f in frames]
+                    self._lane_b_tick = int(tick)
+                    for vec in frames:
                         if not self._send_vec(vec):
                             break
                     else:
@@ -265,8 +271,12 @@ class TickFeedTransport:
 
         compressed = zlib.compress(blob, level=6)
         if len(compressed) <= self.inline_max:
+            frames = self._frame_chunks(blob, tick)
+            # Always buffer frames for local reassemble consume path.
+            self._lane_b_frames = [f.copy() for f in frames]
+            self._lane_b_tick = int(tick)
             ok = True
-            for vec in self._frame_chunks(blob, tick):
+            for vec in frames:
                 if not self._send_vec(vec):
                     ok = False
                     break
@@ -298,10 +308,25 @@ class TickFeedTransport:
     def pull_latest_package_bytes(self) -> bytes | None:
         if self._latest_package is not None:
             return self._latest_package
+        # Prefer reassembled lane-B CHUNKs when memory blob was cleared.
+        rebuilt = self.pull_package_from_lane_b_frames()
+        if rebuilt is not None:
+            return rebuilt
         files = sorted(self.spool.glob("pkg_*.tpk"))
         if not files:
             return None
         return files[-1].read_bytes()
+
+    def pull_package_from_lane_b_frames(self) -> bytes | None:
+        """Runtime lane-B consume: reassemble buffered CHUNK frames → TickPackage."""
+        if not self._lane_b_frames:
+            return None
+        try:
+            blob = reassemble_lane_b_chunks(self._lane_b_frames)
+        except ValueError:
+            return None
+        self._latest_package = blob
+        return blob
 
 
 def parse_lane_b_header(vec: np.ndarray) -> dict[str, Any]:

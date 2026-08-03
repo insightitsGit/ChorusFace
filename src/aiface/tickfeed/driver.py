@@ -32,7 +32,11 @@ from aiface.tickfeed.schema import (
     ValueDtype,
 )
 from aiface.tickfeed.synth import labels_from_drives, synthesize_velocity
-from aiface.tickfeed.timeline_io import load_timeline_bundle
+from aiface.tickfeed.timeline_io import (
+    SOURCE_MEASURED,
+    SOURCE_SYNTH,
+    load_timeline_bundle,
+)
 
 
 @dataclass
@@ -47,6 +51,7 @@ class TickFeedDriver:
     ticks_since_key: int = 0
     timeline: dict[int, NDArray[np.float32]] = field(default_factory=dict)
     timeline_conf: dict[int, NDArray[np.uint8]] = field(default_factory=dict)
+    timeline_source: dict[int, int] = field(default_factory=dict)
     speech_by_tick: dict[int, dict] = field(default_factory=dict)
     look_by_tick: dict[int, dict] = field(default_factory=dict)
     enabled: bool = True
@@ -54,6 +59,8 @@ class TickFeedDriver:
     transport: TickFeedTransport | None = None
     last_code: list[float] = field(default_factory=list)
     last_labels: TickLabels | None = None
+    # LOOK freeze on ring miss — last package the master actually applied.
+    last_applied_labels: TickLabels | None = None
     last_package: TickPackage | None = None
     hello_done: bool = False
     hello_ack_ok: bool = False
@@ -65,7 +72,8 @@ class TickFeedDriver:
     loop_timeline: bool = False
     # Master consumes from transport (c_t or lane-B bytes) instead of local ring produce.
     wire_loop: bool = False
-    wire_loop_source: str = "code"  # "code" | "package"
+    # Fidelity default: lane-B package. Lane-A c_t is bandwidth / lossy PCA.
+    wire_loop_source: str = "package"  # "package" | "code"
     wire_prev_velocity: NDArray[np.float32] | None = None
     wire_sent_key: bool = False
     wire_ticks_since_key: int = 0
@@ -129,9 +137,16 @@ class TickFeedDriver:
             ticks = np.asarray(bundle["ticks"], dtype=np.int64)
             vel = np.asarray(bundle["velocity"], dtype=np.float32)
             conf = np.asarray(bundle["conf"], dtype=np.uint8)
+            source = np.asarray(
+                bundle.get("source")
+                if bundle.get("source") is not None
+                else np.zeros(len(ticks), dtype=np.uint8),
+                dtype=np.uint8,
+            )
             for i, t in enumerate(ticks):
                 driver.timeline[int(t)] = vel[i]
                 driver.timeline_conf[int(t)] = conf[i].reshape(-1)
+                driver.timeline_source[int(t)] = int(source[i]) if i < len(source) else 0
             driver.timeline_length = int(len(ticks))
             if bundle.get("speech"):
                 for row in bundle["speech"].get("ticks") or []:
@@ -139,11 +154,14 @@ class TickFeedDriver:
             if bundle.get("look"):
                 for row in bundle["look"].get("ticks") or []:
                     driver.look_by_tick[int(row["tick"])] = row
+            n_meas = sum(1 for s in driver.timeline_source.values() if s == SOURCE_MEASURED)
+            n_synth = sum(1 for s in driver.timeline_source.values() if s == SOURCE_SYNTH)
             print(
                 f"TickFeedDriver: loaded timeline "
                 f"({len(driver.timeline)} ticks, loop={driver.loop_timeline}, "
                 f"speech={len(driver.speech_by_tick)}, "
-                f"look={len(driver.look_by_tick)})"
+                f"look={len(driver.look_by_tick)}, "
+                f"source measured={n_meas} synth={n_synth})"
             )
         except FileNotFoundError:
             pass
@@ -201,6 +219,7 @@ class TickFeedDriver:
         speech_viseme: int | None = None,
         live_speech: bool = False,
         brow_amt: float = 0.0,
+        lid_amt: float = 1.0,
     ) -> TickLabels:
         teacher = self._teacher_tick(tick)
         # Live chat/TTS owns amounts; otherwise Side B teachers are sole authority.
@@ -211,6 +230,8 @@ class TickFeedDriver:
                 open_amt = float(lk.get("open") or 0.0)
                 surprise_amt = float(lk.get("surprise") or 0.0)
                 brow_amt = float(lk.get("brow") or brow_amt)
+                if "lid" in lk:
+                    lid_amt = float(lk.get("lid") if lk.get("lid") is not None else lid_amt)
                 if int(lk.get("emotion_id", -1)) >= 0:
                     emotion_map = {
                         int(EmotionId.HAPPY): "HAPPY",
@@ -232,6 +253,7 @@ class TickFeedDriver:
             emotion=emotion,
             word=word,
             brow_amt=brow_amt,
+            lid_amt=lid_amt,
         )
         if speech_viseme is not None:
             labels.viseme_id = int(speech_viseme)
@@ -311,16 +333,10 @@ class TickFeedDriver:
                 curr = np.zeros((self.face.h, self.face.w, 2), dtype=np.float32)
                 conf = np.full(self.face.n_cells, 255, dtype=np.uint8)
             else:
-                # Live chat/TTS: label-driven synth FIELD (readable lip travel).
-                # ML decode was often near-zero here so LOOK open had no warp.
-                curr = synthesize_velocity(
-                    self.face,
-                    open_amt=float(open_amt),
-                    smile_amt=float(smile_amt),
-                    surprise_amt=float(surprise_amt),
-                    mouth_uv=self.mouth_uv,
-                )
-                conf = np.full(self.face.n_cells, 220, dtype=np.uint8)
+                # Live chat/TTS: L3 owns FIELD when it produces real motion;
+                # synth is fallback only (never sold as measured).
+                curr = None
+                conf = None
                 if self.ml is not None:
                     try:
                         _s, _l, flat, code = self.ml.resolve(
@@ -331,19 +347,37 @@ class TickFeedDriver:
                         )
                         del _s, _l
                         ml = flat.reshape(self.face.h, self.face.w, 2)
-                        # Light ML detail only — never replace synth authority.
-                        curr = (0.75 * curr + 0.25 * ml).astype(np.float32)
+                        if float(np.abs(ml).max()) >= 0.04:
+                            curr = ml.astype(np.float32)
+                            conf = np.full(self.face.n_cells, 170, dtype=np.uint8)
                     except Exception:  # noqa: BLE001
                         pass
+                if curr is None:
+                    curr = synthesize_velocity(
+                        self.face,
+                        open_amt=float(open_amt),
+                        smile_amt=float(smile_amt),
+                        surprise_amt=float(surprise_amt),
+                        mouth_uv=self.mouth_uv,
+                    )
+                    conf = np.full(self.face.n_cells, 140, dtype=np.uint8)
         elif teacher in self.timeline:
+            src_code = int(self.timeline_source.get(teacher, SOURCE_MEASURED))
             curr = self.timeline[teacher]
             conf = self.timeline_conf.get(teacher)
+            if conf is not None:
+                conf = np.asarray(conf, dtype=np.uint8).reshape(-1).copy()
             mean_conf = float(np.mean(conf)) if conf is not None else 255.0
-            if (
+            # Provenance gate: synth ticks never keep measured-high conf.
+            if src_code != SOURCE_MEASURED:
+                mean_conf = min(mean_conf, 80.0)
+                if conf is not None:
+                    conf = np.minimum(conf, np.uint8(120))
+            allow_gap = (
                 mean_conf < 90.0
-                and self.ml is not None
-                and self.ml.l5 is not None
-            ):
+                or src_code != SOURCE_MEASURED
+            )
+            if allow_gap and self.ml is not None and self.ml.l5 is not None:
                 speech, look, flat, code = self.ml.resolve(
                     tick=teacher,
                     open_amt=open_amt,
@@ -354,6 +388,8 @@ class TickFeedDriver:
                 try:
                     gap = flat.reshape(self.face.h, self.face.w, 2)
                     alpha = 1.0 - (mean_conf / 255.0)
+                    if src_code != SOURCE_MEASURED:
+                        alpha = max(alpha, 0.55)
                     curr = (1.0 - alpha) * curr + alpha * gap
                 except ValueError:
                     pass
@@ -367,6 +403,7 @@ class TickFeedDriver:
                     word=speech.word or word,
                     speech_viseme=int(speech.viseme_id),
                     live_speech=False,
+                    brow_amt=float(look.brow),
                 )
         elif self.ml is not None:
             speech, look, flat, code = self.ml.resolve(
@@ -412,13 +449,13 @@ class TickFeedDriver:
             self.prev_velocity is not None
             and float(np.abs(self.prev_velocity).max()) < 1e-6
         )
-        # Absolute KEY every tick (default): GPU S:=vel at 16.7 ms — no residual
-        # from sparse/EMPTY Δ. Set AIFACE_TICKFEED_ABSOLUTE=0 for bandwidth Δ.
-        absolute = os.environ.get("AIFACE_TICKFEED_ABSOLUTE", "1").strip().lower() not in {
-            "0",
-            "false",
-            "no",
-            "off",
+        # Steady design: KEY then Δ. Absolute KEY every tick is QA-only
+        # (AIFACE_TICKFEED_ABSOLUTE=1) to diagnose Δ residue.
+        absolute = os.environ.get("AIFACE_TICKFEED_ABSOLUTE", "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
         }
         need_key = (
             absolute
@@ -482,6 +519,7 @@ class TickFeedDriver:
         self.player.master_tick = master_tick + 1
         if pkg is not None and pkg.labels is not None:
             self.last_labels = pkg.labels
+            self.last_applied_labels = pkg.labels
         return pkg
 
     def expand_code_to_package(
@@ -564,7 +602,7 @@ class TickFeedDriver:
         """Wire-loop consumer: transport → ring (c_t expand or lane-B decode)."""
         if self.transport is None:
             return None
-        source = (self.wire_loop_source or "code").strip().lower()
+        source = (self.wire_loop_source or "package").strip().lower()
         if source == "package":
             from aiface.tickfeed.package import decode
 

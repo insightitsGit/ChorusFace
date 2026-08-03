@@ -21,23 +21,25 @@ MAX_ATLAS_PLATES: Final = 16
 HARD_SNAP_THRESHOLD: Final = 0.75
 
 # Target mouth openness [0,1] per viseme — indexes into the captured atlas.
+# Ladder avoids soft 0.15–0.55 parking: consonants sit at/above mid-band split
+# (hard-snapped to full plate); vowels are instant full open (Task 1/2).
 VISEME_OPENNESS: Final[dict[str, float]] = {
     "REST": 0.00,
     "CLOSED": 0.00,
     "PP": 0.00,
-    "FF": 0.18,
-    "TH": 0.22,
-    "DD": 0.28,
-    "KK": 0.30,
-    "CH": 0.40,
-    "SS": 0.32,
-    "NN": 0.26,
-    "RR": 0.42,
-    "IH": 0.55,
-    "EH": 0.68,
-    "EE": 0.72,
-    "OH": 0.88,
-    "OU": 0.82,
+    "FF": 0.35,
+    "TH": 0.35,
+    "DD": 0.38,
+    "KK": 0.40,
+    "CH": 0.45,
+    "SS": 0.40,
+    "NN": 0.38,
+    "RR": 0.48,
+    "IH": 1.00,
+    "EH": 1.00,
+    "EE": 1.00,
+    "OH": 1.00,
+    "OU": 1.00,
     "AA": 1.00,
     "AH": 1.00,
 }

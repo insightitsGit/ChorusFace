@@ -66,6 +66,7 @@ def labels_from_drives(
     emotion: str = "NEUTRAL",
     word: str = "",
     brow_amt: float = 0.0,
+    lid_amt: float = 1.0,
 ) -> TickLabels:
     emo = (emotion or "NEUTRAL").strip().upper()
     emotion_id = {
@@ -98,6 +99,7 @@ def labels_from_drives(
         surprise_amt=float(surprise_amt),
         word=(word or "")[:16],
         brow_amt=float(np.clip(brow_amt, 0.0, 1.0)),
+        lid_amt=float(np.clip(lid_amt, 0.0, 1.0)),
     )
 
 

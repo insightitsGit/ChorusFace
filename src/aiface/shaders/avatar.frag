@@ -402,9 +402,10 @@ float harden_matte(float alpha, float snap) {
 // identity (double-teeth ghost). Edge stays thin — no cheek stamp.
 float hybrid_matte(float alpha, float snap) {
     float a = clamp(alpha, 0.0, 1.0);
-    float core = smoothstep(0.22, 0.48, a);
-    float edge = smoothstep(0.08, 0.22, a) * (1.0 - core);
-    float hybrid = clamp(core + edge * 0.22, 0.0, 1.0);
+    // Tighter oral CORE — soft capture ellipses were a washed cheek veil.
+    float core = smoothstep(0.30, 0.55, a);
+    float edge = smoothstep(0.14, 0.30, a) * (1.0 - core);
+    float hybrid = clamp(core + edge * 0.14, 0.0, 1.0);
     // Blend toward hybrid with plate_sharpness; never invent opacity from zero.
     return mix(harden_matte(a, snap), hybrid, clamp(snap, 0.0, 1.0));
 }
@@ -547,21 +548,34 @@ void main() {
                 open_from_plate,
                 snap
             );
-            open_drive = mix(open_drive, smoothstep(0.12, 0.72, open_drive), max(snap, 0.55));
-            smile_drive = mix(smile_drive, smoothstep(0.18, 0.82, smile_drive), snap);
-            smile_drive *= (1.0 - smoothstep(0.12, 0.40, open_drive));
-            // Single LOOK owner (§14.3): open.png OR atlas — not both.
-            // Atlas only mutes open when it can paint (real plate alpha).
-            open_primary_g = smoothstep(0.42, 0.72, layer_open);
-            float atlas_want = (1.0 - open_primary_g) * mix(
-                0.0, smoothstep(0.20, 0.55, atlas_own), max(snap, 0.55)
+            // Hard snap (Task 1): no wide smoothstep ramps — mid 0.15–0.55
+            // must not soft-blend two mouth shapes (double-exposed blur).
+            float open_hard = mix(0.0, 1.0, step(0.32, open_drive));
+            open_drive = mix(open_drive, open_hard, max(snap, 0.75));
+            float smile_hard = mix(0.0, 1.0, step(0.50, smile_drive));
+            smile_drive = mix(smile_drive, smile_hard, snap);
+            smile_drive *= (1.0 - step(0.12, open_drive));
+            // Single LOOK owner: open.png OR atlas — step, not soft crossfade.
+            open_primary_g = mix(
+                smoothstep(0.42, 0.72, layer_open),
+                step(0.55, layer_open),
+                max(snap, 0.75)
             );
-            atlas_primary_g = atlas_want * smoothstep(0.14, 0.42, atlas_a_ev);
+            float atlas_want = (1.0 - open_primary_g) * mix(
+                0.0,
+                mix(smoothstep(0.20, 0.55, atlas_own), step(0.12, atlas_own), max(snap, 0.75)),
+                max(snap, 0.55)
+            );
+            atlas_primary_g = atlas_want * mix(
+                smoothstep(0.14, 0.42, atlas_a_ev),
+                step(0.14, atlas_a_ev),
+                max(snap, 0.75)
+            );
             open_drive *= (1.0 - atlas_primary_g);
             smile_drive *= (1.0 - max(atlas_primary_g, open_drive));
             open_w = open_drive * hybrid_matte(open_s.a, max(snap, 0.55));
             // Kill soft ellipse cheek veil when open.png is primary.
-            open_w *= mix(1.0, smoothstep(0.30, 0.52, open_s.a), open_primary_g);
+            open_w *= mix(1.0, step(0.30, open_s.a), open_primary_g * max(snap, 0.75));
             smile_w = smile_drive * hybrid_matte(smile_s.a, snap)
                 * (1.0 - open_w * avatar_recipe.y);
             open_drive_g = open_drive;
@@ -661,22 +675,19 @@ void main() {
         // Reuse early samples; ownership already gated on atlas alpha evidence.
         if (avatar_plates_ready == 1 && avatar_plate_blend.y > 0.001) {
             float mix_ab = clamp(avatar_plate_blend.x, 0.0, 1.0);
-            // Step 12: bias toward the nearest real captured shape instead of
-            // an even cross-fade of two different mouths. Stronger when snap
-            // is high (transition owner) so mid-band A/B ghosts die early.
-            mix_ab = mix(
-                mix_ab,
-                smoothstep(0.42, 0.58, mix_ab),
-                clamp(snap * 1.15, 0.0, 1.0)
-            );
+            // Hard A/B plate pick — never 50/50 ghost of two mouths.
+            mix_ab = mix(mix_ab, step(0.50, mix_ab), max(snap, 0.75));
             vec3 plate_rgb = mix(atlas_a_s.rgb, atlas_b_s.rgb, mix_ab);
             // Atlas primary when evidence is real; else almost no detail stack.
-            float atlas_ceil = mix(0.0, 0.95, atlas_primary_g);
+            float atlas_ceil = mix(0.0, 1.0, atlas_primary_g);
+            // Mid-band amount also hard-steps so soft 0.3 veils die.
+            float amt_y = clamp(avatar_plate_blend.y, 0.0, 1.0);
+            amt_y = mix(amt_y, mix(0.0, 1.0, step(0.12, amt_y)), max(snap, 0.75));
             float plate_a = atlas_a_ev
-                * clamp(avatar_plate_blend.y, 0.0, 1.0)
+                * amt_y
                 * avatar_recipe.z
                 * atlas_ceil
-                * (1.0 - open_primary_g * 0.95);
+                * (1.0 - open_primary_g);
             color = mix(color, plate_rgb, plate_a);
             face_alpha = max(face_alpha, plate_a);
         }

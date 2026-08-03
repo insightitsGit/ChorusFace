@@ -1320,6 +1320,12 @@ def _write_plate_atlas(
         if tag in {"CLOSED", "PP", "REST", "MM"} or open_v <= 0.16:
             if tag in {"CLOSED", "PP", "REST", "MM"}:
                 open_v = 0.0
+        else:
+            # Atlas openness ladder: never park metadata in soft 0.15–0.55
+            # (that taught mid-band cross-fades / transition blur).
+            from aiface.mouth_owner import snap_midband_openness
+
+            open_v = snap_midband_openness(open_v)
         records.append(
             AtlasPlate(
                 index=index,

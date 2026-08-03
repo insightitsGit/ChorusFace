@@ -93,13 +93,18 @@ VISEME_TABLE: Final[tuple[str, ...]] = (
 
 FLAG_HAS_LABELS: Final = 1 << 0
 FLAG_HAS_CONF: Final = 1 << 1
-# Reserved in TickPackage v1 — not set by encoders; decoders must ignore.
+# Phase-1 FIELD is rest→frame displacement (Farneback), not tick-to-tick velocity.
+# Encoders set this; masters treat ch0/1 as warp vectors from rest.
 FLAG_VS_REST: Final = 1 << 2
+
+# HELLO apply_mode (≤16 chars). Matches collect rest→frame displacement.
+APPLY_MODE_DISP_VS_REST: Final = "disp_vs_rest"
 
 # Sparse → dense fallback when too many cells change
 SPARSE_DENSE_THRESHOLD: Final = 0.35
 
 __all__ = [
+    "APPLY_MODE_DISP_VS_REST",
     "CHANNEL_MASK_VELOCITY",
     "DELTA_EPS",
     "FLAG_HAS_CONF",

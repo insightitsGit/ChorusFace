@@ -4,9 +4,9 @@
 
 | Plane | State on `tickfeedmaster` |
 | --- | --- |
-| **Contract** (bytes, labels, KEY/Δ rules) | **Done** — see handshake |
-| **Local Side A apply** (ring → GPU ingest → LOOK) | **Done** — codec + `tick_ingest.comp` |
-| **Remote CHORUS transport of KEY/Δ** | **Done (lab)** — lane A `c_t` + lane B framed packages / TPK_REF; multi-host HELLO_ACK still operator |
+| **Contract** (bytes, labels, KEY/Δ rules) | **Done** — `disp_vs_rest` + `FLAG_VS_REST`; see handshake |
+| **Local Side A apply** (ring → GPU ingest → LOOK) | **Done** — measured pass then zero-mood; codec + `tick_ingest.comp` |
+| **Remote CHORUS transport of KEY/Δ** | **Push Done (lab)** — lane A/B framed; consume = in-process memory/spool until fabric recv; multi-host HELLO_ACK still operator |
 
 Legacy ±4 **disabled**. TickFeed-native demo: labels sole LOOK authority (no
 MouthLayerTimeline hard-snap). Measured timeline carries per-tick `source`
@@ -343,16 +343,17 @@ never generative face RGB, never globally killing ``open.png``.
 
 **Emotion → face:** Side B `look_drive` carries `emotion_id` + `brow`; measured
 `face_cell_timeline` velocity is full-face FIELD (brows/cheeks included). Labels
-drive LOOK (plates/brow ease); FIELD warps identity. Lab default
-`AIFACE_TICKFEED_ABSOLUTE=1` sends KEY every tick (`S:=vel`) so 16.7 ms frames
-do not accumulate Δ residue (blink lids use overlay only — no blink muscle warp
-on top of FIELD).
+drive LOOK (plates/brow ease); FIELD warps identity. Steady path is KEY then Δ;
+`AIFACE_TICKFEED_ABSOLUTE=1` is QA-only (KEY every tick). Blink lids use overlay
+only — no blink muscle warp on top of FIELD.
 
 **FIELD semantics (phase-1):** ch0/1 are **rest-relative displacement** of the
 face patch (Farneback from the first/rest frame → each frame), not frame-to-frame
-optical flow. The avatar samples them as warp vectors. Frame-Δ flow + constraint
-damping/neighbor blend left lower-lip residue; collect stores rest→frame, KEY
-preserve skips damp/blend on ingest ticks, and TickFeed LOOK sets jaw assist to 0.
+optical flow. HELLO `apply_mode=disp_vs_rest` and package `FLAG_VS_REST` lock
+that meaning. The avatar samples them as warp vectors. Frame-Δ flow + constraint
+damping/neighbor blend left lower-lip residue; collect stores rest→frame, and
+TickFeed LOOK sets jaw assist to 0. Steady wire uses KEY then Δ; absolute KEY
+every tick is QA-only (`AIFACE_TICKFEED_ABSOLUTE=1`).
 
 Catalog ease must not overwrite `_expr_plate_blend` / plate amounts while
 TickFeed owns LOOK.
@@ -468,22 +469,20 @@ MouthLayerTimeline hard-snap overriding TickFeed labels.
 
 | Area | Designed? | Implemented on `tickfeedmaster`? |
 | --- | --- | --- |
-| Side B collect + timeline | Yes | **Yes** — Farneback→60 Hz + `source` provenance |
-| Side A codec KEY/Δ/HELLO | Yes | **Yes** — `package.py`, CRC scope correct |
+| Side B collect + timeline | Yes | **Yes** — Farneback→60 Hz + `source` + optional `lid` |
+| Side A codec KEY/Δ/HELLO | Yes | **Yes** — `disp_vs_rest`, CRC scope correct |
 | GPU ingest B1+B2 | Yes | **Yes** — `tick_ingest.comp` sparse/dense/EMPTY/lock |
-| Ring B3 producer lead | Yes | **Yes** — `produce_tick = master + RING_DEPTH` |
-| LOOK B4 label authority | Yes | **Yes** — TickFeed sole LOOK; catalog ease blocked |
-| CHORUS lane A (`c_t`) | Yes | **Yes** — `push_code` |
-| CHORUS lane B (packages) | Yes | **Yes** — framed inline / TPK_REF |
-| ML L1–L5 | Yes | **Yes** — energy align + PCA L4 (lab notes in §8) |
+| Ring B3 producer lead | Yes | **Yes** — wire-loop `master+RING_DEPTH`; local-ring same-tick |
+| LOOK B4 label authority | Yes | **Yes** — measured pass then labels; miss freezes applied |
+| CHORUS lane A (`c_t`) | Yes | **Push yes** — consume memory/spool (lab) |
+| CHORUS lane B (packages) | Yes | **Push yes** — fidelity default; fabric recv still open |
+| ML L1–L5 | Yes | **Lab yes** — WAV RMS L1 when available; PCA L4; patch-hole L5 |
 | Scaffolding / cosmetics | Yes | **Yes** — prefs + GLSL grade uniforms |
 | Legacy ±4 disabled | Yes | **Yes** |
 
-**Verdict:** Side A, Side B, and the connection are **implemented** for the lab
-single-host path (initial design). Mouth blur/sync/idle polish in **§14** is a
-**post-initial** band on top of that — not a missing third architecture.
-Remaining research is tracker/MFA/AE upgrades, a better capture take, and
-multi-host ACK.
+**Verdict:** Side A, Side B, and the **local** connection are implemented for the
+lab path. Demo plays the measured timeline before zero-mood. Mouth polish in
+**§14** is post-initial. Remaining: fabric recv, tracker/MFA/AE, new capture take.
 
 ---
 
@@ -538,7 +537,9 @@ lab play default.
 | Improvement | Behavior | Code |
 | --- | --- | --- |
 | Absolute overlay release | `until = due_at + duration`, capped by next event — **not** `now + vowel_hold_floor` | `speech.speech_overlay_until`, `app._fire_impulse` |
-| No cumulative min_hold shift | TickFeed live path forces `min_hold=0` in `apply_speech_pace` | `app._schedule_audio` |
+| No cumulative min_hold shift | TickFeed live path forces `min_hold=0` in `apply_speech_pace` + `schedule_spans` | `app._schedule_audio` |
+| Instant high-energy openness | AA/OH/… → open=1.0 immediately (no mid-band ramp) | `viseme_instant_openness` |
+| Wall-clock timeline fire | MouthLayerTimeline uses `due_at+duration` when provided | `mouth_timeline.fire` |
 | Closures never skipped | PP/MM/CLOSED/REST interrupt open holds; clear plate hysteresis | `app._fire_impulse` |
 | Playback clock | Viseme fire uses sink `media_time` when available | `audio.*Sink.media_time`, `app._speech_now` |
 | Bilabial onset pin | Leading PP gets ~45 ms at word start | `tts._subdivide`, `bias_bilabial_onsets` |
@@ -549,10 +550,12 @@ lab play default.
 
 | Improvement | Behavior | Code |
 | --- | --- | --- |
-| Transition state machine | `REST` / `OPENING` / `OPEN` / `CLOSING` from openness velocity | `app._update_mouth_transition` |
+| Transition state machine | `REST` / `OPENING` / `OPEN` / `CLOSING` from **wall-clock** openness velocity | `app._update_mouth_transition` |
 | Velocity-aware FIELD mute | OPENING/CLOSING mid-band → FIELD≈0; steady OPEN tiny; live chat/TTS → 0 under plates | `mouth_owner.look_field_gain_scale`, `app._update_avatar_uniforms` |
-| Early atlas commitment | Hard-snap `pair_for_viseme`; boost plate amount mid-transition (do not clobber in sync) | `_apply_tickfeed_labels_to_look`, `_sync_plate_blend_from_phoneme` |
-| Single LOOK owner | High open → `open.png` only; mid-band → atlas only when plate α can paint (no 0.28 stack) | `avatar.frag` `open_primary` / `atlas_primary` |
+| Hard mid-band plate snap | Never park `plate_o` in soft `0.15–0.55` — binary 0/1 commit | `snap_midband_openness`, `commit_plate_amount` |
+| Step blend curves | `open.png` vs atlas / A–B mix use `step` under snap (no soft double-expose) | `avatar.frag` |
+| Early atlas commitment | Hard-snap `pair_for_viseme`; full plate amount on OPENING/CLOSING | `_apply_tickfeed_labels_to_look`, `_sync_plate_blend_from_phoneme` |
+| Single LOOK owner | High open → `open.png` only; else atlas when α can paint | `avatar.frag` `open_primary` / `atlas_primary` |
 | Stronger rest-align under plates | Higher `rest_mix` on oral core so FIELD does not smear under LOOK | `avatar.frag` |
 
 ### 14.4 Idle presence + demo ops

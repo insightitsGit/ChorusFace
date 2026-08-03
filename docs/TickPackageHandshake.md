@@ -202,7 +202,7 @@ KEY refresh (optional every 60–120 ticks):
 | `labels` | u8 | 1 if labels always present |
 | `world_id` | utf8 / hash | |
 
-ACK returns: `apply_mode` (`velocity_write` | `displacement_write`), max payload, ok/fail.
+ACK returns: `apply_mode` (`disp_vs_rest` phase-1; legacy aliases ignored), max payload, ok/fail.
 
 ---
 

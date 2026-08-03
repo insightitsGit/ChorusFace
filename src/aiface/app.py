@@ -212,6 +212,7 @@ def _environment_flag(name: str) -> bool:
 PRESENCE_ZERO: Final = "zero"
 PRESENCE_HEARING: Final = "hearing"
 PRESENCE_SPEAKING: Final = "speaking"
+PRESENCE_CALIBRATION: Final = "calibration"
 # Idle LOOK variants while presence stays zero (switchable).
 # neutral = no impression; smile = closed-lip smile plate; waiting = attentive.
 ZERO_MOOD_NEUTRAL: Final = "neutral"
@@ -508,8 +509,11 @@ class AvatarFaceApp(FieldRuntime):
         parser.add_argument(
             "--wire-loop-source",
             choices=("code", "package"),
-            default=os.environ.get("AIFACE_WIRE_LOOP_SOURCE", "code"),
-            help="Wire-loop feed: lane-A c_t (default) or lane-B TickPackage bytes",
+            default=os.environ.get("AIFACE_WIRE_LOOP_SOURCE", "package"),
+            help=(
+                "Wire-loop feed: lane-B TickPackage bytes (fidelity default) "
+                "or lane-A c_t (lossy PCA bandwidth path)"
+            ),
         )
 
     def __init__(self, **kwargs: object) -> None:
@@ -606,6 +610,8 @@ class AvatarFaceApp(FieldRuntime):
         self._tickfeed_look_authority = False
         self._tickfeed_lid_amt = 1.0
         self._tickfeed_lid_teacher = False
+        # Demo: play measured FaceCellTimeline once before zero-mood idle.
+        self._tickfeed_calibration_active = False
         # Live chat/TTS overlay for TickFeed (bypasses MouthLayerTimeline LOOK).
         self._tickfeed_live: dict[str, float | str] | None = None
         self._tickfeed_last_pkg = None
@@ -729,14 +735,28 @@ class AvatarFaceApp(FieldRuntime):
 
         if bool(getattr(self.argv, "demo", False)):
             if self._tickfeed_look_authority:
-                # TickFeed-native demo: idle plays measured REST→SMILE→OPEN…;
-                # do not boot with old hard-snap open-mouth greeting.
-                print(
-                    "TickFeed demo: LOOK from package labels "
-                    "(one 8s calibration pass, then 0-state: closed lips + blink; "
-                    "typing = hearing look; chat end → 0-state)."
+                # Measured FaceCellTimeline owns LOOK/FIELD for one pass first.
+                # Zero-mood must NOT boot with live_speech=True (that skipped teachers).
+                length = (
+                    int(self._tickfeed.timeline_length)
+                    if self._tickfeed is not None
+                    else 0
                 )
-                self._enter_zero_state(blink=True)
+                if length > 0:
+                    self._tickfeed_calibration_active = True
+                    self._presence = PRESENCE_CALIBRATION
+                    self._tickfeed_live = None
+                    print(
+                        "TickFeed demo: measured calibration pass "
+                        f"({length} ticks @ 60 Hz), then 0-state "
+                        "(closed lips + blink; typing = hearing; chat end → 0-state)."
+                    )
+                else:
+                    print(
+                        "TickFeed demo: no timeline — entering 0-state "
+                        "(rebuild with build_tickfeed_demo.py)."
+                    )
+                    self._enter_zero_state(blink=True)
             else:
                 self._speak_without_chat(
                     "[EMOTION:HAPPY] Ah, oh — hello! My smile and lips follow the capture."
@@ -906,7 +926,7 @@ class AvatarFaceApp(FieldRuntime):
             ):
                 self._tickfeed.wire_loop = True
                 self._tickfeed.wire_loop_source = str(
-                    getattr(self.argv, "wire_loop_source", "code") or "code"
+                    getattr(self.argv, "wire_loop_source", "package") or "package"
                 )
             self._tickfeed_look_authority = bool(
                 self._tickfeed is not None and self._tickfeed.enabled
@@ -1379,10 +1399,14 @@ class AvatarFaceApp(FieldRuntime):
 
         # Design B4: when TickFeed is live, package labels own LOOK amounts.
         # Plate identity = viseme (hard snap); intensity = openness weight.
+        # Prefer last *applied* labels so ring miss cannot jump ahead.
         if (
             self._tickfeed_look_authority
             and self._tickfeed is not None
-            and self._tickfeed.last_labels is not None
+            and (
+                self._tickfeed.last_applied_labels is not None
+                or self._tickfeed.last_labels is not None
+            )
         ):
             from aiface.mouth_owner import commit_plate_amount
 
@@ -1563,6 +1587,9 @@ class AvatarFaceApp(FieldRuntime):
 
     def _update_presence(self) -> None:
         """0-state ↔ hearing (typing/pending) ↔ speaking (visemes/TTS)."""
+        # Measured calibration pass owns presence until timeline ends.
+        if getattr(self, "_tickfeed_calibration_active", False):
+            return
         speech_active = bool(self._visemes) or self._tickfeed_live_mode() == "speech"
         if speech_active:
             self._presence = PRESENCE_SPEAKING
@@ -1586,6 +1613,9 @@ class AvatarFaceApp(FieldRuntime):
             self._enter_zero_state(blink=False)
             return
 
+        if self._presence == PRESENCE_CALIBRATION:
+            return
+
         if self._presence != PRESENCE_ZERO:
             self._enter_zero_state(blink=False)
 
@@ -1593,11 +1623,13 @@ class AvatarFaceApp(FieldRuntime):
         """Build GPU layer directive from TickPackage labels (not MouthLayerTimeline)."""
         from aiface.tickfeed.schema import VISEME_TABLE
 
-        labels = (
-            self._tickfeed.last_labels
-            if self._tickfeed is not None
-            else None
-        )
+        # Miss path: freeze LOOK from last applied package — never producer sidecar.
+        labels = None
+        if self._tickfeed is not None:
+            labels = (
+                self._tickfeed.last_applied_labels
+                or self._tickfeed.last_labels
+            )
         open_amt = float(labels.open_amt) if labels is not None else 0.0
         smile_amt = float(labels.smile_amt) if labels is not None else 0.0
         phoneme = str(self._held_speech_viseme or "REST")
@@ -2741,13 +2773,20 @@ class AvatarFaceApp(FieldRuntime):
         # that is no longer being spoken.
         self._visemes.clear()
         self._mouth_timeline.clear()
-        # Keep span durations close to measured audio; overlay release clamps
-        # to next_due anyway (see speech_overlay_until).
+        # Absolute audio-clock spans only. TickFeed must not pad holds by
+        # frame-count floors — that drifts lips past word closures (Task 2).
+        tickfeed_sync = bool(
+            getattr(self, "_tickfeed_look_authority", False)
+            or (
+                self._tickfeed is not None
+                and getattr(self._tickfeed, "enabled", False)
+            )
+        )
         events = schedule_spans(
             speech.span_tuples(),
             emotion,
             start_at=start_at,
-            minimum_hold=0.028,
+            minimum_hold=0.0 if tickfeed_sync else 0.028,
         )
         events.append(
             VisemeEvent(
@@ -3213,16 +3252,18 @@ class AvatarFaceApp(FieldRuntime):
     ) -> None:
         """Speech does not write geometry. It injects muscle impulses."""
         started = time.perf_counter()
-        from aiface.plates import OPEN_TOOTH_VISEMES, VISEME_OPENNESS
+        from aiface.plates import OPEN_TOOTH_VISEMES
         from aiface.speech import canonical_viseme, speech_overlay_until
 
         now = self._speech_now()
         key = canonical_viseme(phoneme)
 
         if self._tickfeed_look_authority:
-            # TickFeed path: viseme table amounts; closures always interrupt opens.
-            # Overlay until = absolute audio span end (not now+vowel floor).
-            open_amt = float(VISEME_OPENNESS.get(key, 0.0))
+            # TickFeed path: instant viseme openness (no mid-band ramp);
+            # overlay until = absolute audio span end (not now+vowel floor).
+            from aiface.mouth_owner import viseme_instant_openness
+
+            open_amt = viseme_instant_openness(key)
             smile_amt = 0.0
             if open_amt < 0.2 and (emotion or "").upper() in {"HAPPY", "JOY"}:
                 smile_amt = 0.55
@@ -3253,11 +3294,12 @@ class AvatarFaceApp(FieldRuntime):
             self._held_speech_viseme = key
             self._mouth_timeline.clear()
             # Light jaw assist only — LOOK plates come from TickPackage labels.
+            # Duration is wall-clock span length (never mouth-hold frame pad).
             self._biomech.submit_phoneme(
                 phoneme,
                 tick=self.tick + 1,
                 emotion_label=emotion,
-                duration=max(float(duration), 0.05),
+                duration=max(float(duration), 1.0 / 60.0),
             )
         else:
             self._mouth_timeline.fire(
@@ -3266,10 +3308,13 @@ class AvatarFaceApp(FieldRuntime):
                 duration=float(duration),
                 emotion=emotion,
                 next_due_at=next_due_at,
+                due_at=due_at,
             )
+            # Wall-clock hold only (seconds) — never multiply by frame count.
             hold_floor = float(getattr(self, "_mouth_hold_min", 0.36))
             if key in OPEN_TOOTH_VISEMES:
-                hold_floor = max(hold_floor, hold_floor * 1.15)
+                # Instant high-energy: one visible frame minimum, not a ramp pad.
+                hold_floor = max(float(duration), 1.0 / 60.0)
             self._presence = PRESENCE_SPEAKING
             self._biomech.submit_phoneme(
                 phoneme,
@@ -3536,25 +3581,33 @@ class AvatarFaceApp(FieldRuntime):
         """Hold LOOK open amount so brief dips don't smear mid-blend frames.
 
         Open follows quickly; closes (especially bilabial zeros) win immediately
-        so word locking is not fighting a sticky open hold.
+        so word locking is not fighting a sticky open hold. Mid-band soft
+        values are hard-snapped out (Task 1).
         """
-        target = max(0.0, min(1.0, float(open_amt)))
+        from aiface.mouth_owner import snap_midband_openness
+
+        target = snap_midband_openness(open_amt)
         prev = float(getattr(self, "_plate_open_hyst", 0.0) or 0.0)
         if target <= 0.02:
             self._plate_open_hyst = 0.0
             return 0.0
         if target >= prev:
-            if target - prev >= 0.03 or target >= 0.95:
-                self._plate_open_hyst = target
+            # Instant commit on rising openness (high-energy vowels).
+            self._plate_open_hyst = target
         elif prev - target >= 0.05 or target <= 0.08:
             self._plate_open_hyst = target
-        elif target < 0.20 and prev > 0.25:
-            self._plate_open_hyst = max(target, prev * 0.45)
+        else:
+            # Never ease through 0.15–0.55 — jump to snapped target.
+            self._plate_open_hyst = target
         return float(self._plate_open_hyst)
 
     def _update_mouth_transition(self, plate_amt: float) -> str:
         """REST / OPENING / OPEN / CLOSING from openness velocity (single-owner)."""
-        dt = 1.0 / 60.0
+        # Wall-clock dt — fixed 1/60 drifts under FPS jitter (Task 2).
+        now = time.perf_counter()
+        prev_t = float(getattr(self, "_plate_open_wall_t", now) or now)
+        dt = max(1e-4, min(0.10, now - prev_t))
+        self._plate_open_wall_t = now
         prev = float(getattr(self, "_plate_open_prev", 0.0) or 0.0)
         raw_vel = (float(plate_amt) - prev) / max(dt, 1e-4)
         self._plate_open_vel = (
@@ -3651,51 +3704,84 @@ class AvatarFaceApp(FieldRuntime):
         if self._tickfeed is not None and self._tickfeed.enabled:
             live = self._tickfeed_live_active()
             mode = self._tickfeed_live_mode()
-            # Keep speech overlay while visemes remain even if until lapsed —
-            # otherwise measured timeline steals mid-sentence LOOK/FIELD.
-            speech_pending = bool(self._visemes) or self._presence == PRESENCE_SPEAKING
-            if (live or speech_pending) and self._tickfeed_live is not None:
-                if not live and speech_pending:
-                    # Short decay bridge — do NOT sticky-refresh the prior open
-                    # amount (that parked mid-open until the next vowel).
-                    now = time.perf_counter() - self._clock0
-                    prev_until = float(self._tickfeed_live.get("until") or 0.0)
-                    age = max(0.0, now - prev_until)
-                    open_amt = float(self._tickfeed_live.get("open", 0.0))
-                    decay = max(0.0, 1.0 - age / 0.10)
-                    open_amt = open_amt * decay if open_amt > 0.10 else 0.0
-                    if open_amt < 0.06:
-                        open_amt = 0.0
-                        self._tickfeed_live["phoneme"] = "CLOSED"
-                        self._held_speech_viseme = "CLOSED"
-                        self._plate_open_hyst = 0.0
-                    self._tickfeed_live["open"] = open_amt
-                    self._tickfeed_live["smile"] = 0.0
-                    self._tickfeed_live["until"] = now + 0.04
-                    live = True
-                    mode = str(self._tickfeed_live.get("mode") or "speech")
-                open_amt = float(self._tickfeed_live.get("open", 0.0))
-                smile_amt = float(self._tickfeed_live.get("smile", 0.0))
-                surprise_amt = float(self._tickfeed_live.get("surprise", 0.0))
-                phoneme = str(self._tickfeed_live.get("phoneme") or "REST")
-                emotion = str(self._tickfeed_live.get("emotion") or "NEUTRAL")
-            elif self._presence == PRESENCE_ZERO:
-                # Switchable idle LOOK: neutral / smile / waiting.
-                self._apply_zero_mood_overlay()
-                open_amt, smile_amt, surprise_amt, phoneme, emotion = (
-                    self._zero_mood_drives()
+            open_amt = 0.0
+            smile_amt = 0.0
+            surprise_amt = 0.0
+            phoneme = "REST"
+            emotion = "NEUTRAL"
+            live_overlay = False
+
+            # 1) Measured calibration pass — teachers own LOOK/FIELD (no live_speech).
+            if self._tickfeed_calibration_active:
+                length = int(self._tickfeed.timeline_length)
+                if length > 0 and int(next_tick) >= length:
+                    self._tickfeed_calibration_active = False
+                    print(
+                        "TickFeed: calibration pass complete "
+                        f"({length} ticks) → 0-state"
+                    )
+                    self._enter_zero_state(blink=True)
+                    # Fall through into zero-mood path this tick.
+                elif length > 0:
+                    self._presence = PRESENCE_CALIBRATION
+                    self._tickfeed_live = None
+                    live_overlay = False
+                    mode = "calibration"
+                    # Caller amounts ignored — look_by_tick / speech_by_tick win.
+                    open_amt = smile_amt = surprise_amt = 0.0
+                    phoneme = "REST"
+                    emotion = "NEUTRAL"
+
+            if not self._tickfeed_calibration_active:
+                # Keep speech overlay while visemes remain even if until lapsed —
+                # otherwise measured timeline steals mid-sentence LOOK/FIELD.
+                speech_pending = (
+                    bool(self._visemes) or self._presence == PRESENCE_SPEAKING
                 )
-                live = True
-                mode = "zero"
-            else:
-                # Fallback closed REST — blink comes from EyeSystem.
-                open_amt = 0.0
-                smile_amt = 0.0
-                surprise_amt = 0.0
-                phoneme = "REST"
-                emotion = "NEUTRAL"
-            # Speech / hearing / zero-mood overlays own LOOK; keep FIELD still.
-            live_overlay = live and mode in {"speech", "hearing", "zero"}
+                if (live or speech_pending) and self._tickfeed_live is not None:
+                    if not live and speech_pending:
+                        # Short decay bridge — do NOT sticky-refresh the prior open
+                        # amount (that parked mid-open until the next vowel).
+                        now = time.perf_counter() - self._clock0
+                        prev_until = float(self._tickfeed_live.get("until") or 0.0)
+                        age = max(0.0, now - prev_until)
+                        open_amt = float(self._tickfeed_live.get("open", 0.0))
+                        decay = max(0.0, 1.0 - age / 0.10)
+                        open_amt = open_amt * decay if open_amt > 0.10 else 0.0
+                        if open_amt < 0.06:
+                            open_amt = 0.0
+                            self._tickfeed_live["phoneme"] = "CLOSED"
+                            self._held_speech_viseme = "CLOSED"
+                            self._plate_open_hyst = 0.0
+                        self._tickfeed_live["open"] = open_amt
+                        self._tickfeed_live["smile"] = 0.0
+                        self._tickfeed_live["until"] = now + 0.04
+                        live = True
+                        mode = str(self._tickfeed_live.get("mode") or "speech")
+                    open_amt = float(self._tickfeed_live.get("open", 0.0))
+                    smile_amt = float(self._tickfeed_live.get("smile", 0.0))
+                    surprise_amt = float(self._tickfeed_live.get("surprise", 0.0))
+                    phoneme = str(self._tickfeed_live.get("phoneme") or "REST")
+                    emotion = str(self._tickfeed_live.get("emotion") or "NEUTRAL")
+                    live_overlay = live and mode in {"speech", "hearing", "zero"}
+                elif self._presence == PRESENCE_ZERO:
+                    # Switchable idle LOOK: neutral / smile / waiting.
+                    self._apply_zero_mood_overlay()
+                    open_amt, smile_amt, surprise_amt, phoneme, emotion = (
+                        self._zero_mood_drives()
+                    )
+                    live = True
+                    mode = "zero"
+                    live_overlay = True
+                else:
+                    # Fallback closed REST — blink comes from EyeSystem.
+                    open_amt = 0.0
+                    smile_amt = 0.0
+                    surprise_amt = 0.0
+                    phoneme = "REST"
+                    emotion = "NEUTRAL"
+                    live_overlay = False
+
             # Local-ring: produce the tick we consume (same 16.7 ms). Wire-loop
             # keeps B3 producer lead so the transport can jitter.
             if self._tickfeed.wire_loop:
