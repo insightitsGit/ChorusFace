@@ -1374,6 +1374,10 @@ class AvatarFaceApp(FieldRuntime):
         live = self._tickfeed_live
         if live is not None and str(live.get("mode") or "") == "hearing":
             self._tickfeed_live = None
+        # Drop held open plate immediately — hysteresis must not park open.png
+        # after speech ends (full-cycle QA: idle still o≈0.9).
+        self._plate_open_hyst = 0.0
+        self._plate_openness_current = 0.0
         if hasattr(self, "_biomech"):
             self._biomech.eyes.look_at(0.0, 0.0)
             if blink and was != PRESENCE_ZERO:
@@ -3170,16 +3174,22 @@ class AvatarFaceApp(FieldRuntime):
     def _hysteresis_plate_open(self, open_amt: float) -> float:
         """Hold LOOK open amount so brief dips don't smear mid-blend frames.
 
-        Open follows targets quickly; close needs a larger drop (asymmetric).
+        Open follows targets quickly; close needs a larger drop (asymmetric),
+        but must still release promptly at end-of-speech so idle isn't stuck open.
         """
         target = max(0.0, min(1.0, float(open_amt)))
         prev = float(getattr(self, "_plate_open_hyst", 0.0) or 0.0)
         if target >= prev:
             if target - prev >= 0.03 or target >= 0.95:
                 self._plate_open_hyst = target
-        elif prev - target >= 0.14 or target <= 0.02:
+        elif prev - target >= 0.08 or target <= 0.05:
             self._plate_open_hyst = target
+        elif target < 0.18 and prev > 0.25:
+            # Fast decay out of speech — avoid parking open.png after REST.
+            self._plate_open_hyst = max(target, prev * 0.55)
         # else hold previous
+        if target <= 0.01:
+            self._plate_open_hyst = 0.0
         return float(self._plate_open_hyst)
 
     def _apply_tickfeed_labels_to_look(self, pkg) -> None:
@@ -3229,8 +3239,12 @@ class AvatarFaceApp(FieldRuntime):
             self._plate_pair = (ia, ib)
             self._plate_blend = (float(mix), plate_amt)
             self._plate_blend_current = (float(mix), plate_amt)
-        if plate_amt > 0.2:
+        # Open speech owns LOOK — never stack smile.png (corner scars / double mouth).
+        if plate_amt > 0.10:
+            smile = 0.0
             self._ml_smile = 0.0
+        else:
+            self._ml_smile = smile
 
     def _simulate_tick(self) -> None:
         """Push ahead into ring → master pops current tick → GPU ingest (B1–B3)."""

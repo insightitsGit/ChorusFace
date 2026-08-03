@@ -544,10 +544,26 @@ void main() {
         // L04/L05 CAPTURE LOOKS — plate RGB on top of rest-aligned identity.
         float open_plate_w = 0.0;
         if (avatar_plates_ready == 1) {
+            // Cover resting smile-corner creases that sit outside the open O
+            // (full-cycle QA: dark horizontal \"scars\" beside the mouth).
+            float wing_y = 1.0 - smoothstep(
+                avatar_mouth_line.z * 0.45,
+                avatar_mouth_line.z * 1.05,
+                abs(grid_position.y - avatar_mouth_line.y)
+            );
+            float wing_x = smoothstep(
+                avatar_mouth_line.z * 0.75,
+                avatar_mouth_line.z * 2.10,
+                abs(grid_position.x - avatar_mouth_line.x)
+            );
+            float corner_cover = open_drive_g * wing_y * wing_x
+                * smoothstep(0.03, 0.16, open_s.a)
+                * (1.0 - open_w);
+            float open_commit = max(open_w, corner_cover * 0.90);
             color = mix(color, smile_s.rgb, smile_w);
-            color = mix(color, open_s.rgb, open_w);
-            face_alpha = max(face_alpha, max(open_w, smile_w));
-            open_plate_w = open_w;
+            color = mix(color, open_s.rgb, open_commit);
+            face_alpha = max(face_alpha, max(open_commit, smile_w));
+            open_plate_w = open_commit;
         }
 
         // L06: optional cavity fill when the jaw actually parts.
@@ -608,12 +624,12 @@ void main() {
             );
             vec3 plate_rgb = mix(pa.rgb, pb.rgb, mix_ab);
             // Atlas is detail on top of open.png — bow out under open ownership
-            // so L05+L07 don't stack double teeth / ghost lips.
+            // so L05+L07 don't stack double teeth / ghost lips / stray shapes.
             float plate_a = hybrid_matte(max(pa.a, pb.a), snap)
                 * clamp(avatar_plate_blend.y, 0.0, 1.0)
                 * avatar_recipe.z
-                * 0.40
-                * (1.0 - smoothstep(0.20, 0.65, open_plate_w));
+                * 0.28
+                * (1.0 - smoothstep(0.12, 0.50, open_plate_w));
             color = mix(color, plate_rgb, plate_a);
             face_alpha = max(face_alpha, plate_a);
         }
