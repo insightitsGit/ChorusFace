@@ -535,8 +535,10 @@ void main() {
         }
 
         // L02: warp identity only outside plate-owned pixels.
+        // During plate ownership, rest-align harder so FIELD travel cannot
+        // smear under a committed LOOK plate (transition single-owner).
         vec2 source = inverse_warp(grid_position);
-        float rest_mix = clamp(plate_own * 0.99 + plate_commit * 0.35, 0.0, 0.99);
+        float rest_mix = clamp(plate_own * 0.99 + plate_commit * 0.55, 0.0, 0.99);
         source = mix(source, grid_position, rest_mix);
         color = photo_at(source);
         face_alpha = smoothstep(0.02, 0.12, max(color.r, max(color.g, color.b)));
@@ -616,11 +618,12 @@ void main() {
             vec4 pb = texture(avatar_plate_b, plate_uv);
             float mix_ab = clamp(avatar_plate_blend.x, 0.0, 1.0);
             // Step 12: bias toward the nearest real captured shape instead of
-            // an even cross-fade of two different mouths.
+            // an even cross-fade of two different mouths. Stronger when snap
+            // is high (transition owner) so mid-band A/B ghosts die early.
             mix_ab = mix(
                 mix_ab,
-                smoothstep(0.35, 0.65, mix_ab),
-                snap
+                smoothstep(0.42, 0.58, mix_ab),
+                clamp(snap * 1.15, 0.0, 1.0)
             );
             vec3 plate_rgb = mix(pa.rgb, pb.rgb, mix_ab);
             // Atlas is detail on top of open.png — bow out under open ownership

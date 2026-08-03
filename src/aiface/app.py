@@ -597,6 +597,11 @@ class AvatarFaceApp(FieldRuntime):
         self._calibrate_mode = "normal"
         # Plate openness hysteresis — hold shapes so mid-blend flicker softens.
         self._plate_open_hyst = 0.0
+        # Transition ownership (ChatGPT roadmap): track d(open)/dt for FIELD gate
+        # and atlas snap. States: REST | OPENING | OPEN | CLOSING.
+        self._plate_open_prev = 0.0
+        self._plate_open_vel = 0.0
+        self._mouth_transition = "REST"
         from aiface.tickfeed.side_a_debug import SideADebugLog
 
         self._side_a_debug = SideADebugLog(
@@ -1316,18 +1321,17 @@ class AvatarFaceApp(FieldRuntime):
         from aiface.plates import HARD_SNAP_THRESHOLD
 
         # Design B4: when TickFeed is live, package labels own LOOK amounts.
-        # Soft openness keeps open.png readable (hard viseme snap left only a
-        # tiny atlas patch + stuck smile after the LOOK-composite experiment).
+        # Plate identity = viseme (hard snap); intensity = openness weight.
         if (
             self._tickfeed_look_authority
             and self._tickfeed is not None
             and self._tickfeed.last_labels is not None
         ):
-            labels = self._tickfeed.last_labels
             phoneme = str(self._held_speech_viseme or "REST")
-            # Prefer hysteresis amount from last TickFeed apply (anti mid-blend).
             open_amt = float(getattr(self, "_plate_open_hyst", 0.0))
-            ia, ib, mix = atlas.pair_for_openness(open_amt, hard_snap=False)
+            # Early commitment during OPENING/CLOSING — no soft A/B ghost.
+            snap = True
+            ia, ib, mix = atlas.pair_for_viseme(phoneme, hard_snap=snap)
             ia = max(0, min(ia, len(self._atlas_textures) - 1))
             ib = max(0, min(ib, len(self._atlas_textures) - 1))
             self._plate_pair = (ia, ib)
@@ -1971,23 +1975,39 @@ class AvatarFaceApp(FieldRuntime):
         elif speaking_plate and not self._tickfeed_look_authority:
             field_gain *= 0.20
         elif self._tickfeed_look_authority:
-            # Mute FIELD under a strong open plate; keep mid-open travel so the
-            # mouth still moves (over-muting + killing open.png froze the smile).
+            # Velocity-aware FIELD gating (ChatGPT C): mute during fast
+            # OPENING/CLOSING so plate+field don't smear mid-band; keep some
+            # travel at steady OPEN / REST (avoid frozen mid-open regression).
             plate_o = max(
                 float(self._plate_blend_current[1]),
                 float(self._plate_openness_current),
                 float(self._ml_openness),
             )
-            if plate_o >= 0.45:
-                field_gain *= 0.05
-            else:
-                field_gain *= max(0.40, 1.0 - 0.55 * plate_o)
+            mouth_state = str(
+                getattr(self, "_mouth_transition", "REST") or "REST"
+            )
+            vel = abs(float(getattr(self, "_plate_open_vel", 0.0) or 0.0))
+            if mouth_state in {"OPENING", "CLOSING"} and (
+                vel > 0.8 or 0.12 <= plate_o <= 0.60
+            ):
+                field_gain *= 0.08
+            elif plate_o >= 0.45 or mouth_state == "OPEN":
+                field_gain *= 0.10
+            elif plate_o >= 0.12:
+                field_gain *= max(0.35, 1.0 - 0.70 * plate_o)
+            # else REST / near-closed: full recipe gain
         self._field_gain_eff = float(field_gain)
         program["avatar_field_gain"].value = field_gain
         # Step 12: plate snap — commit toward the nearest captured mouth shape.
-        program["avatar_plate_sharpness"].value = float(
-            self._display_recipe.plate_sharpness
-        )
+        # Early atlas commitment during OPENING/CLOSING reduces mid-band ghosts.
+        sharp = float(self._display_recipe.plate_sharpness)
+        if (
+            self._tickfeed_look_authority
+            and str(getattr(self, "_mouth_transition", "REST"))
+            in {"OPENING", "CLOSING", "OPEN"}
+        ):
+            sharp = max(sharp, 0.92)
+        program["avatar_plate_sharpness"].value = sharp
         # Cosmetic prefs (scaffolding) — grade only, never replace identity photo.
         if self._cosmetics is not None:
             skin = self._cosmetics.skin_tint_rgb
@@ -2877,48 +2897,34 @@ class AvatarFaceApp(FieldRuntime):
         key = canonical_viseme(phoneme)
 
         if self._tickfeed_look_authority:
-            # Brand-new TickFeed path: amounts from viseme table, not hard-snap 1.0.
+            # TickFeed path: viseme table amounts; closures always interrupt opens
+            # (ChatGPT/Gemini roadmap — never skip PP/MM/CLOSED for word lock).
             open_amt = float(VISEME_OPENNESS.get(key, 0.0))
-            # Closed-lip smile only when mouth is not opening — smile+open muddy.
             smile_amt = 0.0
             if open_amt < 0.2 and (emotion or "").upper() in {"HAPPY", "JOY"}:
                 smile_amt = 0.55
-            if key in {"REST", "CLOSED", "PP", "MM"}:
+            closure_keys = {"REST", "CLOSED", "PP", "MM", "SIL"}
+            is_closure = key in closure_keys or open_amt < 0.12
+            if is_closure:
                 open_amt = 0.0
+                smile_amt = 0.0
             pace = self._speech_pace()
-            span = max(float(duration), 0.06 * pace)
+            span = max(float(duration), 0.05 * pace)
             if next_due_at is not None:
-                span = max(span, min(float(next_due_at) - now, 0.35 * pace))
-            # Hold long enough that timeline teacher cannot steal mid-word.
-            # Scale with speech_pace so slowed chat keeps each shape readable.
-            hold_floor = 0.32 * pace
-            if key in OPEN_TOOTH_VISEMES or open_amt >= 0.45:
-                hold_floor = 0.55 * pace
-            hold_floor = max(hold_floor, self._viseme_min_hold())
-            prev = self._tickfeed_live
-            # Do not let brief CLOSED/REST visemes erase an open hold — that made
-            # mouth flashes one frame then freeze closed (LOOK open, FIELD 0).
-            if (
-                open_amt < 0.12
-                and prev is not None
-                and str(prev.get("mode") or "") == "speech"
-                and float(prev.get("open") or 0.0) >= 0.2
-                and now < float(prev.get("until") or 0.0)
-            ):
-                self._presence = PRESENCE_SPEAKING
-                self._biomech.submit_phoneme(
-                    phoneme,
-                    tick=self.tick + 1,
-                    emotion_label=emotion,
-                    duration=max(float(duration), 0.10),
-                )
-                self._telemetry.last_phoneme = phoneme
-                self._telemetry.last_emotion = emotion
-                self._telemetry.impulses_fired += 1
-                self._telemetry.command_latency_ms = (
-                    time.perf_counter() - started
-                ) * 1000.0
-                return
+                span = max(span, min(float(next_due_at) - now, 0.28 * pace))
+            # Interruptible holds: closures get a short visible floor; vowels
+            # hold less aggressively so bilabials can land mid-word.
+            if is_closure:
+                hold_floor = max(0.040 * pace, 0.035)
+            else:
+                hold_floor = 0.18 * pace
+                if key in OPEN_TOOTH_VISEMES or open_amt >= 0.45:
+                    hold_floor = 0.28 * pace
+                # Cap recipe min_hold so pace=1.0 does not smear the sentence.
+                hold_floor = max(hold_floor, min(self._viseme_min_hold(), 0.06))
+            if is_closure:
+                # Closures always win over a prior open hold.
+                self._plate_open_hyst = 0.0
             self._presence = PRESENCE_SPEAKING
             self._tickfeed_live = {
                 "phoneme": key,
@@ -2936,7 +2942,7 @@ class AvatarFaceApp(FieldRuntime):
                 phoneme,
                 tick=self.tick + 1,
                 emotion_label=emotion,
-                duration=max(float(duration), 0.10),
+                duration=max(float(duration), 0.08),
             )
         else:
             self._mouth_timeline.fire(
@@ -3174,23 +3180,46 @@ class AvatarFaceApp(FieldRuntime):
     def _hysteresis_plate_open(self, open_amt: float) -> float:
         """Hold LOOK open amount so brief dips don't smear mid-blend frames.
 
-        Open follows targets quickly; close needs a larger drop (asymmetric),
-        but must still release promptly at end-of-speech so idle isn't stuck open.
+        Open follows quickly; closes (especially bilabial zeros) win immediately
+        so word locking is not fighting a sticky open hold.
         """
         target = max(0.0, min(1.0, float(open_amt)))
         prev = float(getattr(self, "_plate_open_hyst", 0.0) or 0.0)
+        if target <= 0.02:
+            self._plate_open_hyst = 0.0
+            return 0.0
         if target >= prev:
             if target - prev >= 0.03 or target >= 0.95:
                 self._plate_open_hyst = target
-        elif prev - target >= 0.08 or target <= 0.05:
+        elif prev - target >= 0.05 or target <= 0.08:
             self._plate_open_hyst = target
-        elif target < 0.18 and prev > 0.25:
-            # Fast decay out of speech — avoid parking open.png after REST.
-            self._plate_open_hyst = max(target, prev * 0.55)
-        # else hold previous
-        if target <= 0.01:
-            self._plate_open_hyst = 0.0
+        elif target < 0.20 and prev > 0.25:
+            self._plate_open_hyst = max(target, prev * 0.45)
         return float(self._plate_open_hyst)
+
+    def _update_mouth_transition(self, plate_amt: float) -> str:
+        """REST / OPENING / OPEN / CLOSING from openness velocity (single-owner)."""
+        dt = 1.0 / 60.0
+        prev = float(getattr(self, "_plate_open_prev", 0.0) or 0.0)
+        raw_vel = (float(plate_amt) - prev) / max(dt, 1e-4)
+        self._plate_open_vel = (
+            0.65 * float(getattr(self, "_plate_open_vel", 0.0) or 0.0)
+            + 0.35 * raw_vel
+        )
+        self._plate_open_prev = float(plate_amt)
+        vel = float(self._plate_open_vel)
+        if plate_amt < 0.08 and abs(vel) < 0.8:
+            state = "REST"
+        elif vel > 1.0 or (0.08 <= plate_amt < 0.55 and vel > 0.25):
+            state = "OPENING"
+        elif vel < -1.0 or (plate_amt > 0.12 and vel < -0.25):
+            state = "CLOSING"
+        elif plate_amt >= 0.45:
+            state = "OPEN"
+        else:
+            state = "OPENING" if plate_amt >= 0.08 else "REST"
+        self._mouth_transition = state
+        return state
 
     def _apply_tickfeed_labels_to_look(self, pkg) -> None:
         """B4 — LOOK plates owned by TickPackage labels (sole authority)."""
@@ -3213,6 +3242,8 @@ class AvatarFaceApp(FieldRuntime):
             self._plate_open_hyst = 0.0
             smile = 0.0
             surprise = 0.0
+        # Single-owner transition state for FIELD/atlas policy this tick.
+        state = self._update_mouth_transition(plate_amt)
         self._tickfeed_look_authority = True
         self._ml_smile = smile
         self._ml_openness = open_amt
@@ -3230,15 +3261,22 @@ class AvatarFaceApp(FieldRuntime):
             if 0 <= vid < len(VISEME_TABLE):
                 self._held_speech_viseme = VISEME_TABLE[vid]
         if self._plate_atlas is not None and self._atlas_textures:
-            # Soft openness blend — open.png stays the loud readable mouth.
-            ia, ib, mix = self._plate_atlas.pair_for_openness(
-                plate_amt, hard_snap=False
+            # Plate = viseme identity; weight = openness (B4 label intensity).
+            phoneme = str(self._held_speech_viseme or "REST")
+            ia, ib, mix = self._plate_atlas.pair_for_viseme(
+                phoneme, hard_snap=True
             )
             ia = max(0, min(ia, len(self._atlas_textures) - 1))
             ib = max(0, min(ib, len(self._atlas_textures) - 1))
+            # During OPENING/CLOSING, commit plate amount a bit earlier so the
+            # oral disk isn't half plate / half FIELD (ghost mid-band).
+            amount = plate_amt
+            if state in {"OPENING", "CLOSING"} and amount > 0.08:
+                amount = max(amount, min(1.0, amount * 1.15 + 0.06))
             self._plate_pair = (ia, ib)
-            self._plate_blend = (float(mix), plate_amt)
-            self._plate_blend_current = (float(mix), plate_amt)
+            self._plate_blend = (float(mix), amount)
+            self._plate_blend_current = (float(mix), amount)
+            self._plate_openness_current = amount
         # Open speech owns LOOK — never stack smile.png (corner scars / double mouth).
         if plate_amt > 0.10:
             smile = 0.0
@@ -3259,9 +3297,22 @@ class AvatarFaceApp(FieldRuntime):
             speech_pending = bool(self._visemes) or self._presence == PRESENCE_SPEAKING
             if (live or speech_pending) and self._tickfeed_live is not None:
                 if not live and speech_pending:
-                    # Refresh hold so produce stays on live synth, not teacher.
+                    # Short decay bridge — do NOT sticky-refresh the prior open
+                    # amount (that parked mid-open until the next vowel).
                     now = time.perf_counter() - self._clock0
-                    self._tickfeed_live["until"] = now + 0.20
+                    prev_until = float(self._tickfeed_live.get("until") or 0.0)
+                    age = max(0.0, now - prev_until)
+                    open_amt = float(self._tickfeed_live.get("open", 0.0))
+                    decay = max(0.0, 1.0 - age / 0.10)
+                    open_amt = open_amt * decay if open_amt > 0.10 else 0.0
+                    if open_amt < 0.06:
+                        open_amt = 0.0
+                        self._tickfeed_live["phoneme"] = "CLOSED"
+                        self._held_speech_viseme = "CLOSED"
+                        self._plate_open_hyst = 0.0
+                    self._tickfeed_live["open"] = open_amt
+                    self._tickfeed_live["smile"] = 0.0
+                    self._tickfeed_live["until"] = now + 0.04
                     live = True
                     mode = str(self._tickfeed_live.get("mode") or "speech")
                 open_amt = float(self._tickfeed_live.get("open", 0.0))

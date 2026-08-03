@@ -102,7 +102,8 @@ class DisplayRecipe:
     plate_sharpness: float = 0.90
     # 1.0 = realtime audio+visemes; >1 slows both together for lab clarity.
     speech_pace: float = 1.0
-    viseme_min_hold: float = 0.10
+    # 0 = no schedule stretch at pace 1.0 (avoids sentence-level drift).
+    viseme_min_hold: float = 0.0
 
     @property
     def shader_knobs(self) -> tuple[float, float, float, float]:
