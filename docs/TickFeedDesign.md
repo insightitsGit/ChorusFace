@@ -613,11 +613,15 @@ invented closed-eye RGB plates.
 
 These remain **future** — not part of the post-initial mouth/blink pass:
 
-1. **Lab MFA** — full phoneme forced-align beyond Whisper words  
+1. **Full Montreal MFA** — phoneme forced-align beyond Whisper-words teacher  
 2. **New capture take** — true neutral rest + tongue-visible TH  
-3. Multi-host HELLO_ACK + remote master (transport; zero local LOOK effect)  
-4. L4 autoencoder (PCA is phase-1 codec)  
-5. Per-avatar L3 size/quality research on more takes  
+3. Multi-host HELLO_ACK ceremony polish (recv spool + master target are landed)  
+4. Per-avatar L3 size/quality research on more takes  
+
+Landed since §14: Whisper Side B teacher when keyed; DIS dense tracker
+(`AIFACE_TICKFEED_FLOW=dis`); L4 AE when PCA holdout MAE is insufficient
+(`AIFACE_TICKFEED_L4_AE=1` to force); CHORUS master recv
+(`scripts/start_chorus_master.py` + `pull_recv_*`).
 
 ---
 
@@ -631,14 +635,15 @@ PCA L4.
 closure priority, transition FIELD ownership, zero moods, bilabial align,
 Whisper-words default when keyed, denser plates + Farneback rebuild tools.
 
+**Research close band — done on branch:** Whisper Side B teacher, DIS tracker,
+CHORUS master recv spool, L4 AE upgrade path.
+
 **Still useful next (in order):**
 
-1. Lab MFA (or always-on Whisper words in environments with a key)  
-2. New calibration take (neutral rest + TH tongue) → `build_tickfeed_demo --clean`  
-3. Stronger dense tracker beyond Farneback (teacher FIELD quality)  
-4. Multi-host HELLO_ACK + remote master consumer  
-5. L4 AE if PCA quality is insufficient  
-6. Per-avatar L3 size vs quality on more takes  
+1. New calibration take (neutral rest + TH tongue) → `build_tickfeed_demo --clean`  
+2. Full Montreal MFA if Whisper words are not enough  
+3. Per-avatar L3 size vs quality on more takes  
+4. Multi-host HELLO_ACK ceremony polish (optional ops)  
 
 ---
 

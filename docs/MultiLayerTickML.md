@@ -2,7 +2,9 @@
 
 **Status:** lab implemented (`aiface.tickfeed.ml` + `scripts/train_tickfeed_ml.py`).  
 L1 uses **WAV RMS** features when `audio_feat.npz` exists (`wav_rms`); otherwise
-honest `proxy_fallback` in meta. L4 = PCA. L5 = recover PCA codes from punched
+honest `proxy_fallback` in meta. L4 = PCA, upgrading to a nonlinear AE when
+holdout MAE exceeds the threshold (or `AIFACE_TICKFEED_L4_AE=1`). L5 = recover
+codes from punched
 **patch** holes (not look-feature holes). Metrics include holdout.  
 **Master:** [`TickFeedDesign.md`](TickFeedDesign.md).  
 **Pair with:** [`SideB_VideoCellCollection.md`](SideB_VideoCellCollection.md) ·

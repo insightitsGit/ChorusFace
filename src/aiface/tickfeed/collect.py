@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -13,12 +15,57 @@ from aiface.tickfeed.schema import TICK_RATE_HZ
 from aiface.tickfeed.synth import synthesize_velocity
 from aiface.tickfeed.timeline_io import write_face_cell_timeline
 
+# Default DIS (Dense Inverse Search) — stronger rest→frame lip FIELD than
+# Farneback on articulation. Override with AIFACE_TICKFEED_FLOW=farneback.
+_FLOW_METHOD = os.environ.get("AIFACE_TICKFEED_FLOW", "dis").strip().lower()
+
+
+def _flow_method() -> str:
+    return _FLOW_METHOD if _FLOW_METHOD in {"dis", "farneback"} else "dis"
+
+
+def _dense_rest_flow(rest_gray: np.ndarray, crop: np.ndarray, cv2: Any) -> np.ndarray:
+    """Compute rest→frame dense displacement; prefer DIS, fall back Farneback."""
+    method = _flow_method()
+    if method == "dis" and hasattr(cv2, "DISOpticalFlow_create"):
+        try:
+            preset = getattr(
+                cv2, "DISOpticalFlow_PRESET_MEDIUM", None
+            )
+            if preset is None:
+                preset = getattr(cv2, "DISOPTICAL_FLOW_PRESET_MEDIUM", 1)
+            dis = cv2.DISOpticalFlow_create(preset)
+            # Finest scale helps mouth edges; keep gradient descent stable.
+            if hasattr(dis, "setFinestScale"):
+                dis.setFinestScale(0)
+            if hasattr(dis, "setGradientDescentIterations"):
+                dis.setGradientDescentIterations(25)
+            if hasattr(dis, "setVariationalRefinementIterations"):
+                dis.setVariationalRefinementIterations(5)
+            flow = dis.calc(rest_gray, crop, None)
+            if flow is not None and flow.shape[:2] == rest_gray.shape[:2]:
+                return flow.astype(np.float32)
+        except Exception:  # noqa: BLE001
+            pass
+    return cv2.calcOpticalFlowFarneback(
+        rest_gray,
+        crop,
+        None,
+        0.5,
+        4,
+        21,
+        3,
+        7,
+        1.1,
+        0,
+    ).astype(np.float32)
+
 
 def _optical_flow_face_series(
     video: Path,
     face: FaceBox,
-) -> tuple[list[float], list[np.ndarray]] | None:
-    """Dense Farneback **rest→frame** displacement on every decoded frame.
+) -> tuple[list[float], list[np.ndarray], str] | None:
+    """Dense **rest→frame** displacement on every decoded frame (DIS/Farneback).
 
     Phase-1 ch0/1 are sampled by the avatar warp as a *displacement field*
     (not integrated). Frame-to-frame optical flow therefore leaves residue and
@@ -36,6 +83,7 @@ def _optical_flow_face_series(
     rest_gray: np.ndarray | None = None
     times: list[float] = []
     flows: list[np.ndarray] = []
+    used = _flow_method()
     idx = 0
     while True:
         ok, frame = cap.read()
@@ -58,21 +106,7 @@ def _optical_flow_face_series(
             times.append(t)
             flows.append(np.zeros((face.h, face.w, 2), dtype=np.float32))
         else:
-            # Slightly denser Farneback (more levels / larger window) for
-            # cleaner rest→frame lip FIELD on rebuild. Live speech still uses
-            # synth velocity; this improves teacher timeline quality.
-            flow = cv2.calcOpticalFlowFarneback(
-                rest_gray,
-                crop,
-                None,
-                0.5,
-                4,
-                21,
-                3,
-                7,
-                1.1,
-                0,
-            ).astype(np.float32)
+            flow = _dense_rest_flow(rest_gray, crop, cv2)
             # Drop rigid translation (head/camera) — otherwise OPEN is a jaw
             # slide and lip separation is invisible under the warp.
             mean = flow.reshape(-1, 2).mean(axis=0)
@@ -88,7 +122,7 @@ def _optical_flow_face_series(
     peak = float(np.percentile(np.abs(stacked), 99.5))
     scale = 1.15 / max(peak, 1e-3)
     flows = [f * scale for f in flows]
-    return times, flows
+    return times, flows, used
 
 
 def _interp_flow_to_60hz(
@@ -159,12 +193,14 @@ def prepare_face_timeline(
                 break
 
     flow_series = None
+    flow_method_used = "none"
     if vid is not None and vid.is_file():
         flow_series = _optical_flow_face_series(vid, face)
         if flow_series is not None:
+            flow_method_used = flow_series[2]
             print(
-                f"TickFeed collect: rest→frame displacement n={len(flow_series[1])} "
-                f"from {vid.name}"
+                f"TickFeed collect: rest->frame displacement n={len(flow_series[1])} "
+                f"method={flow_method_used} from {vid.name}"
             )
         try:
             from aiface.behavior.track import extract_transition_track
@@ -181,7 +217,7 @@ def prepare_face_timeline(
             times, opens, smiles = [], [], []
 
     if flow_series is not None:
-        flow_t, flow_v = flow_series
+        flow_t, flow_v, flow_method_used = flow_series
         velocities, conf = _interp_flow_to_60hz(flow_t, flow_v, face)
         n_ticks = velocities.shape[0]
         # 0=measured optical flow (design §10 — do not sell synth as measured).
@@ -242,7 +278,8 @@ def prepare_face_timeline(
         )
         print(
             f"TickFeed collect: wrote {out} ticks={n_ticks} "
-            f"face={face.w}x{face.h} source=optical_flow_measured"
+            f"face={face.w}x{face.h} source=optical_flow_measured "
+            f"tracker={flow_method_used}"
         )
         return out
 

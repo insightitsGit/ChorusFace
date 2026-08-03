@@ -106,6 +106,17 @@ class TickFeedTransport:
         # Lane-B framed CHUNK buffer for runtime reassemble (not tests-only).
         self._lane_b_frames: list[np.ndarray] = []
         self._lane_b_tick: int | None = None
+        # Multi-host consume: master target dumps decrypted vectors here.
+        self.recv_spool = Path(
+            os.environ.get(
+                "AIFACE_CHORUS_RECV_SPOOL",
+                str(self.spool / "recv"),
+            )
+        )
+        self._recv_seen: set[str] = set()
+        self._recv_chunk_buf: dict[int, dict[int, np.ndarray]] = {}
+        self._recv_latest_code: np.ndarray | None = None
+        self._recv_latest_package: bytes | None = None
         if use_chorus:
             self._try_chorus()
 
@@ -327,6 +338,87 @@ class TickFeedTransport:
             return None
         self._latest_package = blob
         return blob
+
+    def pull_recv_vector(self) -> np.ndarray | None:
+        """Pull next unread decrypted vector from the master target spool."""
+        self._drain_recv_spool()
+        if self._recv_latest_code is not None:
+            return self._recv_latest_code.copy()
+        return None
+
+    def pull_recv_code(self) -> np.ndarray | None:
+        """Lane-A consume from fabric recv spool (plain c_t vectors)."""
+        self._drain_recv_spool()
+        if self._recv_latest_code is None:
+            return None
+        return self._recv_latest_code.copy()
+
+    def pull_recv_package_bytes(self) -> bytes | None:
+        """Lane-B consume from fabric recv spool (reassembled CHUNKs)."""
+        self._drain_recv_spool()
+        return self._recv_latest_package
+
+    def _drain_recv_spool(self) -> None:
+        if not self.recv_spool.is_dir():
+            return
+        files = sorted(self.recv_spool.glob("vec_*.f32"))
+        for path in files:
+            key = path.name
+            if key in self._recv_seen:
+                continue
+            self._recv_seen.add(key)
+            try:
+                raw = path.read_bytes()
+            except OSError:
+                continue
+            vec = np.frombuffer(raw, dtype="<f4").copy()
+            if vec.size < self.dim:
+                vec = np.pad(vec, (0, self.dim - vec.size))
+            vec = vec[: self.dim].astype(np.float32)
+            self._ingest_recv_vector(vec)
+
+    def _ingest_recv_vector(self, vec: np.ndarray) -> None:
+        magic = float(np.float32(vec[0])) if vec.size else 0.0
+        if magic == _f32(TPK_CHUNK_MAGIC):
+            try:
+                header = parse_lane_b_header(vec)
+            except ValueError:
+                return
+            tick = int(header["tick"])
+            idx = int(header["chunk_i"])
+            bucket = self._recv_chunk_buf.setdefault(tick, {})
+            bucket[idx] = vec.copy()
+            n = int(header["n_chunks"])
+            if len(bucket) >= n:
+                frames = [bucket[i] for i in range(n) if i in bucket]
+                if len(frames) == n:
+                    try:
+                        self._recv_latest_package = reassemble_lane_b_chunks(frames)
+                    except ValueError:
+                        pass
+                self._recv_chunk_buf.pop(tick, None)
+            return
+        if magic == _f32(TPK_REF_MAGIC):
+            # REF points at producer spool basename encoded in meta floats.
+            try:
+                header = parse_lane_b_header(vec)
+            except ValueError:
+                return
+            name_bytes = bytes(
+                int(round(float(vec[_META + j]))) & 0xFF for j in range(48)
+            )
+            name = name_bytes.split(b"\x00", 1)[0].decode("utf-8", errors="replace")
+            if name:
+                path = self.spool / name
+                if path.is_file():
+                    blob = path.read_bytes()
+                    expect = int(header["crc32"])
+                    got = zlib.crc32(blob) & 0xFFFFFFFF
+                    if got == expect and len(blob) == int(header["nbytes"]):
+                        self._recv_latest_package = blob
+            return
+        # Plain lane-A code (no TPK framing magic).
+        self._recv_latest_code = vec.copy()
 
 
 def parse_lane_b_header(vec: np.ndarray) -> dict[str, Any]:

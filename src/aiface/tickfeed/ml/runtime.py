@@ -11,7 +11,12 @@ from numpy.typing import NDArray
 
 from aiface.tickfeed.audio_feat import load_audio_feat
 from aiface.tickfeed.ml.packets import LookDrive, SpeechClock
-from aiface.tickfeed.ml.train import ML_DIR, _audio_proxy
+from aiface.tickfeed.ml.train import (
+    ML_DIR,
+    _audio_proxy,
+    l4_decode_codes,
+    l4_encode_codes,
+)
 from aiface.tickfeed.schema import VISEME_TABLE
 
 
@@ -127,33 +132,29 @@ class TickFeedMLStack:
                 code = np.asarray(self.l5.predict(code.reshape(1, -1))[0], dtype=np.float64)
             except Exception:  # noqa: BLE001
                 pass
-        pca = self.l4["pca"]
-        n = int(pca.n_components_)
+        n = int(
+            self.l4.get("n_components")
+            or getattr(self.l4.get("pca"), "n_components_", len(code))
+        )
         if code.shape[0] < n:
             code = np.pad(code, (0, n - code.shape[0]))
         code = code[:n]
-        flat = pca.inverse_transform(code.reshape(1, -1))[0].astype(np.float32)
+        flat = l4_decode_codes(self.l4, code)[0]
         return speech, look, flat, code.astype(np.float32).tolist()
 
     def encode_patch(self, patch: NDArray[np.floating]) -> list[float]:
         """L4 encode: face velocity patch → compact c_t."""
         if self.l4 is None:
             raise RuntimeError("L4 codec not loaded")
-        pca = self.l4["pca"]
         flat = np.asarray(patch, dtype=np.float32).reshape(1, -1)
-        code = pca.transform(flat)[0]
+        code = l4_encode_codes(self.l4, flat)[0]
         return code.astype(np.float32).tolist()
 
     def decode_code(self, code: list[float] | NDArray[np.floating]) -> NDArray[np.float32]:
         """L4 decode: compact c_t → flat face velocity."""
         if self.l4 is None:
             raise RuntimeError("L4 codec not loaded")
-        pca = self.l4["pca"]
-        n = int(pca.n_components_)
-        vec = np.asarray(code, dtype=np.float64).reshape(-1)
-        if vec.size < n:
-            vec = np.pad(vec, (0, n - vec.size))
-        return pca.inverse_transform(vec[:n].reshape(1, -1))[0].astype(np.float32)
+        return l4_decode_codes(self.l4, np.asarray(code, dtype=np.float64))[0]
 
 
 __all__ = ["TickFeedMLStack"]

@@ -8,8 +8,11 @@ weakening the design.
 **Status snapshot:** Demo plays measured timeline before zero-mood; `source[]`
 gates authority; HELLO/flags say `disp_vs_rest`; `lid_amt` on the wire; L1 uses
 WAV RMS when available; mid-band plate blur hard-snapped; lip-sync uses absolute
-audio-clock spans; local lane-B CHUNK reassemble is runtime-wired. Remaining
-operator/research: multi-host CHORUS recv, MFA, stronger tracker, new capture take.
+audio-clock spans; local lane-B CHUNK reassemble is runtime-wired; multi-host
+recv spool + master target landed; Whisper-words teacher when keyed; DIS dense
+tracker default; L4 AE upgrades when PCA holdout MAE is insufficient.
+
+Operator-owned remaining: **new calibration take** (neutral rest + tongue TH).
 
 ---
 
@@ -17,15 +20,11 @@ operator/research: multi-host CHORUS recv, MFA, stronger tracker, new capture ta
 
 | # | Severity | Item | Why |
 | --- | --- | --- | --- |
-| 1 | **P1** | Multi-host CHORUS fabric recv | Local lane-B reassemble is wired; remote pod still open |
-| 2 | **P1** | Lab MFA | Energy force-align + Whisper-words when keyed |
-| 3 | **P2** | New calibration take | True neutral rest + tongue TH |
-| 4 | **P2** | Tracker beyond Farneback | Teacher FIELD quality ceiling |
-| 5 | **P2** | L4 AE if PCA insufficient | Phase-1 PCA OK for bandwidth demos |
+| 1 | **P2** | New calibration take | True neutral rest + tongue TH — capture, not code |
 
 ---
 
-## Closed in fidelity pass (do not re-open without evidence)
+## Closed (do not re-open without evidence)
 
 | Item | Fix |
 | --- | --- |
@@ -43,29 +42,22 @@ operator/research: multi-host CHORUS recv, MFA, stronger tracker, new capture ta
 | Mid-band transition blur | Hard snap + shader `step` ownership |
 | Lip-sync hold drift | Absolute `due_at` spans; TickFeed `minimum_hold=0` |
 | Lane-B reassemble runtime | `pull_package_from_lane_b_frames` on transport |
+| Multi-host CHORUS recv | `chorus_master` TargetPod → recv spool; `pull_recv_*` |
+| Whisper Side B teacher | `force_align` → `whisper_words_force_align` when keyed |
+| Tracker beyond Farneback | DIS default (`AIFACE_TICKFEED_FLOW=dis`) |
+| L4 AE when PCA weak | `fit_l4_codec` upgrades; force `AIFACE_TICKFEED_L4_AE=1` |
 
 ---
 
 ## Still open (honest)
 
-### CHORUS consume (P1 vs status)
-
-**Design:** one-way fabric push; lane A/B.  
-**Impl:** push + memory/`_latest_*` / spool + **local** CHUNK reassemble
-(`pull_package_from_lane_b_frames`). Multi-host fabric recv + HELLO_ACK
-remains operator.
-
-**Status wording:** Push Done (lab); local reassemble Done; remote consume open.
-
 ### Operator-owned
 
 | Item | Notes |
 | --- | --- |
-| New calibration take | `AvatarCalibrationPrompt.md` |
-| Lab MFA | Beyond Whisper-words / energy force-align |
-| Multi-host HELLO_ACK + remote master | Separate pod |
-| Tracker beyond Farneback | Mesh / UV / 3DMM+residual |
-| L4 autoencoder | When PCA quality insufficient |
+| New calibration take | `AvatarCalibrationPrompt.md` → rebuild world |
+| Full lab MFA phoneme align | Whisper words is the keyed teacher; Montreal MFA optional later |
+| Multi-host HELLO_ACK ceremony | Recv path works; separate ACK ceremony still optional ops |
 
 ---
 
@@ -75,11 +67,12 @@ remains operator.
 - `FLAG_VS_REST` + HELLO `disp_vs_rest`  
 - GPU ingest B1+B2 + Master Lock  
 - Legacy ±4 disabled  
-- Collect Farneback → 60 Hz + `source` provenance + optional `lid`  
+- Collect DIS/Farneback → 60 Hz + `source` provenance + optional `lid`  
 - Measured calibration pass then zero-mood  
 - Label-driven LOOK; miss freezes applied labels  
 - Mouth §14.2–§14.3 sync/transition tools  
-- L1–L5 train/load with holdout metrics; L4 PCA; L5 patch-hole recover  
+- L1–L5 train/load with holdout metrics; L4 PCA/AE; L5 patch-hole recover  
+- CHORUS push + local reassemble + master recv spool  
 
 ---
 

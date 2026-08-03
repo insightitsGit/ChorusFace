@@ -593,7 +593,10 @@ class TickFeedDriver:
         """If transport has a newer c_t, expand and submit to the ring."""
         if self.transport is None or self.ml is None:
             return None
-        code = self.transport.pull_latest_code()
+        # Prefer multi-host fabric recv spool, then local push memory/spool.
+        code = self.transport.pull_recv_code()
+        if code is None:
+            code = self.transport.pull_latest_code()
         if code is None:
             return None
         return self.expand_code_to_package(tick, code)
@@ -606,7 +609,9 @@ class TickFeedDriver:
         if source == "package":
             from aiface.tickfeed.package import decode
 
-            blob = self.transport.pull_latest_package_bytes()
+            blob = self.transport.pull_recv_package_bytes()
+            if blob is None:
+                blob = self.transport.pull_latest_package_bytes()
             if blob is None:
                 return None
             pkg = decode(blob)

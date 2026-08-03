@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,156 @@ from aiface.tickfeed.schema import TICK_RATE_HZ, VISEME_TABLE
 
 CODE_DIM = 64
 ML_DIR = "ml"
+# Upgrade PCA → nonlinear AE when holdout reconstruction MAE exceeds this
+# (NWR-scaled patches ~±1.5). Force with AIFACE_TICKFEED_L4_AE=1.
+L4_PCA_HOLDOUT_MAE_MAX = float(os.environ.get("AIFACE_TICKFEED_L4_PCA_MAE", "0.12"))
+
+
+def _force_l4_ae() -> bool:
+    return os.environ.get("AIFACE_TICKFEED_L4_AE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "ae",
+    }
+
+
+def l4_encode_codes(codec: dict[str, Any], patches: np.ndarray) -> np.ndarray:
+    """Encode flat patches with an L4 codec dict (pca or ae)."""
+    x = np.asarray(patches, dtype=np.float64)
+    if x.ndim == 1:
+        x = x.reshape(1, -1)
+    kind = str(codec.get("kind") or "pca")
+    if kind == "ae":
+        return np.asarray(codec["encoder"].predict(x), dtype=np.float64)
+    pca = codec["pca"]
+    return np.asarray(pca.transform(x), dtype=np.float64)
+
+
+def l4_decode_codes(codec: dict[str, Any], codes: np.ndarray) -> np.ndarray:
+    """Decode compact codes with an L4 codec dict (pca or ae)."""
+    c = np.asarray(codes, dtype=np.float64)
+    if c.ndim == 1:
+        c = c.reshape(1, -1)
+    kind = str(codec.get("kind") or "pca")
+    n = int(
+        codec.get("n_components")
+        or getattr(codec.get("pca"), "n_components_", c.shape[1])
+    )
+    if c.shape[1] < n:
+        c = np.pad(c, ((0, 0), (0, n - c.shape[1])))
+    c = c[:, :n]
+    if kind == "ae":
+        return np.asarray(codec["decoder"].predict(c), dtype=np.float32)
+    return np.asarray(codec["pca"].inverse_transform(c), dtype=np.float32)
+
+
+def fit_l4_codec(
+    y_patch: np.ndarray,
+    train_idx: np.ndarray,
+    test_idx: np.ndarray,
+    *,
+    seed: int = 17,
+) -> tuple[dict[str, Any], np.ndarray, dict[str, Any]]:
+    """Fit L4 PCA, upgrade to AE when reconstruction is insufficient."""
+    from sklearn.decomposition import PCA
+    from sklearn.neural_network import MLPRegressor
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    y_patch = np.asarray(y_patch, dtype=np.float64)
+    n_comp = min(CODE_DIM, max(4, len(train_idx) - 1), y_patch.shape[1])
+    pca = PCA(n_components=n_comp, random_state=seed)
+    pca.fit(y_patch[train_idx])
+    codes_pca = pca.transform(y_patch)
+    recon_pca = pca.inverse_transform(codes_pca)
+    pca_mae = float(np.mean(np.abs(recon_pca[train_idx] - y_patch[train_idx])))
+    pca_hold = float(np.mean(np.abs(recon_pca[test_idx] - y_patch[test_idx])))
+    explained = float(np.sum(pca.explained_variance_ratio_))
+
+    use_ae = _force_l4_ae() or pca_hold > L4_PCA_HOLDOUT_MAE_MAX or explained < 0.90
+    metrics: dict[str, Any] = {
+        "mae": pca_mae,
+        "holdout_mae": pca_hold,
+        "n_components": n_comp,
+        "explained_variance": explained,
+        "kind": "pca",
+        "pca_holdout_mae": pca_hold,
+    }
+    if not use_ae:
+        codec = {
+            "kind": "pca",
+            "pca": pca,
+            "patch_dim": int(y_patch.shape[1]),
+            "n_components": n_comp,
+        }
+        return codec, np.asarray(codes_pca, dtype=np.float64), metrics
+
+    encoder = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            (
+                "mlp",
+                MLPRegressor(
+                    hidden_layer_sizes=(256, 128),
+                    max_iter=700,
+                    random_state=seed,
+                ),
+            ),
+        ]
+    )
+    decoder = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            (
+                "mlp",
+                MLPRegressor(
+                    hidden_layer_sizes=(128, 256),
+                    max_iter=700,
+                    random_state=seed,
+                ),
+            ),
+        ]
+    )
+    # Nonlinear map into the PCA latent, then nonlinear reconstruct patches.
+    encoder.fit(y_patch[train_idx], codes_pca[train_idx])
+    codes_ae = np.asarray(encoder.predict(y_patch), dtype=np.float64)
+    decoder.fit(codes_ae[train_idx], y_patch[train_idx])
+    recon_ae = np.asarray(decoder.predict(codes_ae), dtype=np.float64)
+    ae_mae = float(np.mean(np.abs(recon_ae[train_idx] - y_patch[train_idx])))
+    ae_hold = float(np.mean(np.abs(recon_ae[test_idx] - y_patch[test_idx])))
+    metrics.update(
+        {
+            "mae": ae_mae,
+            "holdout_mae": ae_hold,
+            "kind": "ae",
+            "ae_holdout_mae": ae_hold,
+            "upgraded_from_pca": True,
+        }
+    )
+    # Keep AE only when it wins (or was forced).
+    if ae_hold <= pca_hold or _force_l4_ae():
+        codec = {
+            "kind": "ae",
+            "encoder": encoder,
+            "decoder": decoder,
+            "pca": pca,
+            "patch_dim": int(y_patch.shape[1]),
+            "n_components": n_comp,
+        }
+        return codec, codes_ae, metrics
+
+    metrics["kind"] = "pca"
+    metrics["mae"] = pca_mae
+    metrics["holdout_mae"] = pca_hold
+    metrics["ae_rejected_holdout_mae"] = ae_hold
+    codec = {
+        "kind": "pca",
+        "pca": pca,
+        "patch_dim": int(y_patch.shape[1]),
+        "n_components": n_comp,
+    }
+    return codec, np.asarray(codes_pca, dtype=np.float64), metrics
 
 
 def _ml_root(world: Path) -> Path:
@@ -202,7 +353,6 @@ def _holdout_split(n: int, *, seed: int, frac: float = 0.85) -> tuple[np.ndarray
 
 def fit_all_layers(world: Path | str, *, seed: int = 17) -> dict[str, Any]:
     """Train L1–L5 into world/ml/ and return metrics (train + holdout)."""
-    from sklearn.decomposition import PCA
     from sklearn.neural_network import MLPClassifier, MLPRegressor
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler
@@ -228,20 +378,12 @@ def fit_all_layers(world: Path | str, *, seed: int = 17) -> dict[str, Any]:
         "audio_feat_source": audio_source,
     }
 
-    # L4 codec first (teacher for L3/L5)
-    n_comp = min(CODE_DIM, max(4, len(train_idx) - 1), y_patch.shape[1])
-    pca = PCA(n_components=n_comp, random_state=seed)
-    pca.fit(y_patch[train_idx])
-    codes = pca.transform(y_patch)
-    recon = pca.inverse_transform(codes)
-    l4_mae_train = float(np.mean(np.abs(recon[train_idx] - y_patch[train_idx])))
-    l4_mae_hold = float(np.mean(np.abs(recon[test_idx] - y_patch[test_idx])))
-    joblib.dump({"pca": pca, "patch_dim": int(y_patch.shape[1])}, root / "l4_tick_codec.joblib")
-    meta["layers"]["l4"] = {
-        "mae": l4_mae_train,
-        "holdout_mae": l4_mae_hold,
-        "n_components": n_comp,
-    }
+    # L4 codec first (teacher for L3/L5) — PCA, AE when insufficient.
+    codec, codes, l4_metrics = fit_l4_codec(
+        y_patch, train_idx, test_idx, seed=seed
+    )
+    joblib.dump(codec, root / "l4_tick_codec.joblib")
+    meta["layers"]["l4"] = l4_metrics
 
     # L1 speech clock — real WAV features when available
     l1 = Pipeline(
@@ -313,11 +455,11 @@ def fit_all_layers(world: Path | str, *, seed: int = 17) -> dict[str, Any]:
     joblib.dump(l3, root / "l3_face_motion.joblib")
     meta["layers"]["l3"] = {"code_mae": l3_mae, "holdout_code_mae": l3_hold}
 
-    # L5 gap prior: recover full PCA code from punched holes in the *patch*
+    # L5 gap prior: recover full code from punched holes in the *patch*
     hole_patches = y_patch.copy()
     cell_mask = rng.random(hole_patches.shape) < 0.25
     hole_patches[cell_mask] = 0.0
-    codes_holes = pca.transform(hole_patches)
+    codes_holes = l4_encode_codes(codec, hole_patches)
     l5 = Pipeline(
         [
             ("scaler", StandardScaler()),
@@ -353,7 +495,6 @@ def fit_all_layers(world: Path | str, *, seed: int = 17) -> dict[str, Any]:
 
 def fit_layer(world: Path | str, layer: str, *, seed: int = 17) -> dict[str, Any]:
     """Retrain a single layer (l1…l5). L3/L5 need L4 on disk."""
-    from sklearn.decomposition import PCA
     from sklearn.neural_network import MLPClassifier, MLPRegressor
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler
@@ -383,20 +524,11 @@ def fit_layer(world: Path | str, layer: str, *, seed: int = 17) -> dict[str, Any
     }
 
     if layer == "l4":
-        n_comp = min(CODE_DIM, max(4, len(train_idx) - 1), y_patch.shape[1])
-        pca = PCA(n_components=n_comp, random_state=seed)
-        pca.fit(y_patch[train_idx])
-        codes = pca.transform(y_patch)
-        recon = pca.inverse_transform(codes)
-        out["metrics"] = {
-            "mae": float(np.mean(np.abs(recon[train_idx] - y_patch[train_idx]))),
-            "holdout_mae": float(np.mean(np.abs(recon[test_idx] - y_patch[test_idx]))),
-            "n_components": n_comp,
-        }
-        joblib.dump(
-            {"pca": pca, "patch_dim": int(y_patch.shape[1])},
-            root / "l4_tick_codec.joblib",
+        codec, _codes, metrics = fit_l4_codec(
+            y_patch, train_idx, test_idx, seed=seed
         )
+        out["metrics"] = metrics
+        joblib.dump(codec, root / "l4_tick_codec.joblib")
         print(f"TickFeed ML: retrained {layer} -> {root} ({out.get('metrics')})")
         return out
 
@@ -404,7 +536,7 @@ def fit_layer(world: Path | str, layer: str, *, seed: int = 17) -> dict[str, Any
     if not l4_path.is_file():
         raise FileNotFoundError(f"missing {l4_path}; train --layer l4 first")
     l4 = joblib.load(l4_path)
-    codes = l4["pca"].transform(y_patch)
+    codes = l4_encode_codes(l4, y_patch)
     x_l2 = np.concatenate(
         [x_audio, y_viseme.reshape(-1, 1).astype(np.float64)], axis=1
     )
@@ -487,7 +619,7 @@ def fit_layer(world: Path | str, layer: str, *, seed: int = 17) -> dict[str, Any
         hole_patches = y_patch.copy()
         cell_mask = rng.random(hole_patches.shape) < 0.25
         hole_patches[cell_mask] = 0.0
-        codes_holes = l4["pca"].transform(hole_patches)
+        codes_holes = l4_encode_codes(l4, hole_patches)
         model = Pipeline(
             [
                 ("scaler", StandardScaler()),
@@ -521,4 +653,14 @@ def fit_layer(world: Path | str, layer: str, *, seed: int = 17) -> dict[str, Any
     return out
 
 
-__all__ = ["AUDIO_FEAT", "CODE_DIM", "build_training_tables", "fit_all_layers", "fit_layer"]
+__all__ = [
+    "AUDIO_FEAT",
+    "CODE_DIM",
+    "L4_PCA_HOLDOUT_MAE_MAX",
+    "build_training_tables",
+    "fit_all_layers",
+    "fit_l4_codec",
+    "fit_layer",
+    "l4_decode_codes",
+    "l4_encode_codes",
+]
