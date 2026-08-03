@@ -277,6 +277,52 @@ def bias_bilabial_onsets(
     return out
 
 
+def snap_bilabials_to_energy_valleys(
+    spans: Sequence[PhonemeSpan],
+    envelope: Envelope,
+    *,
+    search: float = 0.06,
+) -> list[PhonemeSpan]:
+    """Pull PP/MM/CLOSED starts toward a nearby energy trough (closure cue)."""
+    if not spans or envelope.frame_count <= 2:
+        return list(spans)
+    energies = [float(v) for v in envelope.values]
+    hop = float(envelope.hop)
+    if not energies or hop <= 0.0:
+        return list(spans)
+    out = [PhonemeSpan(s.phoneme, float(s.start), float(s.end)) for s in spans]
+    for i, span in enumerate(out):
+        if span.phoneme not in BILABIAL_VISEMES:
+            continue
+        center = 0.5 * (span.start + span.end)
+        lo = max(0.0, center - search)
+        hi = center + search
+        i0 = max(0, int(lo / hop))
+        i1 = min(len(energies) - 1, int(hi / hop))
+        if i1 <= i0:
+            continue
+        window = energies[i0 : i1 + 1]
+        valley_i = i0 + int(min(range(len(window)), key=lambda j: window[j]))
+        valley_t = valley_i * hop
+        width = max(span.end - span.start, MIN_SPAN)
+        new_start = max(0.0, valley_t - 0.5 * width)
+        new_end = new_start + width
+        if i > 0:
+            prev = out[i - 1]
+            new_start = max(new_start, float(prev.start) + MIN_SPAN)
+            new_end = new_start + width
+        if i + 1 < len(out):
+            nxt = out[i + 1]
+            new_end = min(new_end, float(nxt.end) - MIN_SPAN)
+            new_start = new_end - width
+            if i > 0:
+                new_start = max(new_start, float(out[i - 1].start) + MIN_SPAN)
+                new_end = new_start + width
+        if new_end > new_start + 1e-4:
+            out[i] = PhonemeSpan(span.phoneme, new_start, new_end)
+    return out
+
+
 def _enforce_minimum(spans: Sequence[PhonemeSpan], limit: float) -> list[PhonemeSpan]:
     """Give every surviving span a holdable length.
 
@@ -437,9 +483,10 @@ def align_by_energy(
         previous_end = stop
         previous_token = end
     spans.extend(
-        _proportional(tokens[previous_token:], start=previous_end, end=duration)
+            _proportional(tokens[previous_token:], start=previous_end, end=duration)
     )
-    return _enforce_minimum(spans, duration)
+    spans = _enforce_minimum(spans, duration)
+    return snap_bilabials_to_energy_valleys(spans, envelope)
 
 
 def _proportional(
@@ -1119,6 +1166,7 @@ __all__ = [
     "align_text",
     "apply_speech_pace",
     "bias_bilabial_onsets",
+    "snap_bilabials_to_energy_valleys",
     "build_synthesizer",
     "detect_local_voice",
     "local_voice_available",

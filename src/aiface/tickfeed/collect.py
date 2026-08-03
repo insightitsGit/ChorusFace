@@ -58,16 +58,19 @@ def _optical_flow_face_series(
             times.append(t)
             flows.append(np.zeros((face.h, face.w, 2), dtype=np.float32))
         else:
+            # Slightly denser Farneback (more levels / larger window) for
+            # cleaner rest→frame lip FIELD on rebuild. Live speech still uses
+            # synth velocity; this improves teacher timeline quality.
             flow = cv2.calcOpticalFlowFarneback(
                 rest_gray,
                 crop,
                 None,
                 0.5,
+                4,
+                21,
                 3,
-                15,
-                3,
-                5,
-                1.2,
+                7,
+                1.1,
                 0,
             ).astype(np.float32)
             # Drop rigid translation (head/camera) — otherwise OPEN is a jaw

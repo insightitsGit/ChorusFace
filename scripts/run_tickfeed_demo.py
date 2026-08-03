@@ -186,6 +186,15 @@ def main() -> int:
         action="store_true",
         help="Enable Side A JSONL debug ingest log — costs FPS",
     )
+    parser.add_argument(
+        "--tts-align",
+        choices=("words", "energy", "linear"),
+        default=os.environ.get("AIFACE_TTS_ALIGN") or "",
+        help=(
+            "Viseme aligner. Default: words when OPENAI_API_KEY is set, "
+            "else energy. Override with this flag or AIFACE_TTS_ALIGN."
+        ),
+    )
     args = parser.parse_args()
 
     print("TickFeed demo preflight")
@@ -243,9 +252,17 @@ def main() -> int:
     cmd.append("--wire-loop" if args.wire_loop else "--no-wire-loop")
     if float(args.speech_pace) > 0.0:
         cmd.extend(["--speech-pace", str(float(args.speech_pace))])
+    align = str(args.tts_align or "").strip().lower()
+    if not align:
+        if os.environ.get("OPENAI_API_KEY") or os.environ.get("AIFACE_LLM_API_KEY"):
+            align = "words"
+        else:
+            align = "energy"
+    cmd.extend(["--tts-align", align])
     print(
         f"  master={'wire-loop/' + args.wire_loop_source if args.wire_loop else 'local-ring'}"
     )
+    print(f"  tts-align: {align}")
     if float(args.speech_pace) > 0.0:
         print(f"  speech_pace: {float(args.speech_pace):.3f}")
     return subprocess.call(cmd, cwd=str(ROOT), env=env)

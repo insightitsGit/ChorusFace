@@ -18,6 +18,23 @@ Speed/latency is already in live-chat range (~100–200 ms trimmed p95 vs offlin
 The remaining gap for lip-reading is **shape inventory + closures**, not more
 jitter reduction.
 
+## TickFeed post-initial sync (after B1–B4)
+
+The TickFeed **initial design** (labels sole LOOK, KEY/Δ FIELD) is documented in
+[`TickFeedDesign.md`](TickFeedDesign.md) §1–§13. A **second band** of work (§14)
+landed afterward specifically for lip-readable motion:
+
+| Band | What |
+| --- | --- |
+| Absolute overlay until | Release LOOK at `due_at + duration` (audio clock), not vowel hold floors |
+| Closure priority | Never skip PP/MM/CLOSED while an open hold is active |
+| Bilabial onset | Pin ~45 ms PP at word start; snap to energy valleys when using energy align |
+| Whisper words | Default `--tts-align words` when an API key is present |
+| Distinct plates | Priority atlas keeps CLOSED/PP/FF/TH on different frames when the take allows |
+
+Still open for true speechreading: **lab MFA**, a **new capture take** with a
+flat rest + tongue-visible TH, and host phoneme timelines (`/voice/timeline`).
+
 ## What we ship
 
 1. **Canonical visemes** in `aiface.speech` (`canonical_viseme`, Oculus aliases).

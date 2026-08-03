@@ -2,8 +2,9 @@
 
 **Status:** contract + local runtime **implemented**; CHORUS lane A+B push
 **implemented** for lab (framed inline / TPK_REF); multi-host HELLO_ACK still
-operator-owned (see TickFeedDesign §6.2 / §16).  
-**Master:** [`TickFeedDesign.md`](TickFeedDesign.md).  
+operator-owned (see TickFeedDesign §6.2 / §17).  
+**Master:** [`TickFeedDesign.md`](TickFeedDesign.md)
+(§1–§13 initial design · §14 post-initial mouth improvements).  
 **Pair with:** [`CellFeedBandwidth.md`](CellFeedBandwidth.md) ·
 [`SideB_VideoCellCollection.md`](SideB_VideoCellCollection.md) ·
 [`MultiLayerTickML.md`](MultiLayerTickML.md)
@@ -254,4 +255,6 @@ refresh KEY    = every 120 ticks (2 s) optional
 
 **Implementation branch:** `tickfeedmaster`  
 Python codec: `aiface.tickfeed` · GPU ingest shader: `shaders/tick_ingest.comp`  
-Bridges B1–B4 adopted in [`TickFeedDesign.md`](TickFeedDesign.md) §6.5.
+Bridges B1–B4 adopted in [`TickFeedDesign.md`](TickFeedDesign.md) §6.5 / §13
+(initial design). Post-initial mouth sync/blur work is §14 — does not change
+this byte contract.

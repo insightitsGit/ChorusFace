@@ -22,13 +22,13 @@
 | [`AvatarAdoption.md`](AvatarAdoption.md) | Any qualifying world dir → same GPU path |
 | [`AvatarBehavior.md`](AvatarBehavior.md) | Measured transitions + **retrainable** ML fill for gaps |
 | [`AvatarObservations.md`](AvatarObservations.md) | **Smile/open vectors** the ML fills from (GPU + landmarks) |
-| [`TickFeedDesign.md`](TickFeedDesign.md) | **MASTER** — full-face tick feed Side A/B (`tickfeedmaster` branch) |
+| [`TickFeedDesign.md`](TickFeedDesign.md) | **MASTER** — full-face tick feed Side A/B (`tickfeedmaster`). §1–§13 = **initial design**; §14 = **post-initial** mouth blur/sync/idle improvements |
 | [`TickPackageHandshake.md`](TickPackageHandshake.md) | Exact TickPackage fields, bytes, KEY/DELTA handshake |
 | [`CellFeedBandwidth.md`](CellFeedBandwidth.md) | 480/241 MB/s math + CHORUS + deltas |
 | [`SideB_VideoCellCollection.md`](SideB_VideoCellCollection.md) | Collect from video + 8s calibration script |
 | [`MultiLayerTickML.md`](MultiLayerTickML.md) | Multi-layer tick ML + abstract packets |
 | [`AvatarScaffolding.md`](AvatarScaffolding.md) | Lock scaffold; user cosmetics + uploads |
-| [`DesignMissingParts.md`](DesignMissingParts.md) | Missing parts / P0–P6 backlog |
+| [`DesignMissingParts.md`](DesignMissingParts.md) | Backlog split: initial architecture vs post-initial mouth band |
 | [`NWRDataDesign.md`](NWRDataDesign.md) | Broader world dataset layers L0–L6 |
 
 ## Substrate / product (NWR + avatar)
@@ -39,7 +39,7 @@
 | [`BDSMotionMap.md`](BDSMotionMap.md) | 32 channels + motion map |
 | [`AvatarCapture.md`](AvatarCapture.md) | Video/stills → seed + plates |
 | [`Path1Portrait.md`](Path1Portrait.md) | Locked portrait path |
-| [`PhoneticFidelity.md`](PhoneticFidelity.md) | Viseme / speech fidelity |
+| [`PhoneticFidelity.md`](PhoneticFidelity.md) | Viseme / speech fidelity + TickFeed post-initial sync notes |
 | [`VoiceSync.md`](VoiceSync.md) | Audio ↔ face sync |
 | [`AvatarChat.md`](AvatarChat.md) | Chat / bridge UX |
 | [`HANDOFF.md`](HANDOFF.md) | Historical handoff notes |

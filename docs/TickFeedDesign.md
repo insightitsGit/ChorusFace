@@ -18,9 +18,20 @@ provenance (no synth sold as measured).
 [`AvatarCalibrationPrompt.md`](AvatarCalibrationPrompt.md) when replacing the
 lab video, then `python scripts/build_tickfeed_demo.py --clean` (or
 `train_tickfeed_ml.py --prepare`). Play: `python scripts/run_tickfeed_demo.py`.
+Plate-only refresh: `python scripts/rebuild_tickfeed_plates.py [--timeline]`.
 
 **Purpose:** Single from-scratch design doc capturing the Side A / Side B
-conversation **and** the implementation map on this branch (see §16).
+conversation **and** the implementation map on this branch (see §16–§17).
+
+**Doc layers (read in order):**
+
+1. **§1–§12 — Initial TickFeed design** — contract, Side A/B, B1–B4 bridges,
+   CHORUS, ML L1–L5, completeness of the architecture.
+2. **§13 — Initial bridges adopted** — B1–B4 wired as designed.
+3. **§14 — Post-initial design improvements** — mouth blur, word sync,
+   idle moods, plates, aligner upgrades landed **after** the architecture
+   above was already working. These do not change the TickPackage contract.
+4. **§15–§17 — Remaining research + code map**
 
 **Related detail docs**
 
@@ -469,14 +480,18 @@ MouthLayerTimeline hard-snap overriding TickFeed labels.
 | Legacy ±4 disabled | Yes | **Yes** |
 
 **Verdict:** Side A, Side B, and the connection are **implemented** for the lab
-single-host path. Remaining work is tracker/MFA/AE upgrades and multi-host ACK —
-not a missing third architecture.
+single-host path (initial design). Mouth blur/sync/idle polish in **§14** is a
+**post-initial** band on top of that — not a missing third architecture.
+Remaining research is tracker/MFA/AE upgrades, a better capture take, and
+multi-host ACK.
 
 ---
 
-## 13. Bridge solutions — adopted and implemented
+## 13. Initial design bridges — adopted and implemented
 
-**Status:** adopted into §6.5 **and** wired in runtime (see §16 code map).
+**Status:** B1–B4 from §6.5 are the **initial architecture** — adopted into
+design **and** wired in runtime (see §17 code map). Everything in §14 is
+layered **on top of** this, not a redesign of the contract.
 
 | Bridge | Design | Runtime |
 | --- | --- | --- |
@@ -486,7 +501,7 @@ not a missing third architecture.
 | B4 LOOK by labels | smile/open/surprise/viseme sole amounts | `_apply_tickfeed_labels_to_look` + no catalog overwrite |
 
 ```text
-DESIGN BRIDGE (implemented lab path)
+INITIAL DESIGN BRIDGE (lab path — §1–§13)
 
 Side B / ML → TickPackage (KEY|Δ, full-face, labels)
      → CHORUS lane A (c_t) + lane B (framed TPK / TPK_REF)
@@ -494,70 +509,140 @@ Side B / ML → TickPackage (KEY|Δ, full-face, labels)
      → GPU ingest: S:=KEY or S+=Δ  (vx,vy)
      → if miss: damp v
      → render: field warps UVs; plates mix by label amounts
-
-Demo ``--wire-loop`` (default in run_tickfeed_demo.py): master ring is fed by
-``ingest_from_wire`` (pull latest c_t → L4 expand, or lane-B package decode)
-instead of the in-process produce→submit path — proving the bandwidth claim.
-
-Demo presence (``app.py``): **0-state** = closed lips + natural blink; **hearing**
-while the user types or waits on the LLM; **speaking** during visemes/TTS; each
-chat turn returns to 0-state when speech ends. Within 0-state, switchable idle
-LOOK moods: ``neutral`` (no impression), ``smile`` (closed-lip smile plate),
-``waiting`` (attentive brows/gaze). Cycle with **Z**, or
-``POST /calibrate {"zero_mood":"neutral|smile|waiting"}``. Note: identity
-``source_face.png`` on this take is already a soft smile — ``neutral`` removes
-the smile *plate* / brow drives, but cannot invent a flatter rest photo.
-
-Live speech LOOK overlay release uses **absolute audio span ends**
-(``speech_overlay_until`` / ``due_at + duration``, capped by next event) — not
-``now + vowel_hold_floor``. TickFeed disables cumulative ``viseme_min_hold``
-span shifting so word closures stay on the audio clock.
 ```
+
+Demo ``--wire-loop`` is **opt-in** (`run_tickfeed_demo.py` defaults to
+local-ring for FPS). Wire-loop proves the bandwidth path; local-ring is the
+lab play default.
 
 ---
 
-## 14. Suggested research order (remaining)
+## 14. Post-initial design improvements (after B1–B4)
 
-**Done on branch:** compute ingest, ring lead, label LOOK, CHORUS two-lane push,
-energy force-align, measured provenance, PCA L4.
+> **Scope:** These landed **after** the initial TickFeed design (§1–§13) was
+> already working. They sharpen **readable speech** (transition blur +
+> word/sentence sync + idle LOOK) without changing TickPackage bytes, KEY/Δ
+> rules, or B4 label authority. Treat them as a second design band.
 
-**Pre-MFA mouth accuracy (done this pass):**
-- Absolute LOOK overlay release (`speech_overlay_until`)
-- Interruptible closures (never skip PP/MM/CLOSED)
-- Velocity-aware FIELD mute + early atlas commitment
-- Bilabial onset pin in live TTS align (`bias_bilabial_onsets`)
-- Playback `media_time` clock for viseme fire
-- Demo hot logs off by default (`--gpu-log` / `--tickfeed-debug` opt-in)
-- Atlas: closed plate openness 0; TH→FF plate (nearest lip constriction)
+### 14.1 Problems addressed
 
-**Next (in order):**
+| Issue | Symptom after initial design | Fix band |
+| --- | --- | --- |
+| Transition blur | Mid-open (`≈0.15–0.55`) smeared — FIELD + soft plate mix fought | Single-owner OPENING/OPEN/CLOSING + velocity FIELD mute |
+| Word / sentence sync | Closures skipped / vowel hold floors drifted past consonants | Absolute overlay until + interruptible PP/MM/CLOSED |
+| Always-smiling idle | Identity rest is soft-smile; 0-state looked “happy” | Switchable zero moods (`neutral` / `smile` / `waiting`) |
+| Weak bilabials | Energy align buried PP inside vowels | Onset pin + RMS-valley snap; denser plate bank |
 
-1. **MFA (or Whisper word timestamps as default when keyed)** — true phoneme onsets vs energy  
-2. **Denser capture plate bank** — dedicated TH tongue, true neutral rest (not soft-smile identity), stronger PP seal frame  
-3. **Stronger dense face tracker** than Farneback (FIELD quality)  
+### 14.2 Scheduler / sync (live TTS → LOOK)
+
+| Improvement | Behavior | Code |
+| --- | --- | --- |
+| Absolute overlay release | `until = due_at + duration`, capped by next event — **not** `now + vowel_hold_floor` | `speech.speech_overlay_until`, `app._fire_impulse` |
+| No cumulative min_hold shift | TickFeed live path forces `min_hold=0` in `apply_speech_pace` | `app._schedule_audio` |
+| Closures never skipped | PP/MM/CLOSED/REST interrupt open holds; clear plate hysteresis | `app._fire_impulse` |
+| Playback clock | Viseme fire uses sink `media_time` when available | `audio.*Sink.media_time`, `app._speech_now` |
+| Bilabial onset pin | Leading PP gets ~45 ms at word start | `tts._subdivide`, `bias_bilabial_onsets` |
+| Energy valley snap | PP/MM/CLOSED pull toward nearby RMS trough | `tts.snap_bilabials_to_energy_valleys` |
+| Whisper words (when keyed) | `--tts-align words` default if `OPENAI_API_KEY` / `AIFACE_LLM_API_KEY` set; else energy | `app` CLI, `run_tickfeed_demo.py` |
+
+### 14.3 Renderer / transition ownership
+
+| Improvement | Behavior | Code |
+| --- | --- | --- |
+| Transition state machine | `REST` / `OPENING` / `OPEN` / `CLOSING` from openness velocity | `app._update_mouth_transition` |
+| Velocity-aware FIELD mute | Strong mute on OPENING/CLOSING mid-band; keep some travel at steady OPEN | `app._update_avatar_uniforms` |
+| Early atlas commitment | Hard-snap `pair_for_viseme`; boost plate amount mid-transition | `_apply_tickfeed_labels_to_look`, `avatar.frag` |
+| Stronger rest-align under plates | Higher `rest_mix` so FIELD does not smear under LOOK | `avatar.frag` |
+
+### 14.4 Idle presence + demo ops
+
+| Improvement | Behavior | Code |
+| --- | --- | --- |
+| Zero moods | `neutral` / `smile` / `waiting` inside presence `zero` | `app._zero_mood_*`, key **Z**, `POST /calibrate {"zero_mood":…}` |
+| Hearing vs zero | Typing/pending → hearing look; chat end → zero mood | `app._update_presence` |
+| Quiet demo defaults | `--gpu-log` / `--tickfeed-debug` opt-in (were tanking FPS) | `scripts/run_tickfeed_demo.py` |
+
+Identity caveat (unchanged by moods): this take’s `source_face.png` is already
+a soft smile — `neutral` removes smile **plate** / brow drives, but cannot
+invent a flatter rest photo. New capture take required for true no-impression.
+
+### 14.5 Plate bank + teacher FIELD (rebuild tools)
+
+| Improvement | Behavior | Code / command |
+| --- | --- | --- |
+| Priority distinct plates | CLOSED/PP/FF/TH/AA prefer **different** frames when the take allows | `plates.PRIORITY_ATLAS_VISEMES`, `select_viseme_atlas_frames` |
+| Closed openness = 0 | CLOSED/PP metadata forced sealed for hard-snap indexing | `capture._write_plate_atlas` |
+| Plate rebuild script | Refresh LOOK atlas without full digest | `scripts/rebuild_tickfeed_plates.py` |
+| Denser Farneback | More levels / larger window for rest→frame teacher FIELD | `tickfeed/collect._optical_flow_face_series` + `--timeline` |
+
+Lab atlas after rebuild (illustrative): PP, CLOSED, FF, TH on distinct indices
+when frames exist; `MM` aliases to PP.
+
+### 14.6 QA helpers
+
+| Script | Purpose |
+| --- | --- |
+| `scripts/_tmp_sync_blur_qa.py` | Phrase matrix: closure hits, mid-open FIELD gain, idle release |
+| `scripts/_tmp_full_cycle.py` | Speak/preview capture for visual QA |
+| `tests/test_speech_overlay_until.py` | Absolute until contract |
+| `tests/test_bilabial_onset.py` | PP onset pin / borrow |
+
+### 14.7 Explicitly deferred (still after §14)
+
+These remain **future** — not part of the post-initial mouth pass:
+
+1. **Lab MFA** — full phoneme forced-align beyond Whisper words  
+2. **New capture take** — true neutral rest + tongue-visible TH  
+3. Multi-host HELLO_ACK + remote master (transport; zero local LOOK effect)  
+4. L4 autoencoder (PCA is phase-1 codec)  
+5. Per-avatar L3 size/quality research on more takes  
+
+---
+
+## 15. Suggested research order (remaining)
+
+**Initial design (§1–§13) — done on branch:** compute ingest, ring lead, label
+LOOK, CHORUS two-lane push, energy force-align teacher, measured provenance,
+PCA L4.
+
+**Post-initial mouth band (§14) — done on branch:** absolute overlay sync,
+closure priority, transition FIELD ownership, zero moods, bilabial align,
+Whisper-words default when keyed, denser plates + Farneback rebuild tools.
+
+**Still useful next (in order):**
+
+1. Lab MFA (or always-on Whisper words in environments with a key)  
+2. New calibration take (neutral rest + TH tongue) → `build_tickfeed_demo --clean`  
+3. Stronger dense tracker beyond Farneback (teacher FIELD quality)  
 4. Multi-host HELLO_ACK + remote master consumer  
 5. L4 AE if PCA quality is insufficient  
 6. Per-avatar L3 size vs quality on more takes  
 
 ---
 
-## 15. Doc map (session artifacts)
+## 16. Doc map (session artifacts)
 
 ```text
 TickFeedDesign.md          ← this master (start here)
+  §1–§13  initial TickFeed design + B1–B4
+  §14     post-initial mouth / sync / idle improvements
+  §15–§17 remaining research + code map
 TickPackageHandshake.md    ← binary contract + status table
 CellFeedBandwidth.md       ← MB/s math + CHORUS
 SideB_VideoCellCollection.md
 MultiLayerTickML.md
 AvatarScaffolding.md
-DesignMissingParts.md      ← operator-owned / future only
+DesignMissingParts.md      ← backlog (initial vs post-initial)
+PhoneticFidelity.md        ← lip-reading inventory + post-initial sync notes
 ```
 
 ---
 
-## 16. Implementation map (`tickfeedmaster`)
+## 17. Implementation map (`tickfeedmaster`)
 
-Honest code pointers for the improvements above. Prefer these over stale §7 text.
+Honest code pointers. Prefer these over stale early-draft §7 text.
+
+### Initial design (B1–B4 / transport)
 
 | Concern | Module / entry |
 | --- | --- |
@@ -566,20 +651,35 @@ Honest code pointers for the improvements above. Prefer these over stale §7 tex
 | Driver push / HELLO / timeline loop | `src/aiface/tickfeed/driver.py` |
 | Producer-lead ring | `src/aiface/tickfeed/ring.py`, `app._simulate_tick` |
 | GPU KEY/Δ ingest | `src/aiface/shaders/tick_ingest.comp`, `runtime/field.py` |
-| LOOK label authority | `app._apply_tickfeed_labels_to_look`, `_fire_impulse` TickFeed path |
+| LOOK label authority (B4) | `app._apply_tickfeed_labels_to_look` |
 | Measured collect + provenance | `src/aiface/tickfeed/collect.py`, `timeline_io.py` (`source`) |
-| Audio-energy force-align | `src/aiface/tickfeed/force_align.py` |
+| Teacher audio-energy force-align | `src/aiface/tickfeed/force_align.py` |
 | L1–L5 train/load | `src/aiface/tickfeed/ml/` |
 | Cosmetics GLSL | `cosmetics.py` + `avatar.frag` uniforms |
-| Clean demo | `scripts/build_tickfeed_demo.py`, `scripts/run_tickfeed_demo.py` |
+| Clean demo build | `scripts/build_tickfeed_demo.py` |
 | Local CHORUS plane | `scripts/start_chorus_local.py` |
 | Contract tests | `tests/test_tickfeed*.py` |
 
+### Post-initial design (§14)
+
+| Concern | Module / entry |
+| --- | --- |
+| Absolute overlay until | `speech.speech_overlay_until`, `app._fire_impulse` |
+| Speech playback clock | `audio.*Sink.media_time`, `app._speech_now` |
+| Bilabial onset + valley snap | `tts.bias_bilabial_onsets`, `snap_bilabials_to_energy_valleys` |
+| Transition state + FIELD mute | `app._update_mouth_transition`, `_update_avatar_uniforms` |
+| Zero moods | `app._set_zero_mood`, `_apply_zero_mood_overlay` |
+| Priority plate select / rebuild | `plates.select_viseme_atlas_frames`, `scripts/rebuild_tickfeed_plates.py` |
+| Denser Farneback | `tickfeed/collect._optical_flow_face_series` |
+| Demo play (quiet defaults) | `scripts/run_tickfeed_demo.py` |
+| Sync/blur unit tests | `tests/test_speech_overlay_until.py`, `tests/test_bilabial_onset.py` |
+
 Canonical world: `output/worlds/tickfeed/` (identity `source_face.png`, timeline,
-`ml/`). Do not treat old `output/worlds/avatar*` demos as TickFeed truth.
+`ml/`, `plate_atlas.json`). Do not treat old `output/worlds/avatar*` demos as
+TickFeed truth.
 
 ---
 
-*End of master design. Implementation status is summarized in the header table
-and §12 / §16; detail checklists live in `TickPackageHandshake.md` §7 and
-`DesignMissingParts.md`.*
+*End of master design. **Initial** implementation status: header table + §12 /
+§13. **Post-initial** mouth improvements: §14 / §17. Detail checklists:
+`TickPackageHandshake.md` and `DesignMissingParts.md`.*

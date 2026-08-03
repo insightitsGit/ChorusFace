@@ -358,10 +358,18 @@ class AvatarFaceApp(FieldRuntime):
         parser.add_argument(
             "--tts-align",
             choices=ALIGNMENTS,
-            default=os.environ.get("AIFACE_TTS_ALIGN", ALIGN_ENERGY),
+            default=os.environ.get("AIFACE_TTS_ALIGN")
+            or (
+                ALIGN_WORDS
+                if (
+                    os.environ.get("OPENAI_API_KEY")
+                    or os.environ.get("AIFACE_LLM_API_KEY")
+                )
+                else ALIGN_ENERGY
+            ),
             help=(
-                "Viseme timing source: transcribed word timestamps, acoustic "
-                "energy, or a uniform stretch"
+                "Viseme timing source: transcribed word timestamps (default "
+                "when OPENAI_API_KEY is set), acoustic energy, or uniform stretch"
             ),
         )
         parser.add_argument(

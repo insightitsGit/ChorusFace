@@ -212,17 +212,27 @@ def score_frame_for_viseme(
     sharp = float(getattr(frame.metrics, "sharpness", 0.0))
     teeth_bonus = 0.0
     if key in OPEN_TOOTH_VISEMES:
-        teeth_bonus = -0.08 * teeth
-    # Prefer non-smiling closed frames for REST/PP.
+        teeth_bonus = -0.10 * teeth
+    elif key == "TH":
+        # Prefer a slight aperture + teeth hint (tongue/teeth edge) over DD.
+        teeth_bonus = -0.12 * teeth
+        if 0.08 <= open_n <= 0.35:
+            teeth_bonus -= 0.08
+    elif key == "FF":
+        if 0.05 <= open_n <= 0.28:
+            teeth_bonus -= 0.06
+    # Prefer non-smiling closed frames for REST/PP — identity take is soft-smile.
     smile_penalty = 0.0
-    if key in {"REST", "CLOSED", "PP"} and smile_n > 0.55:
-        smile_penalty = 0.35 * (smile_n - 0.55)
+    if key in {"REST", "CLOSED", "PP"}:
+        smile_penalty = 0.55 * max(0.0, smile_n - 0.35)
+        # Strongly prefer the flattest closed aperture available.
+        smile_penalty += 0.40 * open_n
     return (
-        abs(open_n - target_o) * 1.35
-        + abs(smile_n - target_s) * 0.85
+        abs(open_n - target_o) * 1.45
+        + abs(smile_n - target_s) * 0.95
         + smile_penalty
         + teeth_bonus
-        - 0.0005 * sharp
+        - 0.0006 * sharp
     )
 
 
@@ -250,6 +260,19 @@ def match_visemes_to_frames(
     return mapping
 
 
+# Must-keep lip-reading shapes when the atlas is capped.
+PRIORITY_ATLAS_VISEMES: Final[tuple[str, ...]] = (
+    "CLOSED",
+    "PP",
+    "FF",
+    "TH",
+    "SS",
+    "EE",
+    "OH",
+    "AA",
+)
+
+
 def select_viseme_atlas_frames(
     frames: Sequence[Any],
     *,
@@ -269,24 +292,55 @@ def select_viseme_atlas_frames(
         by_index.values(),
         key=lambda f: (f.metrics.mouth_open, f.metrics.smile_width),
     )
-    if len(unique) > max_plates:
-        # Keep extremes + evenly spaced middles.
-        keep = {unique[0].index, unique[-1].index}
-        for i in range(max_plates - 2):
-            t = (i + 1) / (max_plates - 1)
-            keep.add(unique[int(round(t * (len(unique) - 1)))].index)
-        unique = [f for f in unique if f.index in keep][:max_plates]
-        unique = sorted(unique, key=lambda f: f.metrics.mouth_open)
+    # Reserve priority lip-reading visemes on *distinct* frames when possible.
+    open_lo, open_hi, smile_lo, smile_hi = _normalized_metrics(frames)
+    keep: dict[int, Any] = {}
+    priority_frame: dict[str, Any] = {}
+    for viseme in PRIORITY_ATLAS_VISEMES:
+        ranked = sorted(
+            frames,
+            key=lambda f, v=viseme: score_frame_for_viseme(
+                f,
+                v,
+                open_lo=open_lo,
+                open_hi=open_hi,
+                smile_lo=smile_lo,
+                smile_hi=smile_hi,
+            ),
+        )
+        chosen = None
+        for cand in ranked:
+            if int(cand.index) not in keep:
+                chosen = cand
+                break
+        if chosen is None and ranked:
+            chosen = ranked[0]
+        if chosen is not None:
+            keep[int(chosen.index)] = chosen
+            priority_frame[viseme] = chosen
+        if len(keep) >= max_plates:
+            break
+    if len(keep) < max_plates:
+        for frame in unique:
+            keep.setdefault(int(frame.index), frame)
+            if len(keep) >= max_plates:
+                break
+    unique = sorted(
+        keep.values(),
+        key=lambda f: (f.metrics.mouth_open, f.metrics.smile_width),
+    )
 
     index_by_frame = {int(f.index): i for i, f in enumerate(unique)}
-    # Remap each viseme to nearest kept plate by openness if its frame was dropped.
-    open_lo, open_hi, smile_lo, smile_hi = _normalized_metrics(frames)
     viseme_to_plate: dict[str, int] = {}
+    for viseme, frame in priority_frame.items():
+        if int(frame.index) in index_by_frame:
+            viseme_to_plate[viseme] = index_by_frame[int(frame.index)]
     for viseme, frame in matched.items():
+        if viseme in viseme_to_plate:
+            continue
         if int(frame.index) in index_by_frame:
             viseme_to_plate[viseme] = index_by_frame[int(frame.index)]
             continue
-        # Nearest remaining plate by score.
         best_i = min(
             range(len(unique)),
             key=lambda i: score_frame_for_viseme(
@@ -299,6 +353,11 @@ def select_viseme_atlas_frames(
             ),
         )
         viseme_to_plate[viseme] = best_i
+    # Explicit aliases for runtime canonicalisation.
+    if "PP" in viseme_to_plate:
+        viseme_to_plate.setdefault("MM", int(viseme_to_plate["PP"]))
+    if "CLOSED" in viseme_to_plate and "REST" not in viseme_to_plate:
+        viseme_to_plate["REST"] = int(viseme_to_plate["CLOSED"])
     return unique, viseme_to_plate
 
 

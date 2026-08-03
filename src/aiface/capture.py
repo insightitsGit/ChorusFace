@@ -1233,15 +1233,21 @@ def _write_plate_atlas(
         rel = f"plates/plate_{index:02d}.png"
         path = write_expression_plate(destination.parent / rel, pixels, alpha)
         paths.append(path)
+        tag = plate_visemes.get(index, "")
+        open_v = float(frame.metrics.mouth_open)
+        # Closed / PP plates must index as sealed — capture floor (~0.15) lied.
+        if tag in {"CLOSED", "PP", "REST", "MM"} or open_v <= 0.16:
+            if tag in {"CLOSED", "PP", "REST", "MM"}:
+                open_v = 0.0
         records.append(
             AtlasPlate(
                 index=index,
                 path=rel.replace("\\", "/"),
-                openness=float(frame.metrics.mouth_open),
+                openness=open_v,
                 smile_width=float(frame.metrics.smile_width),
                 frame_index=int(frame.index),
                 time_seconds=float(frame.time_seconds),
-                viseme=plate_visemes.get(index, ""),
+                viseme=tag,
             )
         )
     write_plate_atlas_meta(
