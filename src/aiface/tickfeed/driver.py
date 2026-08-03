@@ -373,10 +373,9 @@ class TickFeedDriver:
                 mean_conf = min(mean_conf, 80.0)
                 if conf is not None:
                     conf = np.minimum(conf, np.uint8(120))
-            allow_gap = (
-                mean_conf < 90.0
-                or src_code != SOURCE_MEASURED
-            )
+            # Fidelity: never α-blend L5 into measured FIELD — measured owns.
+            # Gap prior only for synth / non-measured provenance ticks.
+            allow_gap = src_code != SOURCE_MEASURED
             if allow_gap and self.ml is not None and self.ml.l5 is not None:
                 speech, look, flat, code = self.ml.resolve(
                     tick=teacher,
@@ -387,9 +386,7 @@ class TickFeedDriver:
                 )
                 try:
                     gap = flat.reshape(self.face.h, self.face.w, 2)
-                    alpha = 1.0 - (mean_conf / 255.0)
-                    if src_code != SOURCE_MEASURED:
-                        alpha = max(alpha, 0.55)
+                    alpha = max(1.0 - (mean_conf / 255.0), 0.55)
                     curr = (1.0 - alpha) * curr + alpha * gap
                 except ValueError:
                     pass

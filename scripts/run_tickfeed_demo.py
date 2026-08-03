@@ -190,6 +190,11 @@ def main() -> int:
         help="Enable Side A JSONL debug ingest log — costs FPS",
     )
     parser.add_argument(
+        "--fidelity-hud",
+        action="store_true",
+        help="Show fidelity HUD (viseme/transition/plate/gain). Toggle with F.",
+    )
+    parser.add_argument(
         "--tts-align",
         choices=("words", "energy", "linear"),
         default=os.environ.get("AIFACE_TTS_ALIGN") or "",
@@ -252,6 +257,8 @@ def main() -> int:
         cmd.append("--gpu-log")
     if args.tickfeed_debug:
         cmd.append("--tickfeed-debug")
+    if args.fidelity_hud:
+        cmd.append("--fidelity-hud")
     cmd.append("--wire-loop" if args.wire_loop else "--no-wire-loop")
     if float(args.speech_pace) > 0.0:
         cmd.extend(["--speech-pace", str(float(args.speech_pace))])

@@ -279,6 +279,15 @@ class AvatarFaceApp(FieldRuntime):
             ),
         )
         parser.add_argument(
+            "--fidelity-hud",
+            action="store_true",
+            default=_environment_flag("AIFACE_FIDELITY_HUD"),
+            help=(
+                "Show fidelity HUD (viseme/transition/plate/gain). "
+                "Toggle with F. Also AIFACE_FIDELITY_HUD=1"
+            ),
+        )
+        parser.add_argument(
             "--no-chat",
             action="store_true",
             help="Disable the stdin chat thread (window + demo only)",
@@ -628,6 +637,7 @@ class AvatarFaceApp(FieldRuntime):
         self._plate_open_prev = 0.0
         self._plate_open_vel = 0.0
         self._mouth_transition = "REST"
+        self._fidelity_hud = bool(getattr(self.argv, "fidelity_hud", False))
         from aiface.tickfeed.side_a_debug import SideADebugLog
 
         self._side_a_debug = SideADebugLog(
@@ -636,6 +646,8 @@ class AvatarFaceApp(FieldRuntime):
         if self._side_a_debug.enabled:
             self._side_a_debug.open()
             print(f"TickFeed Side A debug: {self._side_a_debug.path}")
+        if self._fidelity_hud:
+            print("Fidelity HUD: on (press F to toggle)")
         # 0-state / hearing / speaking — chat presence for the demo face.
         self._presence: str = PRESENCE_ZERO
         # Idle face within 0-state: neutral | smile | waiting (Z cycles).
@@ -3179,6 +3191,8 @@ class AvatarFaceApp(FieldRuntime):
                 "calibrate_mode": str(getattr(self, "_calibrate_mode", "normal")),
                 "speech_pace": float(self._display_recipe.speech_pace),
                 "viseme_min_hold": float(self._display_recipe.viseme_min_hold),
+                "fidelity": self._fidelity_snapshot(),
+                "fidelity_hud": bool(getattr(self, "_fidelity_hud", False)),
                 "side_a_debug": (
                     self._side_a_debug.summary()
                     if getattr(self, "_side_a_debug", None) is not None
@@ -3926,6 +3940,24 @@ class AvatarFaceApp(FieldRuntime):
             self._sample_mouth_telemetry()
         self._write_capture_frame()
 
+    def _fidelity_snapshot(self) -> dict[str, object]:
+        """Read-only fidelity HUD fields — no render-path side effects."""
+        ia, ib = self._plate_pair
+        mix, amount = self._plate_blend_current
+        look_auth = bool(getattr(self, "_tickfeed_look_authority", False))
+        return {
+            "viseme": str(self._held_speech_viseme or "REST"),
+            "transition": str(getattr(self, "_mouth_transition", "REST")),
+            "plate_index": int(ia),
+            "plate_pair": [int(ia), int(ib)],
+            "blend_mix": float(mix),
+            "blend_amount": float(amount),
+            "plate_open": float(getattr(self, "_plate_openness_current", 0.0) or 0.0),
+            "field_gain_eff": float(getattr(self, "_field_gain_eff", 0.0) or 0.0),
+            "look_authority": look_auth,
+            "provenance": "measured" if look_auth else "biomech",
+        }
+
     def _emit_side_a_debug(self) -> None:
         """Record the TickPackage just posted to Side A (GPU master)."""
         dbg = getattr(self, "_side_a_debug", None)
@@ -4043,7 +4075,7 @@ class AvatarFaceApp(FieldRuntime):
             if ranked
             else "none"
         )
-        return [
+        lines = [
             (
                 f"AIFACE BIOMECH  FPS {self._fps:.0f}  |  "
                 f"GPU {telemetry.gpu_frame_ms:.2f} ms  |  "
@@ -4071,6 +4103,19 @@ class AvatarFaceApp(FieldRuntime):
                 f"tick {self.tick}@{TICK_RATE_HZ}Hz"
             ),
         ]
+        if bool(getattr(self, "_fidelity_hud", False)):
+            snap = self._fidelity_snapshot()
+            lines.append(
+                f"FIDELITY viseme={snap['viseme']} "
+                f"trans={snap['transition']} "
+                f"plate={snap['plate_index']} "
+                f"amt={float(snap['blend_amount']):.2f} "
+                f"mix={float(snap['blend_mix']):.2f} "
+                f"open={float(snap['plate_open']):.2f} "
+                f"gain={float(snap['field_gain_eff']):.2f} "
+                f"src={snap['provenance']}"
+            )
+        return lines
 
     def on_resize(self, width: int, height: int) -> None:
         super().on_resize(width, height)
@@ -4095,6 +4140,16 @@ class AvatarFaceApp(FieldRuntime):
                 self._chat_box_visible and self._chatbox.focused
             ):
                 self._cycle_zero_mood()
+                return
+            if key == keys.F and not (
+                self._chat_box_visible and self._chatbox.focused
+            ):
+                self._fidelity_hud = not bool(getattr(self, "_fidelity_hud", False))
+                self._overlay_dirty = True
+                print(
+                    f"Fidelity HUD: {'on' if self._fidelity_hud else 'off'}",
+                    flush=True,
+                )
                 return
             function_keys = {
                 keys.F1: 1,
