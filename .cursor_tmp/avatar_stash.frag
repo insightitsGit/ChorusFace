@@ -281,19 +281,12 @@ vec2 total_displacement(vec2 grid_position) {
         distance(grid_position, avatar_mouth_line.xy)
     );
     muscles *= mix(1.0, 0.55, smile_damp * mouth_prox);
-    // Region gate (B4-safe / §14.3): plate owns the oral disk — mute FIELD
-    // *inside* that disk so warped identity doesn't ghost under LOOK.
-    // Wider + harder commit when snap/plate amount is high (mid-band smear).
-    float snap_gate = clamp(avatar_plate_sharpness, 0.0, 1.0);
-    float disk_inner = mix(0.55, 0.40, snap_gate);
-    float disk_outer = mix(1.20, 1.45, snap_gate);
-    // Inline atlas ownership (function is defined later in this file).
-    float atlas_amt = avatar_plates_ready == 1
-        ? clamp(avatar_plate_blend.y, 0.0, 1.0) * clamp(avatar_recipe.z, 0.0, 1.0)
-        : 0.0;
-    float plate_disk = max(plate_amt, atlas_amt) * (1.0 - smoothstep(
-        avatar_mouth_line.z * disk_inner,
-        avatar_mouth_line.z * disk_outer,
+    // Region gate (B4-safe): plate owns the oral disk — mute FIELD *inside*
+    // that disk so warped identity doesn't ghost under open.png. Cheeks /
+    // outside the disk keep FIELD. Never globally kill open.png.
+    float plate_disk = plate_amt * (1.0 - smoothstep(
+        avatar_mouth_line.z * 0.45,
+        avatar_mouth_line.z * 1.05,
         distance(grid_position, avatar_mouth_line.xy)
     ));
     field *= (1.0 - plate_disk);
@@ -402,11 +395,16 @@ float harden_matte(float alpha, float snap) {
 // identity (double-teeth ghost). Edge stays thin — no cheek stamp.
 float hybrid_matte(float alpha, float snap) {
     float a = clamp(alpha, 0.0, 1.0);
-    float core = smoothstep(0.22, 0.48, a);
-    float edge = smoothstep(0.08, 0.22, a) * (1.0 - core);
-    float hybrid = clamp(core + edge * 0.22, 0.0, 1.0);
+    float s = clamp(snap, 0.0, 1.0);
+    // Under hard snap: opaque oral core, almost no half-α cheek veil
+    // (that veil was reading as mouth motion blur / oval stamp).
+    float core = smoothstep(mix(0.22, 0.32, s), mix(0.48, 0.55, s), a);
+    float edge = smoothstep(mix(0.08, 0.16, s), mix(0.22, 0.32, s), a)
+        * (1.0 - core);
+    float edge_w = mix(0.22, 0.05, s);
+    float hybrid = clamp(core + edge * edge_w, 0.0, 1.0);
     // Blend toward hybrid with plate_sharpness; never invent opacity from zero.
-    return mix(harden_matte(a, snap), hybrid, clamp(snap, 0.0, 1.0));
+    return mix(harden_matte(a, s), hybrid, s);
 }
 
 // Atlas speech ownership in [0,1]. When high under hard snap, open.png must
@@ -531,7 +529,7 @@ void main() {
             open_s = texture(avatar_open_plate, capture_uv);
             smile_s = texture(avatar_smile_plate, capture_uv);
             // Sample atlas early for ownership evidence — never mute open.png
-            // from drive alone (weak oral α → stuck rest smile / dead zone).
+            // from drive amount alone (9s plates have weak oral α → dead zone).
             atlas_a_s = texture(avatar_plate_a, capture_uv);
             atlas_b_s = texture(avatar_plate_b, capture_uv);
             atlas_a_ev = hybrid_matte(
@@ -550,8 +548,8 @@ void main() {
             open_drive = mix(open_drive, smoothstep(0.12, 0.72, open_drive), max(snap, 0.55));
             smile_drive = mix(smile_drive, smoothstep(0.18, 0.82, smile_drive), snap);
             smile_drive *= (1.0 - smoothstep(0.12, 0.40, open_drive));
-            // Single LOOK owner (§14.3): open.png OR atlas — not both.
-            // Atlas only mutes open when it can paint (real plate alpha).
+            // Single LOOK owner only when atlas can paint. Otherwise open.png
+            // keeps mid-band (blur_audit: mute-without-evidence → stuck smile).
             open_primary_g = smoothstep(0.42, 0.72, layer_open);
             float atlas_want = (1.0 - open_primary_g) * mix(
                 0.0, smoothstep(0.20, 0.55, atlas_own), max(snap, 0.55)
@@ -560,7 +558,8 @@ void main() {
             open_drive *= (1.0 - atlas_primary_g);
             smile_drive *= (1.0 - max(atlas_primary_g, open_drive));
             open_w = open_drive * hybrid_matte(open_s.a, max(snap, 0.55));
-            // Kill soft ellipse cheek veil when open.png is primary.
+            // Kill the soft ellipse cheek veil when open.png is primary —
+            // that half-α ring is the visible oval stamp / "blur".
             open_w *= mix(1.0, smoothstep(0.30, 0.52, open_s.a), open_primary_g);
             smile_w = smile_drive * hybrid_matte(smile_s.a, snap)
                 * (1.0 - open_w * avatar_recipe.y);
@@ -568,8 +567,9 @@ void main() {
         }
         float plate_own = clamp(max(open_w, smile_w * 0.85), 0.0, 1.0);
         float plate_commit = atlas_primary_g;
-        // Rest-align under the active LOOK owner only.
+        // Rest-align under the active LOOK owner only (muted drive / atlas).
         if (avatar_plates_ready == 1) {
+            // Rest-align on oral core only — wide soft alpha made a pasted chin.
             plate_own = max(
                 plate_own,
                 open_drive_g * smoothstep(0.22, 0.48, open_s.a)
@@ -580,9 +580,24 @@ void main() {
         // L02: warp identity only outside plate-owned pixels.
         // During plate ownership, rest-align harder so FIELD travel cannot
         // smear under a committed LOOK plate (transition single-owner).
-        vec2 source = inverse_warp(grid_position);
+        // Mandible lockstep (§14.3): same LOOK open as plates. Undo jaw in
+        // the inverse warp (1st order), rest-align FIELD under the matte,
+        // then re-apply jaw with a soft fade at the oral matte so the chin
+        // supports open.png without a hard seam tear at the plate edge.
+        vec4 tj = tissue_at(grid_position);
+        vec2 jaw_d = jaw_displacement(grid_position, tj.g, tj.b);
+        vec2 source = inverse_warp(grid_position) + jaw_d;
         float rest_mix = clamp(plate_own * 0.99 + plate_commit * 0.55, 0.0, 0.99);
         source = mix(source, grid_position, rest_mix);
+        // Oral matte for jaw assist tracks capture ownership only — when atlas
+        // muted open.png, don't keep jaw-fading across the wide open ellipse.
+        float oral_matte = avatar_plates_ready == 1
+            ? hybrid_matte(open_s.a, max(snap, 0.55)) * open_drive_g
+            : 0.0;
+        oral_matte = max(oral_matte, plate_commit * 0.65);
+        // Narrower chin seam: plate owns oral core; jaw only assists outside.
+        float jaw_fade = 1.0 - smoothstep(0.14, 0.58, oral_matte);
+        source -= jaw_d * jaw_fade;
         color = photo_at(source);
         face_alpha = smoothstep(0.02, 0.12, max(color.r, max(color.g, color.b)));
 
@@ -657,8 +672,8 @@ void main() {
                 * cavity_gate
         );
 
-        // L07: atlas plate memory — single owner with L05 (no 0.28 stack smear).
-        // Reuse early samples; ownership already gated on atlas alpha evidence.
+        // L07: atlas plate memory (finer viseme shapes) on top when amount > 0.
+        // Reuse early samples — ownership already gated on atlas_a_ev.
         if (avatar_plates_ready == 1 && avatar_plate_blend.y > 0.001) {
             float mix_ab = clamp(avatar_plate_blend.x, 0.0, 1.0);
             // Step 12: bias toward the nearest real captured shape instead of
@@ -670,13 +685,13 @@ void main() {
                 clamp(snap * 1.15, 0.0, 1.0)
             );
             vec3 plate_rgb = mix(atlas_a_s.rgb, atlas_b_s.rgb, mix_ab);
-            // Atlas primary when evidence is real; else almost no detail stack.
-            float atlas_ceil = mix(0.0, 0.95, atlas_primary_g);
+            // Atlas primary when evidence is real; else light detail only.
+            float atlas_ceil = mix(0.28, 0.95, atlas_primary_g);
             float plate_a = atlas_a_ev
                 * clamp(avatar_plate_blend.y, 0.0, 1.0)
                 * avatar_recipe.z
                 * atlas_ceil
-                * (1.0 - open_primary_g * 0.95);
+                * (1.0 - open_primary_g * 0.85);
             color = mix(color, plate_rgb, plate_a);
             face_alpha = max(face_alpha, plate_a);
         }
@@ -767,6 +782,8 @@ void main() {
         1.0 - smoothstep(eye_r * 0.35, eye_r, d_l),
         1.0 - smoothstep(eye_r * 0.35, eye_r, d_r)
     );
+    // Do not tint a closing lid — reads as a flat colored disk.
+    eye_m *= (1.0 - smoothstep(0.08, 0.35, clamp(avatar_eye_state.w, 0.0, 1.0)));
     color = mix(color, color * clamp(avatar_eye_tint, vec3(0.0), vec3(2.0)), eye_m * 0.85);
     float makeup = clamp(avatar_makeup_strength, 0.0, 1.0);
     if (makeup > 0.001) {

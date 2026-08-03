@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from aiface.mouth_owner import (
+    commit_plate_amount,
     hold_speech_viseme,
+    look_field_gain_scale,
     mute_smile_under_open,
     plate_amount_for_openness,
     resolve_mouth_ownership,
@@ -88,3 +90,36 @@ def test_snap_smile_drive_binary() -> None:
     assert snap_smile_drive(0.55, hard_snap=True) == 1.0
     assert snap_smile_drive(0.4, hard_snap=True) == 0.0
     assert snap_smile_drive(0.55, hard_snap=False) == 0.55
+
+
+def test_look_field_gain_mutes_live_speech() -> None:
+    assert look_field_gain_scale(
+        mouth_state="OPEN", plate_open=0.5, live_speech=True
+    ) == 0.0
+
+
+def test_look_field_gain_mutes_opening_midband() -> None:
+    assert look_field_gain_scale(
+        mouth_state="OPENING", plate_open=0.35, open_vel=1.2
+    ) == 0.0
+    assert look_field_gain_scale(
+        mouth_state="CLOSING", plate_open=0.40, open_vel=-1.0
+    ) == 0.0
+
+
+def test_look_field_gain_tiny_at_steady_open() -> None:
+    assert look_field_gain_scale(
+        mouth_state="OPEN", plate_open=0.7, live_speech=False
+    ) == 0.02
+
+
+def test_look_field_gain_full_at_rest() -> None:
+    assert look_field_gain_scale(
+        mouth_state="REST", plate_open=0.0, live_speech=False
+    ) == 1.0
+
+
+def test_commit_plate_amount_boosts_transition() -> None:
+    boosted = commit_plate_amount(0.20, "OPENING")
+    assert boosted > 0.20
+    assert commit_plate_amount(0.02, "OPENING") == 0.02

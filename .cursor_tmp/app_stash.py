@@ -519,8 +519,12 @@ class AvatarFaceApp(FieldRuntime):
         # Adoption layer: any world dir that meets requirements shares this path.
         self._avatar_bundle = open_avatar(world)
         world = self._avatar_bundle.world_path
-        self._chat_queue: queue.Queue[str] = queue.Queue()
-        self._reply_queue: queue.Queue[SpokenReply] = queue.Queue()
+        from aiface.io_limits import MAX_CHAT_QUEUE, MAX_REPLY_QUEUE
+
+        self._chat_queue: queue.Queue[str] = queue.Queue(maxsize=MAX_CHAT_QUEUE)
+        self._reply_queue: queue.Queue[SpokenReply] = queue.Queue(
+            maxsize=MAX_REPLY_QUEUE
+        )
         self._visemes: deque[VisemeEvent] = deque()
         self._telemetry = VectorTelemetry()
         self._gpu_times: deque[float] = deque(maxlen=TELEMETRY_WINDOW)
@@ -598,14 +602,16 @@ class AvatarFaceApp(FieldRuntime):
         self._ml_jaw = 0.0
         self._ml_width = 0.0
         self._ml_smile = 0.0
+        # LOOK lid aperture from TickPackage (1=open, 0=closed). EyeSystem
+        # remains fallback until teacher lid actually varies.
+        self._tickfeed_lid_amt = 1.0
+        self._tickfeed_lid_teacher = False
         self._ml_plate_gate = 0.0
         self._open_close_source = "heuristic"
         self._mouth_object_cells = 0
         self._cell_clusters: CellClusterIndex | None = None
         self._tickfeed: TickFeedDriver | None = None
         self._tickfeed_look_authority = False
-        self._tickfeed_lid_amt = 1.0
-        self._tickfeed_lid_teacher = False
         # Live chat/TTS overlay for TickFeed (bypasses MouthLayerTimeline LOOK).
         self._tickfeed_live: dict[str, float | str] | None = None
         self._tickfeed_last_pkg = None
@@ -1384,27 +1390,24 @@ class AvatarFaceApp(FieldRuntime):
             and self._tickfeed is not None
             and self._tickfeed.last_labels is not None
         ):
-            from aiface.mouth_owner import commit_plate_amount
-
             phoneme = str(self._held_speech_viseme or "REST")
-            # Keep transition-boosted amount from labels — do not clobber with
-            # raw hysteresis (that reopened mid-band FIELD/plate ghosts).
-            open_amt = float(
-                getattr(self, "_plate_openness_current", 0.0)
-                or getattr(self, "_plate_open_hyst", 0.0)
-                or 0.0
-            )
+            open_amt = float(getattr(self, "_plate_open_hyst", 0.0))
+            # Early commitment during OPENING/CLOSING — must survive this sync
+            # (was clobbering the boost from _apply_tickfeed_labels_to_look).
             state = str(getattr(self, "_mouth_transition", "REST") or "REST")
-            open_amt = commit_plate_amount(open_amt, state)
-            # Early commitment during OPENING/CLOSING — no soft A/B ghost.
+            amount = float(open_amt)
+            if state in {"OPENING", "CLOSING"} and amount > 0.06:
+                amount = max(amount, min(1.0, amount * 1.25 + 0.10))
+            elif state == "OPEN" and amount > 0.35:
+                amount = max(amount, min(1.0, amount * 1.08))
             snap = True
             ia, ib, mix = atlas.pair_for_viseme(phoneme, hard_snap=snap)
             ia = max(0, min(ia, len(self._atlas_textures) - 1))
             ib = max(0, min(ib, len(self._atlas_textures) - 1))
             self._plate_pair = (ia, ib)
-            self._plate_openness_current = open_amt
-            self._plate_blend = (float(mix), open_amt)
-            self._plate_blend_current = (float(mix), open_amt)
+            self._plate_openness_current = amount
+            self._plate_blend = (float(mix), amount)
+            self._plate_blend_current = (float(mix), amount)
             return
 
         cmd = self._layer_command
@@ -1606,14 +1609,22 @@ class AvatarFaceApp(FieldRuntime):
             if 0 <= vid < len(VISEME_TABLE):
                 phoneme = VISEME_TABLE[vid]
         src = "tickfeed-live" if self._tickfeed_live_active() else "tickfeed-labels"
-        # FIELD (TickPackage ch0/1) owns lip separation. Jaw muscle warp only
-        # pulls the lower lip and stacked on residual flow as "lip slides down".
+        # Mouth/jaw sync (TickFeed §14.3 playbook): one LOOK open signal.
+        # jaw_target == plate_openness — never a separate phoneme-table jaw
+        # that races hard-snap plates. Closed / REST seal both.
+        from aiface.mouth_owner import CLOSED_VISEMES
+
+        if phoneme in CLOSED_VISEMES or phoneme == "REST" or open_amt < 0.04:
+            open_amt = 0.0
+            jaw_target = 0.0
+        else:
+            jaw_target = float(open_amt)
         return LayerCommand(
             phoneme=phoneme,
             atlas_viseme=phoneme,
             open_amount=open_amt,
             smile_amount=smile_amt,
-            jaw_target=0.0,
+            jaw_target=float(jaw_target),
             plate_openness=open_amt,
             source=src,
             active_until=float(
@@ -1734,17 +1745,25 @@ class AvatarFaceApp(FieldRuntime):
         cmd = self._layer_command
         recipe = self._display_recipe
         phoneme = canonical_viseme(cmd.phoneme or "REST")
+        # Use committed LOOK open (hysteresis/boost), not a stale layer cmd.
+        plate_open = float(
+            getattr(self, "_plate_openness_current", cmd.plate_openness) or 0.0
+        )
         # TickFeed owns FIELD; L03 cell_groups steps unused (0).
-        speaking_plate = float(cmd.plate_openness) > 0.02 or bool(
+        speaking_plate = plate_open > 0.02 or bool(
             getattr(self._render_state, "speaking", False)
         )
         self._frame_layers = evaluate_frame_layers(
             phoneme=phoneme,
-            plate_open_amount=float(cmd.plate_openness),
-            smile_amount=float(cmd.smile_amount),
+            plate_open_amount=plate_open,
+            smile_amount=float(
+                getattr(self, "_ml_smile", cmd.smile_amount) or 0.0
+            ),
             atlas_strength=float(recipe.atlas_strength),
             cavity_strength=float(recipe.cavity_strength),
-            field_gain=float(recipe.field_warp_gain),
+            field_gain=float(
+                getattr(self, "_field_gain_eff", recipe.field_warp_gain) or 0.0
+            ),
             expr_blend=float(self._expr_plate_blend),
             brow_raise=float(self._expr_brow_raise),
             speaking_plate=speaking_plate,
@@ -2166,7 +2185,9 @@ class AvatarFaceApp(FieldRuntime):
             1 if self._use_eye_closed_plate else 0
         )
         # Blink owns the aperture — do not upload widen/brow fight during close.
-        if bool(getattr(self, "_tickfeed_lid_teacher", False)):
+        if self._tickfeed_look_authority and bool(
+            getattr(self, "_tickfeed_lid_teacher", False)
+        ):
             blink_close = float(
                 1.0 - max(0.0, min(1.0, float(self._tickfeed_lid_amt)))
             )
@@ -2210,7 +2231,36 @@ class AvatarFaceApp(FieldRuntime):
         self._active_muscle_count = uniforms.count
 
         program["avatar_mouth_line"].value = self._mouth_line
-        jaw = replace(self._jaw, angle=float(state.jaw_angle))
+        # TickFeed LOOK: mandible hard-tracks the same open label as plates
+        # (not a separate phoneme-table jaw). Travel is scaled down — open.png
+        # chin drop is small; full max_opening tore a seam at the oral matte.
+        jaw_angle = float(state.jaw_angle)
+        if self._tickfeed_look_authority:
+            jaw_n = float(getattr(self, "_plate_openness_current", 0.0) or 0.0)
+            if str(getattr(self, "_calibrate_mode", "normal") or "normal") == (
+                "field_only"
+            ):
+                # Calibrate: FIELD owns chin — keep analytic jaw assist off.
+                jaw_n = 0.0
+                jaw_angle = 0.0
+            else:
+                # Same clock as plates; ~0.30× keeps chin support without
+                # fighting the photographed open matte edge.
+                jaw_angle = (
+                    max(0.0, min(1.0, jaw_n))
+                    * float(self._biomech.jaw.max_opening)
+                    * 0.30
+                )
+            self._biomech.jaw.state.angle = float(jaw_angle)
+            self._biomech.jaw.state.velocity = 0.0
+            self._biomech.jaw.state.target = float(jaw_angle)
+            self._ml_jaw = float(jaw_n)
+            if self._render_state is not None:
+                self._render_state = replace(
+                    self._render_state, jaw_angle=float(jaw_angle)
+                )
+            state = self._render_state or state
+        jaw = replace(self._jaw, angle=float(jaw_angle))
         program["avatar_jaw"].value = jaw.uniform
         program["avatar_jaw_span"].value = jaw.span_uniform
         program["avatar_eye_shape"].value = self._eye_shape
@@ -2270,10 +2320,9 @@ class AvatarFaceApp(FieldRuntime):
         elif speaking_plate and not self._tickfeed_look_authority:
             field_gain *= 0.20
         elif self._tickfeed_look_authority:
-            from aiface.mouth_owner import look_field_gain_scale
-
-            # §14.3 single owner: mute FIELD under LOOK plates (esp. live
-            # chat/TTS synth). Residual 5–12% mid-band was the smear.
+            # Velocity-aware FIELD gating (ChatGPT C): mute during fast
+            # OPENING/CLOSING so plate+field don't smear mid-band; keep some
+            # travel at steady OPEN / REST (avoid frozen mid-open regression).
             plate_o = max(
                 float(self._plate_blend_current[1]),
                 float(self._plate_openness_current),
@@ -2282,17 +2331,19 @@ class AvatarFaceApp(FieldRuntime):
             mouth_state = str(
                 getattr(self, "_mouth_transition", "REST") or "REST"
             )
-            live_speech = (
-                self._tickfeed_live_mode() == "speech"
-                or bool(self._visemes)
-                or self._presence == PRESENCE_SPEAKING
-            )
-            field_gain *= look_field_gain_scale(
-                mouth_state=mouth_state,
-                plate_open=plate_o,
-                open_vel=float(getattr(self, "_plate_open_vel", 0.0) or 0.0),
-                live_speech=live_speech,
-            )
+            vel = abs(float(getattr(self, "_plate_open_vel", 0.0) or 0.0))
+            # LOOK owns oral disk, but ×0.05 FIELD froze mid-band motion on
+            # the 9s take (atlas too weak to fill). Keep readable travel.
+            if mouth_state in {"OPENING", "CLOSING"}:
+                if vel > 0.6 or 0.10 <= plate_o <= 0.65:
+                    field_gain *= 0.22
+                else:
+                    field_gain *= 0.30
+            elif plate_o >= 0.45 or mouth_state == "OPEN":
+                field_gain *= 0.28
+            elif plate_o >= 0.12:
+                field_gain *= max(0.40, 1.0 - 0.55 * plate_o)
+            # else REST / near-closed: full recipe gain
         self._field_gain_eff = float(field_gain)
         program["avatar_field_gain"].value = field_gain
         # Step 12: plate snap — commit toward the nearest captured mouth shape.
@@ -2365,9 +2416,15 @@ class AvatarFaceApp(FieldRuntime):
                     print("chat> ", end="", flush=True)
                     continue
                 if text.lower() in {"quit", "exit", ":q"}:
-                    self._chat_queue.put("__quit__")
+                    try:
+                        self._chat_queue.put_nowait("__quit__")
+                    except queue.Full:
+                        pass
                     break
-                self._chat_queue.put(text)
+                try:
+                    self._chat_queue.put_nowait(text)
+                except queue.Full:
+                    print("(chat queue full — drop)", flush=True)
                 print("chat> ", end="", flush=True)
 
         self._chat_thread = threading.Thread(
@@ -2799,6 +2856,7 @@ class AvatarFaceApp(FieldRuntime):
         self._voice: VoiceStream | None = None
         self._voice_lock = threading.Lock()
         self._voice_inbox: list[VisemeEvent] = []
+        self._voice_replace_queue = False
         self._voice_caption = ""
         self._voice_emotion = "NEUTRAL"
         self._voice_epoch: float | None = None
@@ -2854,19 +2912,35 @@ class AvatarFaceApp(FieldRuntime):
                 if caption:
                     self._voice_caption = strip_tags(caption)
                 spans = parse_timeline_spans(list(payload.get("spans") or []))
-                if self._voice_epoch is None:
-                    self._voice_epoch = (
-                        time.perf_counter() - self._clock0 + self._voice_trim
-                    )
+                # Each host-timed utterance starts *now*. Reusing a stale
+                # _voice_epoch parked every new span in the past → silent mouth.
+                # Replace (don't append) the render queue — mixing epochs fired
+                # the whole phrase in one burst (lost readable mouth motion).
+                self._voice_inbox.clear()
+                self._voice_replace_queue = True
+                # Host-timed spans use wall clock — clear audio media anchor so
+                # a leftover SAPI/TTS media_time cannot race speech_now ahead
+                # of the epoch and fire the whole phrase in one burst.
+                # Do NOT add voice_trim here (that offsets PCM playback only).
+                self._audio_anchor = None
+                self._voice_epoch = time.perf_counter() - self._clock0
                 events = schedule_spans(
                     spans, self._voice_emotion, start_at=self._voice_epoch
                 )
-                self._voice_inbox.extend(events)
-                self._voice_events += len(events)
+                self._append_voice_inbox(events)
                 return {
                     "scheduled": len(events),
                     "pending": 0,
                     "mode": "timeline",
+                    "epoch": float(self._voice_epoch),
+                    "events": [
+                        {
+                            "phoneme": e.phoneme,
+                            "due_at": float(e.due_at),
+                            "duration": float(e.duration),
+                        }
+                        for e in events
+                    ],
                 }
 
             if kind == "pcm":
@@ -2882,7 +2956,12 @@ class AvatarFaceApp(FieldRuntime):
                     self._voice_epoch = (
                         time.perf_counter() - self._clock0 + self._voice_trim
                     )
-                spans = stream.feed(chunk)
+                from aiface.stream import StreamError
+
+                try:
+                    spans = stream.feed(chunk)
+                except StreamError as exc:
+                    raise ValueError(str(exc)) from exc
                 self._voice_chunks += 1
                 # Live PCM → RMS history for open/close ML when no full clip.
                 try:
@@ -2929,14 +3008,31 @@ class AvatarFaceApp(FieldRuntime):
             self._voice = stream
         return stream
 
+    def _append_voice_inbox(self, events: Sequence[VisemeEvent]) -> None:
+        """Append streamed visemes with a hard backlog ceiling (QA CR-004)."""
+        from aiface.io_limits import MAX_VOICE_INBOX_EVENTS
+
+        if not events:
+            return
+        room = MAX_VOICE_INBOX_EVENTS - len(self._voice_inbox)
+        if room <= 0:
+            raise ValueError(
+                f"voice inbox exceeds {MAX_VOICE_INBOX_EVENTS} events"
+            )
+        if len(events) > room:
+            raise ValueError(
+                f"voice inbox would exceed {MAX_VOICE_INBOX_EVENTS} events"
+            )
+        self._voice_inbox.extend(events)
+        self._voice_events += len(events)
+
     def _voice_reply(
         self, stream: VoiceStream, spans: Sequence[StreamedSpan]
     ) -> dict[str, object]:
         """Schedule what the channel decided and describe it back to the caller."""
         epoch = self._voice_epoch or 0.0
         events = stream_visemes(spans, self._voice_emotion, start_at=epoch)
-        self._voice_inbox.extend(events)
-        self._voice_events += len(events)
+        self._append_voice_inbox(events)
         if spans:
             self._voice_lag = max(span.lag for span in spans)
         stats = stream.stats()
@@ -2955,13 +3051,24 @@ class AvatarFaceApp(FieldRuntime):
         with self._voice_lock:
             events = self._voice_inbox
             caption = self._voice_caption
+            replace = bool(getattr(self, "_voice_replace_queue", False))
             self._voice_inbox = []
             self._voice_caption = ""
+            self._voice_replace_queue = False
         if caption:
             self._chatbox.pending = False
             self._chatbox.add(SPEAKER_FACE, caption)
             self._overlay_dirty = True
             self._telemetry.alignment = "stream"
+        if not events and not replace:
+            return
+        if replace:
+            # New host-timed utterance — drop prior queue + sticky live open.
+            self._visemes.clear()
+            self._tickfeed_live = None
+            self._plate_open_hyst = 0.0
+            self._held_speech_viseme = "REST"
+            self._audio_anchor = None
         if not events:
             return
         self._visemes.extend(events)
@@ -2999,7 +3106,12 @@ class AvatarFaceApp(FieldRuntime):
             return
 
         def worker() -> None:
-            self._reply_queue.put(SpokenReply(spoken, self._synthesize(spoken)))
+            try:
+                self._reply_queue.put_nowait(
+                    SpokenReply(spoken, self._synthesize(spoken))
+                )
+            except queue.Full:
+                print("(reply queue full — drop speak)", flush=True)
 
         threading.Thread(target=worker, name="aiface-voice", daemon=True).start()
 
@@ -3024,7 +3136,12 @@ class AvatarFaceApp(FieldRuntime):
                 )
             # Synthesis stays on this thread so the render loop never waits for
             # a network round trip.
-            self._reply_queue.put(SpokenReply(reply, self._synthesize(reply)))
+            try:
+                self._reply_queue.put_nowait(
+                    SpokenReply(reply, self._synthesize(reply))
+                )
+            except queue.Full:
+                print("(reply queue full — drop llm)", flush=True)
 
         self._llm_thread = threading.Thread(
             target=worker,
@@ -3074,14 +3191,19 @@ class AvatarFaceApp(FieldRuntime):
             allow_remote_bind=bool(getattr(self.argv, "allow_remote_bind", False)),
         )
         self._bridge.start()
+        from aiface.io_limits import token_fingerprint
+
+        token_path = Path(self._avatar_bundle.root) / ".bridge_token"
+        try:
+            token_path.write_text(token + "\n", encoding="utf-8")
+        except OSError:
+            token_path = None
         print(f"Face bridge: {self._bridge.url}")
-        print(f"  Authorization: Bearer {token}")
+        print(f"  Authorization: Bearer <token fp {token_fingerprint(token)}>")
+        if token_path is not None:
+            print(f"  Token file: {token_path}")
         print("  GET /health /status /probe /cells /preview /screenshot")
         print('  POST /speak  {"text":"..."}')
-        print(
-            '  POST /cells/drive  {"mode":"cell","x":128,"y":80,"dx":0,"dy":-1}'
-            '  # or mode=cluster|neighbor|batch'
-        )
         print(
             '  POST /calibrate  {"mode":"normal|plate_only|field_only",'
             ' "speech_pace":1.12, "viseme_min_hold":0.10,'
@@ -3111,6 +3233,17 @@ class AvatarFaceApp(FieldRuntime):
             "phoneme": state.last_phoneme,
             "emotion": self._telemetry.last_emotion,
             "jaw_angle": float(state.jaw_angle),
+            "blink": float(
+                1.0 - min(float(state.lid_left), float(state.lid_right))
+            ),
+            "blink_state": str(
+                getattr(self._biomech.eyes.state, "blink_state", "") or ""
+            ),
+            "lid_amt": float(getattr(self, "_tickfeed_lid_amt", 1.0) or 1.0),
+            "lid_teacher": bool(getattr(self, "_tickfeed_lid_teacher", False)),
+            "eye_closed_plate": bool(
+                getattr(self, "_use_eye_closed_plate", False)
+            ),
             "pending_visemes": len(self._visemes),
             "active_muscles": int(self._active_muscle_count),
             "conversation_turns": int(self._conversation.turn_count),
@@ -3252,12 +3385,14 @@ class AvatarFaceApp(FieldRuntime):
             }
             self._held_speech_viseme = key
             self._mouth_timeline.clear()
-            # Light jaw assist only — LOOK plates come from TickPackage labels.
+            # Muscle impulses only — mandible hard-tracks LOOK open with plates
+            # (submit_phoneme jaw table would desync from plate_openness).
             self._biomech.submit_phoneme(
                 phoneme,
                 tick=self.tick + 1,
                 emotion_label=emotion,
                 duration=max(float(duration), 0.05),
+                drive_jaw=False,
             )
         else:
             self._mouth_timeline.fire(
@@ -3449,9 +3584,11 @@ class AvatarFaceApp(FieldRuntime):
 
                 eyes = self._biomech.eyes
                 eyes.request_blink()
-                # Park at full close so /preview can inspect lids (blink is
+                # Park mid closed-hold so /preview can inspect lids (blink is
                 # shorter than a slow bridge round-trip at lab FPS).
-                eyes.state.blink_phase = float(BLINK_OPEN_S + BLINK_HOLD_S)
+                eyes.state.blink_phase = float(
+                    BLINK_OPEN_S + max(BLINK_HOLD_S * 0.5, 1e-3)
+                )
                 eyes.state.blink_state = BLINK_STATE_CLOSED
                 eyes.state.lid_left = 0.0
                 eyes.state.lid_right = 0.0
@@ -3590,8 +3727,10 @@ class AvatarFaceApp(FieldRuntime):
         surprise = float(labels.surprise_amt)
         brow = float(getattr(labels, "brow_amt", 0.0) or 0.0)
         lid = float(getattr(labels, "lid_amt", 1.0) or 1.0)
+        lid = max(0.0, min(1.0, lid))
         self._tickfeed_lid_amt = lid
-        # Teacher present when take actually varies lids (not always 1.0).
+        # Teacher lid is authoritative once it leaves the default-open band
+        # (or when look_drive explicitly carried a lid channel this tick).
         self._tickfeed_lid_teacher = lid < 0.98
         # field_only: keep label openness for debug/status, but force plates closed
         # so NWR FIELD is the only visible mouth motion.
@@ -3629,13 +3768,18 @@ class AvatarFaceApp(FieldRuntime):
             ib = max(0, min(ib, len(self._atlas_textures) - 1))
             # During OPENING/CLOSING, commit plate amount earlier so the oral
             # disk isn't half plate / half FIELD (ghost mid-band blur).
-            from aiface.mouth_owner import commit_plate_amount
-
-            amount = commit_plate_amount(plate_amt, state)
+            amount = plate_amt
+            if state in {"OPENING", "CLOSING"} and amount > 0.06:
+                amount = max(amount, min(1.0, amount * 1.25 + 0.10))
+            elif state == "OPEN" and amount > 0.35:
+                amount = max(amount, min(1.0, amount * 1.08))
             self._plate_pair = (ia, ib)
             self._plate_blend = (float(mix), amount)
             self._plate_blend_current = (float(mix), amount)
             self._plate_openness_current = amount
+        # Same LOOK open → mandible target (plates and jaw stay in lockstep).
+        self._ml_jaw = float(self._plate_openness_current)
+        self._biomech.jaw.set_speech_target(float(self._ml_jaw))
         # Open speech owns LOOK — never stack smile.png (corner scars / double mouth).
         if plate_amt > 0.10:
             smile = 0.0

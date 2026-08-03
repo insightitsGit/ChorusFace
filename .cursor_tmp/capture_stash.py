@@ -180,11 +180,10 @@ def default_surprise_plate_path(world: str | Path) -> Path:
     return Path(world).with_name(SURPRISE_PLATE_NAME)
 
 
-
-
 def default_eyes_closed_plate_path(world: str | Path) -> Path:
     """Photographed nearly-closed eyes LOOK plate (blink ownership)."""
     return Path(world).with_name(EYES_CLOSED_PLATE_NAME)
+
 
 def default_capture_meta_path(world: str | Path) -> Path:
     return Path(world).with_name(CAPTURE_META_NAME)
@@ -685,7 +684,11 @@ def analyze_frame(
     if eye_span < MIN_EYE_SPAN or mouth_offset > MAX_MOUTH_OFFSET:
         drop("yaw")
         return None
-    if aperture < MIN_EYE_APERTURE and not landmarks.method.startswith("canonical"):
+    if (
+        aperture < MIN_EYE_APERTURE
+        and not allow_closed_eyes
+        and not landmarks.method.startswith("canonical")
+    ):
         drop("eyes")
         return None
 
@@ -1039,8 +1042,14 @@ def select_expression_frames(
     frames: Sequence[FrameSample],
     *,
     validate: bool = True,
+    calibration_script: dict[str, Any] | None = None,
 ) -> CaptureSelection:
-    """Pick rest / smile / open; use time phases when the take is long enough."""
+    """Pick rest / smile / open; prefer calibration beats when provided.
+
+    With a 9s script (REST/SMILE/OPEN/BLINK/…), open.png must come from the
+    OPEN beat — global max openness often lands on SAY_HI/SURPRISE after BLINK
+    and atlas AA previously won on closed-lid BLINK frames.
+    """
     if not frames:
         raise CaptureError("No frames to select from")
 
@@ -1053,7 +1062,69 @@ def select_expression_frames(
     duration = t_max - t_min
     phase_counts = {"rest": 0, "smile": 0, "open": 0, "talk": 0}
 
-    if duration >= PHASE_SPLIT_SECONDS and len(pool) >= 8:
+    script = calibration_script
+    if script is not None and script.get("beats"):
+        from aiface.tickfeed.calibration import filter_frames_by_beats
+
+        # Never mine LOOK mouth plates from the BLINK beat.
+        mouth_pool = filter_frames_by_beats(
+            pool, script, exclude={"BLINK"}
+        ) or pool
+        rest_pool = filter_frames_by_beats(
+            mouth_pool, script, include={"REST"}
+        ) or mouth_pool
+        smile_pool = filter_frames_by_beats(
+            mouth_pool, script, include={"SMILE"}
+        ) or mouth_pool
+        open_pool = filter_frames_by_beats(
+            mouth_pool, script, include={"OPEN"}
+        ) or mouth_pool
+        talk_pool = filter_frames_by_beats(
+            mouth_pool, script, include={"SAY_HI", "TALK", "SURPRISE", "ANGRY"}
+        ) or mouth_pool
+        surprise_pool = filter_frames_by_beats(
+            mouth_pool, script, include={"SURPRISE", "SAY_HI"}
+        ) or mouth_pool
+        phase_counts = {
+            "rest": len(rest_pool),
+            "smile": len(smile_pool),
+            "open": len(open_pool),
+            "talk": len(talk_pool),
+        }
+        rest = _pick_rest(rest_pool)
+        open_frame = _pick_open(open_pool)
+        smile_widths = [f.metrics.smile_width for f in smile_pool]
+        smile_flat = (
+            len(smile_widths) >= 2
+            and float(np.std(smile_widths)) < 0.012
+        )
+        if smile_flat:
+            smile = min(
+                smile_pool,
+                key=lambda f: (f.metrics.mouth_open, -f.metrics.sharpness),
+            )
+        else:
+            smile = _pick_smile(smile_pool)
+        surprise = _pick_surprise(
+            surprise_pool,
+            exclude={rest.index, smile.index},
+            rest=rest,
+        )
+        talk = [
+            frame
+            for frame in talk_pool
+            if frame.index not in {rest.index, smile.index, open_frame.index}
+        ] or list(mouth_pool)
+        selection = CaptureSelection(
+            rest=rest,
+            smile=smile,
+            open=open_frame,
+            surprise=surprise,
+            talk_frames=talk,
+            phase_mode="calibration-beats",
+            phase_counts=phase_counts,
+        )
+    elif duration >= PHASE_SPLIT_SECONDS and len(pool) >= 8:
         # Scripted quarters: rest | smile | open | talk
         edges = [
             t_min,
@@ -1272,6 +1343,8 @@ def _write_plate_atlas(
     source_label: str,
     hires: dict[int, FrameSample] | None = None,
     reference: FrameSample | None = None,
+    exclude_time_ranges: Sequence[tuple[float, float]] | None = None,
+    prefer_time_ranges: Sequence[tuple[float, float]] | None = None,
 ) -> list[Path]:
     from aiface.plates import (
         AtlasPlate,
@@ -1289,7 +1362,11 @@ def _write_plate_atlas(
         atlas_dir.mkdir(parents=True, exist_ok=True)
 
     # AMIN step 13: landmark-match one real frame per viseme (unique plates).
-    chosen, viseme_to_plate = select_viseme_atlas_frames(frames)
+    chosen, viseme_to_plate = select_viseme_atlas_frames(
+        frames,
+        exclude_time_ranges=exclude_time_ranges,
+        prefer_time_ranges=prefer_time_ranges,
+    )
     plate_visemes: dict[int, str] = {}
     for viseme, idx in viseme_to_plate.items():
         plate_visemes.setdefault(int(idx), viseme)
@@ -1299,22 +1376,41 @@ def _write_plate_atlas(
         # AMIN step 11: write the display pixels from the hi-res re-cut when
         # available; selection metrics stay from the grid-sized analysis pass.
         plate = (hires or {}).get(int(frame.index), frame)
-        # Tight oral matte — wide cheek mattes were stamping smile corners onto
-        # the face even when the plate was "closed".
-        alpha = build_mouth_interior_matte(
-            plate.image_bgr.shape[0],
-            plate.image_bgr.shape[1],
-            plate.face,
-            plate.landmarks_meta,
-            openness=max(float(frame.metrics.mouth_open), 0.04),
-        )
+        tag = plate_visemes.get(index, "")
+        # Closed/PP stay tight oral. Speech shapes need enough α that L07 can
+        # own mid-band — tiny mattes + open mute = stuck rest smile.
+        closed_tags = {"CLOSED", "PP", "REST", "MM"}
+        speech_open = float(frame.metrics.mouth_open)
+        if tag not in closed_tags and speech_open > 0.05:
+            alpha = build_expression_region_matte(
+                plate.image_bgr.shape[0],
+                plate.image_bgr.shape[1],
+                plate.face,
+                plate.landmarks_meta,
+            )
+            oral = build_mouth_interior_matte(
+                plate.image_bgr.shape[0],
+                plate.image_bgr.shape[1],
+                plate.face,
+                plate.landmarks_meta,
+                openness=max(speech_open, 0.30),
+            )
+            alpha = np.maximum(oral, alpha * 0.62).astype(np.float32)
+        else:
+            # Tight oral matte — wide cheek mattes stamp smile corners when closed.
+            alpha = build_mouth_interior_matte(
+                plate.image_bgr.shape[0],
+                plate.image_bgr.shape[1],
+                plate.face,
+                plate.landmarks_meta,
+                openness=max(speech_open, 0.04),
+            )
         pixels = plate.image_bgr
         if reference is not None:
             pixels = match_plate_to_reference(pixels, reference.image_bgr, alpha)
         rel = f"plates/plate_{index:02d}.png"
         path = write_expression_plate(destination.parent / rel, pixels, alpha)
         paths.append(path)
-        tag = plate_visemes.get(index, "")
         open_v = float(frame.metrics.mouth_open)
         # Closed / PP plates must index as sealed — capture floor (~0.15) lied.
         if tag in {"CLOSED", "PP", "REST", "MM"} or open_v <= 0.16:
@@ -1454,6 +1550,8 @@ def write_capture_bundle(
     reject_report: RejectReport | None = None,
     atlas_frames: Sequence[FrameSample] | None = None,
     hires: dict[int, FrameSample] | None = None,
+    exclude_time_ranges: Sequence[tuple[float, float]] | None = None,
+    prefer_time_ranges: Sequence[tuple[float, float]] | None = None,
 ) -> CaptureResult:
     """Seed from rest, write plates + expression catalog + atlas, meta, QA."""
     from aiface.seed import build_avatar_seed, write_seed_bundle
@@ -1565,6 +1663,8 @@ def write_capture_bundle(
         source_label=source_label,
         hires=hires,
         reference=rest_display,
+        exclude_time_ranges=exclude_time_ranges,
+        prefer_time_ranges=prefer_time_ranges,
     )
     written["plate_atlas"] = destination.with_name("plate_atlas.json")
     for path in atlas_paths:
@@ -1654,7 +1754,17 @@ def run_capture_from_video(
         min_sharpness=MIN_SHARPNESS_SOFT if allow_soft else MIN_SHARPNESS,
         report=report,
     )
-    selection = select_expression_frames(frames)
+    # Prefer TickFeed calibration beats when the script sits next to the world.
+    script = None
+    out_path = Path(output)
+    world_dir = out_path.parent if out_path.suffix.lower() == ".bds" else out_path
+    script_path = world_dir / "calibration_script.json"
+    if script_path.is_file():
+        try:
+            script = json.loads(script_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            script = None
+    selection = select_expression_frames(frames, calibration_script=script)
     priors = compute_travel_priors(selection.talk_frames)
     # Pre-pick surprise so its hi-res re-cut is available to the bundle too.
     if selection.surprise is None:
@@ -1664,7 +1774,18 @@ def run_capture_from_video(
         )
     from aiface.plates import select_viseme_atlas_frames
 
-    atlas_frames, _viseme_map = select_viseme_atlas_frames(frames)
+    exclude_ranges = None
+    prefer_ranges = None
+    if script is not None:
+        from aiface.tickfeed.calibration import beat_time_ranges
+
+        exclude_ranges = beat_time_ranges(script, {"BLINK"})
+        prefer_ranges = beat_time_ranges(script, {"OPEN", "SAY_HI", "TALK"})
+    atlas_frames, _viseme_map = select_viseme_atlas_frames(
+        frames,
+        exclude_time_ranges=exclude_ranges,
+        prefer_time_ranges=prefer_ranges,
+    )
     display_targets: list[FrameSample] = [
         selection.rest,
         selection.smile,
@@ -1682,6 +1803,8 @@ def run_capture_from_video(
         reject_report=report,
         atlas_frames=frames,
         hires=hires,
+        exclude_time_ranges=exclude_ranges,
+        prefer_time_ranges=prefer_ranges,
     )
 
 
@@ -1895,23 +2018,24 @@ __all__ = [
     "ExpressionMetrics",
     "FrameSample",
     "OPEN_PLATE_NAME",
-    "write_eye_anchors",
-    "default_eye_anchors_path",
-    "build_eye_lid_matte",
-    "default_eyes_closed_plate_path",
-    "EYES_CLOSED_PLATE_NAME",
     "RejectReport",
     "SMILE_PLATE_NAME",
     "SURPRISE_PLATE_NAME",
     "TravelPriors",
     "analyze_frame",
+    "build_eye_lid_matte",
     "build_mouth_interior_matte",
     "build_upper_face_matte",
     "compute_travel_priors",
     "default_capture_meta_path",
+    "default_eye_anchors_path",
     "default_open_plate_path",
     "default_smile_plate_path",
     "default_surprise_plate_path",
+    "default_eyes_closed_plate_path",
+    "EYE_ANCHORS_NAME",
+    "EYES_CLOSED_PLATE_NAME",
+    "write_eye_anchors",
     "iter_video_frames",
     "load_still_as_sample",
     "main",

@@ -550,9 +550,10 @@ lab play default.
 | Improvement | Behavior | Code |
 | --- | --- | --- |
 | Transition state machine | `REST` / `OPENING` / `OPEN` / `CLOSING` from openness velocity | `app._update_mouth_transition` |
-| Velocity-aware FIELD mute | Strong mute on OPENING/CLOSING mid-band; keep some travel at steady OPEN | `app._update_avatar_uniforms` |
-| Early atlas commitment | Hard-snap `pair_for_viseme`; boost plate amount mid-transition | `_apply_tickfeed_labels_to_look`, `avatar.frag` |
-| Stronger rest-align under plates | Higher `rest_mix` so FIELD does not smear under LOOK | `avatar.frag` |
+| Velocity-aware FIELD mute | OPENING/CLOSING mid-band → FIELD≈0; steady OPEN tiny; live chat/TTS → 0 under plates | `mouth_owner.look_field_gain_scale`, `app._update_avatar_uniforms` |
+| Early atlas commitment | Hard-snap `pair_for_viseme`; boost plate amount mid-transition (do not clobber in sync) | `_apply_tickfeed_labels_to_look`, `_sync_plate_blend_from_phoneme` |
+| Single LOOK owner | High open → `open.png` only; mid-band → atlas only when plate α can paint (no 0.28 stack) | `avatar.frag` `open_primary` / `atlas_primary` |
+| Stronger rest-align under plates | Higher `rest_mix` on oral core so FIELD does not smear under LOOK | `avatar.frag` |
 
 ### 14.4 Idle presence + demo ops
 

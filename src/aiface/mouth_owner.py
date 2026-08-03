@@ -152,12 +152,55 @@ def resolve_mouth_ownership(
     )
 
 
+def look_field_gain_scale(
+    *,
+    mouth_state: str,
+    plate_open: float,
+    open_vel: float = 0.0,
+    live_speech: bool = False,
+) -> float:
+    """§14.3 — scale recipe FIELD gain under LOOK plates (single owner).
+
+    Returns a multiplier in ``[0, 1]`` applied to ``field_warp_gain``.
+    Live chat/TTS synth FIELD + plates always smear — mute under plates.
+    OPENING/CLOSING mid-band owns the oral disk with plates alone.
+    """
+    plate_o = max(0.0, float(plate_open))
+    state = str(mouth_state or "REST").upper()
+    vel = abs(float(open_vel))
+    # Chat/TTS: synth Gaussian + plates → soft ghost. Plates own oral disk.
+    if live_speech and plate_o >= 0.08:
+        return 0.0
+    if state in {"OPENING", "CLOSING"}:
+        if vel > 0.6 or 0.10 <= plate_o <= 0.65:
+            return 0.0
+        return 0.02
+    if plate_o >= 0.45 or state == "OPEN":
+        return 0.02
+    if plate_o >= 0.12:
+        return 0.05
+    return 1.0
+
+
+def commit_plate_amount(plate_amt: float, mouth_state: str) -> float:
+    """Boost LOOK plate amount during transitions so mid-band is not 50/50."""
+    amount = max(0.0, min(1.0, float(plate_amt)))
+    state = str(mouth_state or "REST").upper()
+    if state in {"OPENING", "CLOSING"} and amount > 0.06:
+        return max(amount, min(1.0, amount * 1.25 + 0.10))
+    if state == "OPEN" and amount > 0.35:
+        return max(amount, min(1.0, amount * 1.08))
+    return amount
+
+
 __all__ = [
     "CLOSED_VISEMES",
     "MouthOwnership",
     "PLATE_OPEN_FLOOR",
     "PLATE_OPEN_FULL",
+    "commit_plate_amount",
     "hold_speech_viseme",
+    "look_field_gain_scale",
     "mute_smile_under_open",
     "plate_amount_for_openness",
     "resolve_mouth_ownership",

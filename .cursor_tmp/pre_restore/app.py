@@ -1384,18 +1384,8 @@ class AvatarFaceApp(FieldRuntime):
             and self._tickfeed is not None
             and self._tickfeed.last_labels is not None
         ):
-            from aiface.mouth_owner import commit_plate_amount
-
             phoneme = str(self._held_speech_viseme or "REST")
-            # Keep transition-boosted amount from labels — do not clobber with
-            # raw hysteresis (that reopened mid-band FIELD/plate ghosts).
-            open_amt = float(
-                getattr(self, "_plate_openness_current", 0.0)
-                or getattr(self, "_plate_open_hyst", 0.0)
-                or 0.0
-            )
-            state = str(getattr(self, "_mouth_transition", "REST") or "REST")
-            open_amt = commit_plate_amount(open_amt, state)
+            open_amt = float(getattr(self, "_plate_open_hyst", 0.0))
             # Early commitment during OPENING/CLOSING — no soft A/B ghost.
             snap = True
             ia, ib, mix = atlas.pair_for_viseme(phoneme, hard_snap=snap)
@@ -2270,10 +2260,9 @@ class AvatarFaceApp(FieldRuntime):
         elif speaking_plate and not self._tickfeed_look_authority:
             field_gain *= 0.20
         elif self._tickfeed_look_authority:
-            from aiface.mouth_owner import look_field_gain_scale
-
-            # §14.3 single owner: mute FIELD under LOOK plates (esp. live
-            # chat/TTS synth). Residual 5–12% mid-band was the smear.
+            # Velocity-aware FIELD gating (ChatGPT C): mute during fast
+            # OPENING/CLOSING so plate+field don't smear mid-band; keep some
+            # travel at steady OPEN / REST (avoid frozen mid-open regression).
             plate_o = max(
                 float(self._plate_blend_current[1]),
                 float(self._plate_openness_current),
@@ -2282,17 +2271,19 @@ class AvatarFaceApp(FieldRuntime):
             mouth_state = str(
                 getattr(self, "_mouth_transition", "REST") or "REST"
             )
-            live_speech = (
-                self._tickfeed_live_mode() == "speech"
-                or bool(self._visemes)
-                or self._presence == PRESENCE_SPEAKING
-            )
-            field_gain *= look_field_gain_scale(
-                mouth_state=mouth_state,
-                plate_open=plate_o,
-                open_vel=float(getattr(self, "_plate_open_vel", 0.0) or 0.0),
-                live_speech=live_speech,
-            )
+            vel = abs(float(getattr(self, "_plate_open_vel", 0.0) or 0.0))
+            # Single-owner mid-band: LOOK plate owns oral disk during motion;
+            # keep a little FIELD at steady OPEN so motion does not freeze.
+            if mouth_state in {"OPENING", "CLOSING"}:
+                if vel > 0.6 or 0.10 <= plate_o <= 0.65:
+                    field_gain *= 0.05
+                else:
+                    field_gain *= 0.12
+            elif plate_o >= 0.45 or mouth_state == "OPEN":
+                field_gain *= 0.12
+            elif plate_o >= 0.12:
+                field_gain *= max(0.30, 1.0 - 0.75 * plate_o)
+            # else REST / near-closed: full recipe gain
         self._field_gain_eff = float(field_gain)
         program["avatar_field_gain"].value = field_gain
         # Step 12: plate snap — commit toward the nearest captured mouth shape.
@@ -3629,9 +3620,11 @@ class AvatarFaceApp(FieldRuntime):
             ib = max(0, min(ib, len(self._atlas_textures) - 1))
             # During OPENING/CLOSING, commit plate amount earlier so the oral
             # disk isn't half plate / half FIELD (ghost mid-band blur).
-            from aiface.mouth_owner import commit_plate_amount
-
-            amount = commit_plate_amount(plate_amt, state)
+            amount = plate_amt
+            if state in {"OPENING", "CLOSING"} and amount > 0.06:
+                amount = max(amount, min(1.0, amount * 1.25 + 0.10))
+            elif state == "OPEN" and amount > 0.35:
+                amount = max(amount, min(1.0, amount * 1.08))
             self._plate_pair = (ia, ib)
             self._plate_blend = (float(mix), amount)
             self._plate_blend_current = (float(mix), amount)
