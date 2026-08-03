@@ -212,6 +212,16 @@ def _environment_flag(name: str) -> bool:
 PRESENCE_ZERO: Final = "zero"
 PRESENCE_HEARING: Final = "hearing"
 PRESENCE_SPEAKING: Final = "speaking"
+# Idle LOOK variants while presence stays zero (switchable).
+# neutral = no impression; smile = closed-lip smile plate; waiting = attentive.
+ZERO_MOOD_NEUTRAL: Final = "neutral"
+ZERO_MOOD_SMILE: Final = "smile"
+ZERO_MOOD_WAITING: Final = "waiting"
+ZERO_MOODS: Final = (
+    ZERO_MOOD_NEUTRAL,
+    ZERO_MOOD_SMILE,
+    ZERO_MOOD_WAITING,
+)
 
 
 def _default_tts_enabled() -> bool:
@@ -612,6 +622,8 @@ class AvatarFaceApp(FieldRuntime):
             print(f"TickFeed Side A debug: {self._side_a_debug.path}")
         # 0-state / hearing / speaking — chat presence for the demo face.
         self._presence: str = PRESENCE_ZERO
+        # Idle face within 0-state: neutral | smile | waiting (Z cycles).
+        self._zero_mood: str = ZERO_MOOD_NEUTRAL
         try:
             from aiface.tickfeed.cosmetics import load_cosmetic_prefs
 
@@ -1252,11 +1264,27 @@ class AvatarFaceApp(FieldRuntime):
             self._expr_target_brow = max(self._expr_target_brow, 0.14)
 
         # Hearing / waiting look — closed lips, attentive brows + soft widen.
-        if self._presence == PRESENCE_HEARING or self._tickfeed_live_mode() == "hearing":
+        waiting_look = (
+            self._presence == PRESENCE_HEARING
+            or self._tickfeed_live_mode() == "hearing"
+            or (
+                self._presence == PRESENCE_ZERO
+                and str(getattr(self, "_zero_mood", "")) == ZERO_MOOD_WAITING
+            )
+        )
+        if waiting_look:
             self._expr_target_brow = max(self._expr_target_brow, 0.45)
             self._expr_target_widen = max(self._expr_target_widen, 0.30)
             if not self._tickfeed_look_authority:
                 self._expr_target_blend = max(self._expr_target_blend, 0.18)
+        elif (
+            self._presence == PRESENCE_ZERO
+            and str(getattr(self, "_zero_mood", "")) == ZERO_MOOD_NEUTRAL
+        ):
+            # No-impression idle — flatten residual brow/widen from prior speech.
+            self._expr_target_brow = 0.0
+            self._expr_target_widen = 0.0
+            self._expr_target_blend = 0.0
 
     def _ease_expression_state(self, frame_time: float) -> None:
         rate = 4.5
@@ -1376,19 +1404,101 @@ class AvatarFaceApp(FieldRuntime):
         was = self._presence
         self._presence = PRESENCE_ZERO
         live = self._tickfeed_live
-        if live is not None and str(live.get("mode") or "") == "hearing":
-            self._tickfeed_live = None
+        if live is not None and str(live.get("mode") or "") in {
+            "hearing",
+            "speech",
+            "zero",
+        }:
+            # Clear speech/hearing overlay; zero-mood drives reapply each tick.
+            if str(live.get("mode") or "") != "zero":
+                self._tickfeed_live = None
         # Drop held open plate immediately — hysteresis must not park open.png
         # after speech ends (full-cycle QA: idle still o≈0.9).
         self._plate_open_hyst = 0.0
         self._plate_openness_current = 0.0
         if hasattr(self, "_biomech"):
-            self._biomech.eyes.look_at(0.0, 0.0)
+            gaze_x, gaze_y = 0.0, 0.0
+            if str(getattr(self, "_zero_mood", "")) == ZERO_MOOD_WAITING:
+                gaze_x, gaze_y = 0.18, 0.06
+            self._biomech.eyes.look_at(gaze_x, gaze_y)
             if blink and was != PRESENCE_ZERO:
                 self._biomech.eyes.request_blink()
         if was == PRESENCE_SPEAKING:
             self._telemetry.last_emotion = "NEUTRAL"
             self._held_speech_viseme = "REST"
+        self._apply_zero_mood_overlay()
+
+    def _zero_mood_drives(
+        self,
+    ) -> tuple[float, float, float, str, str]:
+        """Return open, smile, surprise, phoneme, emotion for idle 0-state mood."""
+        mood = str(getattr(self, "_zero_mood", ZERO_MOOD_NEUTRAL) or ZERO_MOOD_NEUTRAL)
+        if mood == ZERO_MOOD_SMILE:
+            return 0.0, 0.62, 0.0, "REST", "HAPPY"
+        if mood == ZERO_MOOD_WAITING:
+            return 0.0, 0.0, 0.14, "REST", "THINKING"
+        # neutral / no impression
+        return 0.0, 0.0, 0.0, "REST", "NEUTRAL"
+
+    def _apply_zero_mood_overlay(self) -> None:
+        """Keep TickFeed labels on the active idle mood while presence is zero."""
+        if self._presence != PRESENCE_ZERO:
+            return
+        if self._tickfeed_live_mode() == "speech":
+            return
+        now = time.perf_counter() - self._clock0
+        open_amt, smile_amt, surprise_amt, phoneme, emotion = self._zero_mood_drives()
+        self._tickfeed_live = {
+            "phoneme": phoneme,
+            "open": open_amt,
+            "smile": smile_amt,
+            "surprise": surprise_amt,
+            "emotion": emotion,
+            "mode": "zero",
+            "until": now + 1.5,
+        }
+        self._held_speech_viseme = phoneme
+        self._telemetry.last_emotion = emotion
+
+    def _set_zero_mood(self, mood: str, *, announce: bool = True) -> str:
+        key = str(mood or "").strip().lower()
+        aliases = {
+            "neutral": ZERO_MOOD_NEUTRAL,
+            "none": ZERO_MOOD_NEUTRAL,
+            "no": ZERO_MOOD_NEUTRAL,
+            "no_impression": ZERO_MOOD_NEUTRAL,
+            "no-impression": ZERO_MOOD_NEUTRAL,
+            "flat": ZERO_MOOD_NEUTRAL,
+            "smile": ZERO_MOOD_SMILE,
+            "happy": ZERO_MOOD_SMILE,
+            "waiting": ZERO_MOOD_WAITING,
+            "wait": ZERO_MOOD_WAITING,
+            "attentive": ZERO_MOOD_WAITING,
+        }
+        resolved = aliases.get(key, key)
+        if resolved not in ZERO_MOODS:
+            raise RuntimeError(
+                f"zero_mood must be one of {list(ZERO_MOODS)}, got {mood!r}"
+            )
+        self._zero_mood = resolved
+        if self._presence == PRESENCE_ZERO:
+            self._apply_zero_mood_overlay()
+        if announce:
+            labels = {
+                ZERO_MOOD_NEUTRAL: "no impression (neutral)",
+                ZERO_MOOD_SMILE: "smile",
+                ZERO_MOOD_WAITING: "waiting",
+            }
+            print(f"0-state mood: {labels.get(resolved, resolved)}")
+        return resolved
+
+    def _cycle_zero_mood(self) -> str:
+        cur = str(getattr(self, "_zero_mood", ZERO_MOOD_NEUTRAL))
+        try:
+            idx = ZERO_MOODS.index(cur)  # type: ignore[arg-type]
+        except ValueError:
+            idx = 0
+        return self._set_zero_mood(ZERO_MOODS[(idx + 1) % len(ZERO_MOODS)])
 
     def _enter_hearing_state(self) -> None:
         """Waiting / listening look — lips stay closed, brows lift, soft gaze."""
@@ -2765,8 +2875,10 @@ class AvatarFaceApp(FieldRuntime):
         )
         print(
             '  POST /calibrate  {"mode":"normal|plate_only|field_only",'
-            ' "speech_pace":1.12, "viseme_min_hold":0.10}'
+            ' "speech_pace":1.12, "viseme_min_hold":0.10,'
+            ' "zero_mood":"neutral|smile|waiting"}'
         )
+        print("  Keys: Z cycles 0-state mood (neutral / smile / waiting)")
         print('  POST /voice/expect  {"text":"..."}   then /voice/pcm, /voice/end')
         print(
             '  POST /voice/timeline {"spans":[{"phoneme":"OU","start":0,"end":0.12}],'
@@ -2814,6 +2926,7 @@ class AvatarFaceApp(FieldRuntime):
                 "plate_open": float(getattr(self, "_plate_openness_current", 0.0) or 0.0),
                 "viseme": str(self._held_speech_viseme or ""),
                 "presence": str(getattr(self, "_presence", "")),
+                "zero_mood": str(getattr(self, "_zero_mood", ZERO_MOOD_NEUTRAL)),
                 "field_gain_eff": float(getattr(self, "_field_gain_eff", 0.0) or 0.0),
                 "calibrate_mode": str(getattr(self, "_calibrate_mode", "normal")),
                 "speech_pace": float(self._display_recipe.speech_pace),
@@ -3106,11 +3219,18 @@ class AvatarFaceApp(FieldRuntime):
             self._display_recipe = _dc_replace(
                 self._display_recipe, viseme_min_hold=hold
             )
+        zero_mood = str(getattr(self, "_zero_mood", ZERO_MOOD_NEUTRAL))
+        if "zero_mood" in payload:
+            zero_mood = self._set_zero_mood(
+                str(payload.get("zero_mood") or ""), announce=False
+            )
         return {
             "ok": True,
             "mode": mode,
             "speech_pace": float(self._display_recipe.speech_pace),
             "viseme_min_hold": float(self._display_recipe.viseme_min_hold),
+            "zero_mood": zero_mood,
+            "zero_moods": list(ZERO_MOODS),
             "note": {
                 "normal": "LOOK plates + FIELD gain mute as usual",
                 "plate_only": "FIELD warp gain forced 0 — plates only",
@@ -3320,15 +3440,23 @@ class AvatarFaceApp(FieldRuntime):
                 surprise_amt = float(self._tickfeed_live.get("surprise", 0.0))
                 phoneme = str(self._tickfeed_live.get("phoneme") or "REST")
                 emotion = str(self._tickfeed_live.get("emotion") or "NEUTRAL")
+            elif self._presence == PRESENCE_ZERO:
+                # Switchable idle LOOK: neutral / smile / waiting.
+                self._apply_zero_mood_overlay()
+                open_amt, smile_amt, surprise_amt, phoneme, emotion = (
+                    self._zero_mood_drives()
+                )
+                live = True
+                mode = "zero"
             else:
-                # 0-state: closed lips, REST — blink comes from EyeSystem.
+                # Fallback closed REST — blink comes from EyeSystem.
                 open_amt = 0.0
                 smile_amt = 0.0
                 surprise_amt = 0.0
                 phoneme = "REST"
                 emotion = "NEUTRAL"
-            # Hearing + speech overlays both own LOOK; hearing keeps FIELD still.
-            live_overlay = live and mode in {"speech", "hearing"}
+            # Speech / hearing / zero-mood overlays own LOOK; keep FIELD still.
+            live_overlay = live and mode in {"speech", "hearing", "zero"}
             # Local-ring: produce the tick we consume (same 16.7 ms). Wire-loop
             # keeps B3 producer lead so the transport can jitter.
             if self._tickfeed.wire_loop:
@@ -3637,6 +3765,11 @@ class AvatarFaceApp(FieldRuntime):
                 self._chat_box_visible and self._chatbox.focused
             ):
                 self._cycle_mouth_speed()
+                return
+            if key == keys.Z and not (
+                self._chat_box_visible and self._chatbox.focused
+            ):
+                self._cycle_zero_mood()
                 return
             function_keys = {
                 keys.F1: 1,

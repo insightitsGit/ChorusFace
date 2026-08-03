@@ -501,7 +501,12 @@ instead of the in-process produce→submit path — proving the bandwidth claim.
 
 Demo presence (``app.py``): **0-state** = closed lips + natural blink; **hearing**
 while the user types or waits on the LLM; **speaking** during visemes/TTS; each
-chat turn returns to 0-state when speech ends.
+chat turn returns to 0-state when speech ends. Within 0-state, switchable idle
+LOOK moods: ``neutral`` (no impression), ``smile`` (closed-lip smile plate),
+``waiting`` (attentive brows/gaze). Cycle with **Z**, or
+``POST /calibrate {"zero_mood":"neutral|smile|waiting"}``. Note: identity
+``source_face.png`` on this take is already a soft smile — ``neutral`` removes
+the smile *plate* / brow drives, but cannot invent a flatter rest photo.
 ```
 
 ---
