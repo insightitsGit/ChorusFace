@@ -318,6 +318,9 @@ Periodic KEY refresh clears drift.
 
 Master velocities warp sampling UVs; resident plates composite by **label
 amounts** (smile/open/surprise/…). Full look stack, not smile-only.
+Display quality (hybrid core+edge mattes, FIELD muted only inside the oral
+disk when a plate owns it, plate-open hysteresis) stays inside this contract —
+never generative face RGB, never globally killing ``open.png``.
 
 **Label authority precedence (when TickFeed enabled):**
 

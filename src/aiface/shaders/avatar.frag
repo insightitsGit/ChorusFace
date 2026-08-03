@@ -278,6 +278,15 @@ vec2 total_displacement(vec2 grid_position) {
         distance(grid_position, avatar_mouth_line.xy)
     );
     muscles *= mix(1.0, 0.55, smile_damp * mouth_prox);
+    // Region gate (B4-safe): plate owns the oral disk — mute FIELD *inside*
+    // that disk so warped identity doesn't ghost under open.png. Cheeks /
+    // outside the disk keep FIELD. Never globally kill open.png.
+    float plate_disk = plate_amt * (1.0 - smoothstep(
+        avatar_mouth_line.z * 0.45,
+        avatar_mouth_line.z * 1.05,
+        distance(grid_position, avatar_mouth_line.xy)
+    ));
+    field *= (1.0 - plate_disk);
     return muscles + jaw + field;
 }
 
@@ -362,6 +371,20 @@ vec3 part_debug_color(int part) {
 float harden_matte(float alpha, float snap) {
     float a = clamp(alpha, 0.0, 1.0);
     return mix(a, smoothstep(0.22, 0.78, a), clamp(snap, 0.0, 1.0));
+}
+
+// Hybrid core+edge matte (Nuke Primatte / Resolve edge-extension idea):
+// opaque oral CORE + thin soft EDGE. Keeps open.png readable while killing
+// the wide half-transparent veil that reads as motion blur.
+// Core commits earlier so teeth/lips don't stay 50% transparent over warped
+// identity (double-teeth ghost). Edge stays thin — no cheek stamp.
+float hybrid_matte(float alpha, float snap) {
+    float a = clamp(alpha, 0.0, 1.0);
+    float core = smoothstep(0.22, 0.48, a);
+    float edge = smoothstep(0.08, 0.22, a) * (1.0 - core);
+    float hybrid = clamp(core + edge * 0.22, 0.0, 1.0);
+    // Blend toward hybrid with plate_sharpness; never invent opacity from zero.
+    return mix(harden_matte(a, snap), hybrid, clamp(snap, 0.0, 1.0));
 }
 
 // Atlas speech ownership in [0,1]. When high under hard snap, open.png must
@@ -466,55 +489,65 @@ void main() {
         // inside inverse_warp; cell groups L03 write ch0/1 before this pass.
         float snap = clamp(avatar_plate_sharpness, 0.0, 1.0);
         float atlas_own = atlas_own_amount();
-        // Mild rest-align only — a hard rest snap under an open jaw left a
-        // synthetic mouth_gap ("the gap") with nothing to fill it.
-        float plate_commit = mix(0.0, smoothstep(0.55, 0.95, atlas_own), snap);
-        // L02: muscle + jaw + field inverse-warp of identity photo.
-        vec2 source = inverse_warp(grid_position);
-        source = mix(source, grid_position, plate_commit * 0.35);
-        color = photo_at(source);
-        face_alpha = smoothstep(0.02, 0.12, max(color.r, max(color.g, color.b)));
-
-        // L04/L05 CAPTURE LOOKS (smile.png then open.png).
-        float open_plate_w = 0.0;
-        // Speech layer amount BEFORE capture mute — cavity suppress must follow
-        // this, not the muted open.png drive (muting open reopened the gap).
         float layer_open = clamp(avatar_plate_blend.y, 0.0, 1.0);
+
+        // Resolve LOOK plate ownership FIRST (unwarped UVs), then warp only
+        // where plates do not own the pixel. Warping under open.png was the
+        // remaining ghost/blur (live mouth sharp≈1.97 vs open.png asset≈2.40).
+        float open_w = 0.0;
+        float smile_w = 0.0;
         float open_drive_g = layer_open;
+        vec4 open_s = vec4(0.0);
+        vec4 smile_s = vec4(0.0);
         if (avatar_plates_ready == 1) {
             vec2 capture_uv = to_uv(grid_position);
-            vec4 open_s = texture(avatar_open_plate, capture_uv);
-            vec4 smile_s = texture(avatar_smile_plate, capture_uv);
-            // Plate amount owns open.png under hard snap. Jaw lag used to keep
-            // open.png full after PP/CLOSED (tight lips + stuck open layer).
+            open_s = texture(avatar_open_plate, capture_uv);
+            smile_s = texture(avatar_smile_plate, capture_uv);
             float open_from_plate = layer_open;
             float open_from_jaw = clamp(
                 avatar_jaw.z / max(avatar_recipe.x, 1e-3), 0.0, 1.0
             );
             float smile_drive = clamp(avatar_mouth_pose.w, 0.0, 1.0);
-            // Step 12: steepen the drive curves — a 50/50 ghost of two photos
-            // reads as motion blur, so commit toward one plate sooner.
             float open_drive = mix(
                 max(open_from_plate, open_from_jaw),
                 open_from_plate,
                 snap
             );
-            open_drive = mix(open_drive, smoothstep(0.18, 0.82, open_drive), snap);
+            open_drive = mix(open_drive, smoothstep(0.12, 0.72, open_drive), max(snap, 0.55));
             smile_drive = mix(smile_drive, smoothstep(0.18, 0.82, smile_drive), snap);
-            // Atlas already carries the speech mouth. open.png uses a much
-            // wider soft matte (~11% of the frame); stacking it under the
-            // atlas is the soft rectangle users still see.
-            float capture_mute = mix(0.0, smoothstep(0.35, 0.80, atlas_own), snap);
+            smile_drive *= (1.0 - smoothstep(0.12, 0.40, open_drive));
+            float capture_mute = mix(0.0, smoothstep(0.55, 0.95, atlas_own), snap) * 0.35;
             open_drive *= (1.0 - capture_mute);
             smile_drive *= (1.0 - capture_mute);
-            float open_w = open_drive * harden_matte(open_s.a, snap);
-            float smile_w = smile_drive * harden_matte(smile_s.a, snap)
+            open_w = open_drive * hybrid_matte(open_s.a, max(snap, 0.55));
+            smile_w = smile_drive * hybrid_matte(smile_s.a, snap)
                 * (1.0 - open_w * avatar_recipe.y);
+            open_drive_g = max(layer_open, open_drive);
+        }
+        float plate_own = clamp(max(open_w, smile_w * 0.85), 0.0, 1.0);
+        float plate_commit = mix(0.0, smoothstep(0.55, 0.95, atlas_own), snap);
+        // Rest-align under driven plate alpha so warp doesn't smear under LOOK.
+        if (avatar_plates_ready == 1) {
+            plate_own = max(
+                plate_own,
+                open_drive_g * smoothstep(0.08, 0.30, open_s.a)
+            );
+        }
+
+        // L02: warp identity only outside plate-owned pixels.
+        vec2 source = inverse_warp(grid_position);
+        float rest_mix = clamp(plate_own * 0.99 + plate_commit * 0.35, 0.0, 0.99);
+        source = mix(source, grid_position, rest_mix);
+        color = photo_at(source);
+        face_alpha = smoothstep(0.02, 0.12, max(color.r, max(color.g, color.b)));
+
+        // L04/L05 CAPTURE LOOKS — plate RGB on top of rest-aligned identity.
+        float open_plate_w = 0.0;
+        if (avatar_plates_ready == 1) {
             color = mix(color, smile_s.rgb, smile_w);
             color = mix(color, open_s.rgb, open_w);
             face_alpha = max(face_alpha, max(open_w, smile_w));
             open_plate_w = open_w;
-            open_drive_g = max(layer_open, open_drive);
         }
 
         // L06: optional cavity fill when the jaw actually parts.
@@ -574,8 +607,13 @@ void main() {
                 snap
             );
             vec3 plate_rgb = mix(pa.rgb, pb.rgb, mix_ab);
-            float plate_a = harden_matte(max(pa.a, pb.a), snap)
-                * clamp(avatar_plate_blend.y, 0.0, 1.0) * avatar_recipe.z;
+            // Atlas is detail on top of open.png — bow out under open ownership
+            // so L05+L07 don't stack double teeth / ghost lips.
+            float plate_a = hybrid_matte(max(pa.a, pb.a), snap)
+                * clamp(avatar_plate_blend.y, 0.0, 1.0)
+                * avatar_recipe.z
+                * 0.40
+                * (1.0 - smoothstep(0.20, 0.65, open_plate_w));
             color = mix(color, plate_rgb, plate_a);
             face_alpha = max(face_alpha, plate_a);
         }

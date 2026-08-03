@@ -595,6 +595,8 @@ class AvatarFaceApp(FieldRuntime):
         # Isolation modes for feed-vs-NWR calibrate (bridge POST /calibrate).
         # normal | plate_only (gain=0) | field_only (plates forced closed).
         self._calibrate_mode = "normal"
+        # Plate openness hysteresis — hold shapes so mid-blend flicker softens.
+        self._plate_open_hyst = 0.0
         from aiface.tickfeed.side_a_debug import SideADebugLog
 
         self._side_a_debug = SideADebugLog(
@@ -1029,10 +1031,9 @@ class AvatarFaceApp(FieldRuntime):
             data=np.ascontiguousarray(photo).tobytes(),
             dtype="f1",
         )
-        photo_texture.build_mipmaps()
-        # Mipmapped minification: crisp when magnified, cache-friendly when
-        # the window shows the 1024² photo smaller than native.
-        photo_texture.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+        # No mipmaps: warped / rest-aligned samples at non-integer UVs were
+        # pulling soft mip levels and reading as mouth blur next to plates.
+        photo_texture.filter = (moderngl.LINEAR, moderngl.LINEAR)
         photo_texture.repeat_x = False
         photo_texture.repeat_y = False
 
@@ -1324,7 +1325,8 @@ class AvatarFaceApp(FieldRuntime):
         ):
             labels = self._tickfeed.last_labels
             phoneme = str(self._held_speech_viseme or "REST")
-            open_amt = float(labels.open_amt)
+            # Prefer hysteresis amount from last TickFeed apply (anti mid-blend).
+            open_amt = float(getattr(self, "_plate_open_hyst", 0.0))
             ia, ib, mix = atlas.pair_for_openness(open_amt, hard_snap=False)
             ia = max(0, min(ia, len(self._atlas_textures) - 1))
             ib = max(0, min(ib, len(self._atlas_textures) - 1))
@@ -3165,6 +3167,21 @@ class AvatarFaceApp(FieldRuntime):
         self._refresh_frame_layers()
         self._cpu_frame_ms = (time.perf_counter() - cpu_started) * 1000.0
 
+    def _hysteresis_plate_open(self, open_amt: float) -> float:
+        """Hold LOOK open amount so brief dips don't smear mid-blend frames.
+
+        Open follows targets quickly; close needs a larger drop (asymmetric).
+        """
+        target = max(0.0, min(1.0, float(open_amt)))
+        prev = float(getattr(self, "_plate_open_hyst", 0.0) or 0.0)
+        if target >= prev:
+            if target - prev >= 0.03 or target >= 0.95:
+                self._plate_open_hyst = target
+        elif prev - target >= 0.14 or target <= 0.02:
+            self._plate_open_hyst = target
+        # else hold previous
+        return float(self._plate_open_hyst)
+
     def _apply_tickfeed_labels_to_look(self, pkg) -> None:
         """B4 — LOOK plates owned by TickPackage labels (sole authority)."""
         # Miss must not use producer last_labels — with ring lead those are
@@ -3180,9 +3197,10 @@ class AvatarFaceApp(FieldRuntime):
         brow = float(getattr(labels, "brow_amt", 0.0) or 0.0)
         # field_only: keep label openness for debug/status, but force plates closed
         # so NWR FIELD is the only visible mouth motion.
-        plate_amt = open_amt
+        plate_amt = self._hysteresis_plate_open(open_amt)
         if str(getattr(self, "_calibrate_mode", "normal")) == "field_only":
             plate_amt = 0.0
+            self._plate_open_hyst = 0.0
             smile = 0.0
             surprise = 0.0
         self._tickfeed_look_authority = True
@@ -3211,7 +3229,7 @@ class AvatarFaceApp(FieldRuntime):
             self._plate_pair = (ia, ib)
             self._plate_blend = (float(mix), plate_amt)
             self._plate_blend_current = (float(mix), plate_amt)
-        if open_amt > 0.2 and plate_amt > 0.2:
+        if plate_amt > 0.2:
             self._ml_smile = 0.0
 
     def _simulate_tick(self) -> None:

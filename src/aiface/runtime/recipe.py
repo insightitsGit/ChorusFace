@@ -100,8 +100,8 @@ class DisplayRecipe:
     plate_open_full: float = 0.28
     field_warp_gain: float = 0.35
     plate_sharpness: float = 0.90
-    # Lab clarity default: ~12% slower so plate snaps read between words.
-    speech_pace: float = 1.12
+    # 1.0 = realtime audio+visemes; >1 slows both together for lab clarity.
+    speech_pace: float = 1.0
     viseme_min_hold: float = 0.10
 
     @property
