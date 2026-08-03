@@ -135,6 +135,70 @@ class PreparedSpeech:
         return [span.as_tuple() for span in self.spans]
 
 
+def apply_speech_pace(
+    speech: PreparedSpeech,
+    pace: float,
+    *,
+    min_hold: float = 0.0,
+) -> PreparedSpeech:
+    """Stretch audio + viseme spans together so lips stay locked to the voice.
+
+    ``pace`` 1.0 = realtime; 1.12 ≈ +12% duration (clearer mouth holds).
+    ``min_hold`` expands any span shorter than that after pacing (seconds).
+    """
+    from aiface.audio import time_stretch
+
+    pace = max(0.85, min(1.60, float(pace)))
+    min_hold = max(0.0, float(min_hold))
+    if abs(pace - 1.0) < 1e-4 and min_hold <= 1e-6:
+        return speech
+
+    clip = time_stretch(speech.clip, pace)
+    spans: list[PhonemeSpan] = [
+        PhonemeSpan(
+            span.phoneme,
+            float(span.start) * pace,
+            float(span.end) * pace,
+        )
+        for span in speech.spans
+    ]
+    # Enforce min_hold by pushing later spans forward (do not clip into next).
+    if min_hold > 0.0 and spans:
+        shift = 0.0
+        for i, span in enumerate(spans):
+            start = float(span.start) + shift
+            end = float(span.end) + shift
+            need = min_hold - (end - start)
+            if need > 0.0:
+                end += need
+                shift += need
+            spans[i] = PhonemeSpan(span.phoneme, start, end)
+        # Pad silence if holds pushed past the paced clip.
+        limit = float(spans[-1].end)
+        if limit > float(clip.duration) + 1e-6:
+            import numpy as np
+
+            n_pad = int(round((limit - float(clip.duration)) * clip.sample_rate))
+            if n_pad > 0:
+                pad = np.zeros(n_pad, dtype=np.float32)
+                samples = np.concatenate(
+                    [np.asarray(clip.samples, dtype=np.float32), pad]
+                )
+                clip = AudioClip(samples=samples, sample_rate=int(clip.sample_rate))
+    words = tuple(
+        WordSpan(w.text, float(w.start) * pace, float(w.end) * pace)
+        for w in speech.words
+    )
+    return PreparedSpeech(
+        text=speech.text,
+        clip=clip,
+        spans=tuple(spans),
+        words=words,
+        voice=speech.voice,
+        alignment=speech.alignment,
+    )
+
+
 # ------------------------------------------------------------------ alignment
 
 
@@ -1002,6 +1066,7 @@ __all__ = [
     "align_by_words",
     "align_linear",
     "align_text",
+    "apply_speech_pace",
     "build_synthesizer",
     "detect_local_voice",
     "local_voice_available",

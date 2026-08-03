@@ -615,11 +615,18 @@ void main() {
             color = mix(color, globe, clamp(globe_w * max(eye_gate, aperture), 0.0, 1.0));
 
             // Lid skin only while blinking — never at open rest.
+            // At high blink commit the whole aperture so a slow blink actually
+            // reads as fully closed (soft covered*blink alone left a slit).
             if (blink > 0.04) {
-                float lid_y = centre.y + half_height - blink * (2.2 * half_height);
-                float covered = smoothstep(lid_y - 0.9, lid_y + 0.9, grid_position.y);
+                float lid_y = centre.y + half_height - blink * (2.35 * half_height);
+                float covered = smoothstep(lid_y - 1.1, lid_y + 1.1, grid_position.y);
+                float lid_cover = mix(
+                    covered * blink,
+                    1.0,
+                    smoothstep(0.72, 0.96, blink)
+                );
                 vec3 lid_skin = photo_at(source + vec2(0.0, half_height * 1.9));
-                color = mix(color, lid_skin, aperture * covered * blink);
+                color = mix(color, lid_skin, clamp(aperture * lid_cover, 0.0, 1.0));
             }
         }
 

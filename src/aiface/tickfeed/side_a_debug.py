@@ -101,6 +101,9 @@ def blur_risk(
     travel = float(field_max) * float(field_gain_eff)
     if plate_open >= 0.45 and travel >= 0.08:
         flags.append("plate+field_stack")
+    # Mid-open transitions are the smear zone: plate half-on + FIELD still hot.
+    if 0.12 <= plate_open < 0.45 and travel >= 0.12:
+        flags.append("transition_plate+field")
     if plate_open >= 0.35 and smile >= 0.2:
         flags.append("open+smile_stack")
     if muscles > 0 and (plate_open >= 0.2 or travel >= 0.05):

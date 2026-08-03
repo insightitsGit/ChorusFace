@@ -167,6 +167,15 @@ def main() -> int:
         default="code",
         help="Wire-loop feed: lane-A c_t (default) or lane-B package bytes",
     )
+    parser.add_argument(
+        "--speech-pace",
+        type=float,
+        default=float(os.environ.get("AIFACE_SPEECH_PACE", "0") or 0),
+        help=(
+            "Slow audio+visemes for clearer mouth (1.12=+12%%). "
+            "0 = recipe default"
+        ),
+    )
     args = parser.parse_args()
 
     print("TickFeed demo preflight")
@@ -206,6 +215,7 @@ def main() -> int:
         "--gpu-log",
         "--bridge",
         "--bridge-direct-speak",
+        "--tickfeed-debug",
         "--bridge-token",
         os.environ.get("AIFACE_BRIDGE_TOKEN", "tickfeed-lab"),
         "--bridge-port",
@@ -218,9 +228,13 @@ def main() -> int:
         str(args.wire_loop_source),
     ]
     cmd.append("--wire-loop" if args.wire_loop else "--no-wire-loop")
+    if float(args.speech_pace) > 0.0:
+        cmd.extend(["--speech-pace", str(float(args.speech_pace))])
     print(
         f"  master={'wire-loop/' + args.wire_loop_source if args.wire_loop else 'local-ring'}"
     )
+    if float(args.speech_pace) > 0.0:
+        print(f"  speech_pace: {float(args.speech_pace):.3f}")
     return subprocess.call(cmd, cwd=str(ROOT), env=env)
 
 

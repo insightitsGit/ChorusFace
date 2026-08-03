@@ -84,6 +84,26 @@ class AudioClip:
         return encode_wav(self)
 
 
+def time_stretch(clip: AudioClip, pace: float) -> AudioClip:
+    """Slow (``pace>1``) or speed (``pace<1``) a clip by resampling duration.
+
+    Keeps sample rate; length scales by ``pace``. Pitch shifts with rate
+    (record-slow) — acceptable for lab speech-clarity pacing.
+    """
+    pace = float(pace)
+    if pace <= 1e-3 or abs(pace - 1.0) < 1e-4 or clip.frame_count == 0:
+        return clip
+    n = int(clip.frame_count)
+    n_new = max(1, int(round(n * pace)))
+    if n_new == n:
+        return clip
+    src = np.asarray(clip.samples, dtype=np.float64)
+    x_old = np.linspace(0.0, 1.0, n, endpoint=False)
+    x_new = np.linspace(0.0, 1.0, n_new, endpoint=False)
+    out = np.interp(x_new, x_old, src).astype(np.float32)
+    return AudioClip(samples=out, sample_rate=int(clip.sample_rate))
+
+
 def _find_chunks(data: bytes) -> dict[bytes, tuple[int, int]]:
     """Map chunk id → (offset, size) for a RIFF/WAVE payload."""
     if len(data) < 12 or data[0:4] != b"RIFF" or data[8:12] != b"WAVE":
@@ -599,5 +619,6 @@ __all__ = [
     "energy_warp",
     "open_audio_sink",
     "rms_envelope",
+    "time_stretch",
     "voiced_intervals",
 ]

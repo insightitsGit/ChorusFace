@@ -79,6 +79,9 @@ class DisplayRecipe:
       plate_sharpness      AMIN step 12 — 0 keeps linear plate cross-fades,
                            1 commits each drive to the nearest captured mouth
                            shape (mid-blends of two photos read as blur)
+      speech_pace          1.0 = realtime; >1 slows audio+visemes together
+                           so each mouth shape holds longer (less transition blur)
+      viseme_min_hold      minimum seconds a paced viseme span may occupy
     """
 
     open_jaw_full: float = 0.40
@@ -97,6 +100,9 @@ class DisplayRecipe:
     plate_open_full: float = 0.28
     field_warp_gain: float = 0.35
     plate_sharpness: float = 0.90
+    # Lab clarity default: ~12% slower so plate snaps read between words.
+    speech_pace: float = 1.12
+    viseme_min_hold: float = 0.10
 
     @property
     def shader_knobs(self) -> tuple[float, float, float, float]:

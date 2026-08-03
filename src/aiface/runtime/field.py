@@ -281,6 +281,9 @@ class FieldRuntime(mglw.WindowConfig):
     def _on_world_reloaded(self) -> None:
         """Hook for subclasses holding state that describes the old world."""
 
+    def _on_pre_draw(self) -> None:
+        """Hook after simulate, before the color pass (avatar uniforms, etc.)."""
+
     # ------------------------------------------------------------- commands
 
     def _enqueue(self, command: PaintCommand) -> None:
@@ -458,6 +461,10 @@ class FieldRuntime(mglw.WindowConfig):
                 steps += 1
             if self.accumulator >= FIXED_STEP:
                 self.accumulator = math.fmod(self.accumulator, FIXED_STEP)
+
+        # After TickFeed/constraint ingest so LOOK open can mute FIELD gain
+        # before this frame's draw (uniforms set earlier would be one tick late).
+        self._on_pre_draw()
 
         scene = self._ensure_scene_framebuffer()
         scene.use()

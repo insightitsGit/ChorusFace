@@ -83,6 +83,8 @@ ProbeProvider = Callable[[], dict[str, Any]]
 CellsProvider = Callable[[], dict[str, Any]]
 #: ``payload -> {queued, impulses, ...}`` — per-cell / neighbor / cluster drive.
 CellsDriveHandler = Callable[[dict[str, Any]], dict[str, Any]]
+#: ``payload -> {mode, ...}`` — feed-vs-NWR isolation calibrate modes.
+CalibrateHandler = Callable[[dict[str, Any]], dict[str, Any]]
 #: ``(kind, payload) -> response``, where kind is ``expect``, ``pcm`` or ``end``.
 VoiceHandler = Callable[[str, dict[str, Any]], dict[str, Any]]
 
@@ -124,6 +126,7 @@ class FaceBridge:
         probe_provider: ProbeProvider | None = None,
         cells_provider: CellsProvider | None = None,
         cells_drive_handler: CellsDriveHandler | None = None,
+        calibrate_handler: CalibrateHandler | None = None,
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
         job_timeout: float = DEFAULT_JOB_TIMEOUT,
@@ -146,6 +149,7 @@ class FaceBridge:
         self._probe_provider = probe_provider
         self._cells_provider = cells_provider
         self._cells_drive_handler = cells_drive_handler
+        self._calibrate_handler = calibrate_handler
         self._token = token
         self._host = host
         self._port = int(port)
@@ -336,6 +340,15 @@ class FaceBridge:
                         result = bridge._run_job("cells_drive", request=payload)
                         self._send_json(HTTPStatus.OK, result)
                         return
+                    if path == "/calibrate":
+                        if bridge._calibrate_handler is None:
+                            raise BridgeError(
+                                HTTPStatus.NOT_FOUND, "calibrate not available"
+                            )
+                        payload = self._read_json()
+                        result = bridge._run_job("calibrate", request=payload)
+                        self._send_json(HTTPStatus.OK, result)
+                        return
                     if path == "/voice/expect":
                         payload = self._read_json()
                         text = str(payload.get("text", "")).strip()
@@ -455,6 +468,12 @@ class FaceBridge:
                     if not isinstance(job.request, dict):
                         raise RuntimeError("cells drive requires a json object")
                     job.payload = self._cells_drive_handler(job.request)
+                elif job.kind == "calibrate":
+                    if self._calibrate_handler is None:
+                        raise RuntimeError("calibrate handler missing")
+                    if not isinstance(job.request, dict):
+                        raise RuntimeError("calibrate requires a json object")
+                    job.payload = self._calibrate_handler(job.request)
                 else:
                     job.error = f"unknown job {job.kind}"
             except Exception as exc:  # noqa: BLE001 — surface to HTTP client
@@ -490,6 +509,7 @@ __all__ = [
     "MAX_PENDING_JOBS",
     "PCM_FORMATS",
     "BridgeError",
+    "CalibrateHandler",
     "CellsDriveHandler",
     "CellsProvider",
     "FaceBridge",

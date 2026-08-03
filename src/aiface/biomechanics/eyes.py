@@ -6,6 +6,13 @@ from dataclasses import dataclass, field
 
 from aiface.biomechanics.muscles import MuscleImpulse
 
+# Readable human-ish blink (seconds). Close is brisk; open is slower;
+# a short fully-closed hold so the lids actually read as shut on camera.
+BLINK_CLOSE_S: float = 0.12
+BLINK_HOLD_S: float = 0.07
+BLINK_OPEN_S: float = 0.20
+BLINK_TOTAL_S: float = BLINK_CLOSE_S + BLINK_HOLD_S + BLINK_OPEN_S
+
 
 @dataclass(slots=True)
 class EyeState:
@@ -17,9 +24,29 @@ class EyeState:
     lid_left: float = 1.0
     lid_right: float = 1.0
     blink_timer: float = 0.0
+    # Seconds remaining in the active blink (0 = idle). Was a 0..1 phase that
+    # decayed too fast and snapped shut on the first frame.
     blink_phase: float = 0.0
     focus_delay: float = 0.18
     lid_tension: float = 0.0
+
+
+def _lid_close_amount(remaining: float) -> float:
+    """Map blink remaining-time → lid closure 0..1 (1 = fully closed)."""
+    if remaining <= 0.0:
+        return 0.0
+    elapsed = BLINK_TOTAL_S - min(remaining, BLINK_TOTAL_S)
+    if elapsed < BLINK_CLOSE_S:
+        # Ease-in close so the motion is visible, not a one-frame snap.
+        t = elapsed / max(BLINK_CLOSE_S, 1e-4)
+        return t * t * (3.0 - 2.0 * t)
+    if elapsed < BLINK_CLOSE_S + BLINK_HOLD_S:
+        return 1.0
+    open_t = (elapsed - BLINK_CLOSE_S - BLINK_HOLD_S) / max(BLINK_OPEN_S, 1e-4)
+    open_t = max(0.0, min(1.0, open_t))
+    # Ease-out open (slower release near full open).
+    u = open_t * open_t * (3.0 - 2.0 * open_t)
+    return 1.0 - u
 
 
 @dataclass(slots=True)
@@ -50,7 +77,7 @@ class EyeSystem:
         that wants a blink now has to start the phase itself.
         """
         if self.state.blink_phase <= 0.0:
-            self.state.blink_phase = 1.0
+            self.state.blink_phase = BLINK_TOTAL_S
             self.state.blink_timer = 2.8 + self._next_unit() * 2.4
 
     def set_arousal(self, arousal: float) -> None:
@@ -83,12 +110,11 @@ class EyeSystem:
         impulses: list[MuscleImpulse] = []
         self.state.blink_timer -= dt
         if self.state.blink_phase > 0.0:
-            # Slower close/open so blinks read as lids, not a flicker bar.
-            self.state.blink_phase = max(0.0, self.state.blink_phase - dt * 4.2)
-            close = min(1.0, self.state.blink_phase * 1.65)
-            # Mild asymmetry: left lid leads by a few milliseconds of envelope.
+            self.state.blink_phase = max(0.0, self.state.blink_phase - dt)
+            close = _lid_close_amount(self.state.blink_phase)
+            # Mild asymmetry: left lid leads slightly.
             self.state.lid_left = 1.0 - close
-            self.state.lid_right = 1.0 - min(1.0, close * 0.92)
+            self.state.lid_right = 1.0 - min(1.0, close * 0.94)
             self.state.lid_tension = close
             # When TickFeed owns FIELD, skip blink muscle warps — lid overlay
             # alone. Muscle+field stacking reads as double lips.
@@ -105,7 +131,7 @@ class EyeSystem:
                     )
                 )
         elif self.state.blink_timer <= 0.0:
-            self.state.blink_phase = 1.0
+            self.state.blink_phase = BLINK_TOTAL_S
             self.state.blink_timer = 2.8 + self._next_unit() * 2.4
         else:
             self.state.lid_left = 1.0
@@ -115,4 +141,11 @@ class EyeSystem:
         return impulses
 
 
-__all__ = ["EyeState", "EyeSystem"]
+__all__ = [
+    "BLINK_CLOSE_S",
+    "BLINK_HOLD_S",
+    "BLINK_OPEN_S",
+    "BLINK_TOTAL_S",
+    "EyeState",
+    "EyeSystem",
+]
