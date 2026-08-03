@@ -231,9 +231,22 @@ Those are not the same shape — the binding is explicit:
 | **A — `c_t`** | one `float32[64]` compact code | every tick (bandwidth path) |
 | **B — TickPackage** | zlib bytes → framed into N×`float32[64]` chunks, or a **TPK_REF** ticket + shared spool when too large for inline | KEY / Δ / HELLO fidelity path |
 
-Frame meta (first floats of each chunk): magic, tick, n_chunks, chunk_i, nbytes, crc32
-(`TPK_CHUNK_MAGIC` / `TPK_REF_MAGIC` in `chorus_transport.py`). Bytes are packed as
-safe 0..255 floats (fabric matmul must not see NaNs).
+Frame meta (first floats of each chunk) — **must be exact in float32**:
+
+| Slot | CHUNK | REF |
+| --- | --- | --- |
+| 0 | `TPK_CHUNK_MAGIC` (= 64101) | `TPK_REF_MAGIC` (= 64102) |
+| 1 | tick | tick |
+| 2 | n_chunks | nbytes |
+| 3 | chunk_i | crc32 lo uint16 |
+| 4 | nbytes | crc32 hi uint16 |
+| 5–6 | crc32 lo/hi uint16 | — |
+| 7 | compressed_len | — |
+| 8… | payload bytes as 0..255 | spool name bytes |
+
+Magics and integer metas stay **≤ 2^24** so they survive IEEE-754 binary32.
+CRC32 is **never** stuffed into one float32 (24-bit mantissa) — always two
+uint16 halves. See `chorus_transport.py` + `reassemble_lane_b_chunks` tests.
 
 Inline threshold (`AIFACE_CHORUS_TPK_INLINE_MAX`, default 4096 compressed bytes):
 sparse Δ usually inlines; large KEY uses **TPK_REF + spool**.  
@@ -462,6 +475,10 @@ Side B / ML → TickPackage (KEY|Δ, full-face, labels)
      → GPU ingest: S:=KEY or S+=Δ  (vx,vy)
      → if miss: damp v
      → render: field warps UVs; plates mix by label amounts
+
+Demo ``--wire-loop`` (default in run_tickfeed_demo.py): master ring is fed by
+``ingest_from_wire`` (pull latest c_t → L4 expand, or lane-B package decode)
+instead of the in-process produce→submit path — proving the bandwidth claim.
 ```
 
 ---

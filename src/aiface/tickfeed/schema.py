@@ -93,6 +93,7 @@ VISEME_TABLE: Final[tuple[str, ...]] = (
 
 FLAG_HAS_LABELS: Final = 1 << 0
 FLAG_HAS_CONF: Final = 1 << 1
+# Reserved in TickPackage v1 — not set by encoders; decoders must ignore.
 FLAG_VS_REST: Final = 1 << 2
 
 # Sparse → dense fallback when too many cells change

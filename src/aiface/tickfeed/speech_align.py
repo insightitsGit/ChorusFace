@@ -119,7 +119,12 @@ def build_look_drive(
     open_curve: list[float] | None = None,
     smile_curve: list[float] | None = None,
 ) -> dict[str, Any]:
-    """Per-tick LOOK amounts from calibration beats + optional measured curves."""
+    """Per-tick LOOK amounts from calibration beats + optional measured curves.
+
+    Measured curves refine amounts **inside the matching beat only**. They must
+    not max-merge into REST (that left smile/open high on every tick and looked
+    like a permanently open mouth).
+    """
     script = load_calibration_script(world)
     ticks: list[dict[str, Any]] = []
     for t in range(int(n_ticks)):
@@ -129,23 +134,50 @@ def build_look_drive(
             if float(b["t0"]) <= t_sec < float(b["t1"]):
                 beat_id = str(b["id"])
                 break
-        smile = 0.85 if beat_id == "SMILE" else 0.0
-        open_ = 0.9 if beat_id == "OPEN" else (0.55 if beat_id == "TALK" else 0.0)
-        surprise = 0.8 if beat_id == "SURPRISE" else 0.0
-        brow = 0.7 if beat_id in {"SURPRISE", "ANGRY"} else 0.0
+        smile = 0.0
+        open_ = 0.0
+        surprise = 0.0
+        brow = 0.0
         emotion = int(EmotionId.NEUTRAL)
+        curve_o = (
+            float(open_curve[t])
+            if open_curve is not None and t < len(open_curve)
+            else 0.0
+        )
+        curve_s = (
+            float(smile_curve[t])
+            if smile_curve is not None and t < len(smile_curve)
+            else 0.0
+        )
         if beat_id == "SMILE":
+            # Closed-lip smile — never open from curve bleed.
+            smile = max(0.85, curve_s)
+            open_ = 0.0
             emotion = int(EmotionId.HAPPY)
+        elif beat_id == "OPEN":
+            open_ = max(0.9, curve_o)
+            smile = min(curve_s, 0.25)
+        elif beat_id == "SAY_HI":
+            open_ = max(0.22, min(curve_o, 0.55))
+            smile = min(max(curve_s, 0.15), 0.45)
         elif beat_id == "SURPRISE":
+            open_ = max(0.2, min(curve_o, 0.45))
+            surprise = 0.8
+            brow = 0.7
             emotion = int(EmotionId.SURPRISED)
         elif beat_id == "ANGRY":
+            open_ = 0.0
+            smile = 0.0
+            brow = 0.7
             emotion = int(EmotionId.ANGRY)
-        if open_curve is not None and t < len(open_curve):
-            open_ = max(open_, float(open_curve[t]))
-        if smile_curve is not None and t < len(smile_curve):
-            smile = max(smile, float(smile_curve[t]))
-        if beat_id == "SAY_HI":
-            open_ = max(open_, 0.35)
+        elif beat_id == "TALK":
+            open_ = max(0.35, min(curve_o if curve_o > 0.05 else 0.45, 0.75))
+            smile = min(curve_s, 0.3)
+        else:
+            # REST — fully closed, ignore noisy landmark curves
+            open_ = 0.0
+            smile = 0.0
+            surprise = 0.0
         ticks.append(
             {
                 "tick": t,
@@ -158,7 +190,7 @@ def build_look_drive(
             }
         )
     return {
-        "schema": "aiface.look_drive.v1",
+        "schema": "aiface.look_drive.v2",
         "tick_rate": TICK_RATE_HZ,
         "n_ticks": int(n_ticks),
         "ticks": ticks,

@@ -448,6 +448,22 @@ class AvatarFaceApp(FieldRuntime):
             default=os.environ.get("AIFACE_BRIDGE_TOKEN", ""),
             help="Bearer token; generated and printed when --bridge is set without one",
         )
+        parser.add_argument(
+            "--wire-loop",
+            action=argparse.BooleanOptionalAction,
+            default=_environment_flag("AIFACE_WIRE_LOOP"),
+            help=(
+                "TickFeed master consumes from transport (c_t L4 expand or lane-B "
+                "package decode) instead of the local produce→ring path. Proves the "
+                "bandwidth claim. Also AIFACE_WIRE_LOOP=1"
+            ),
+        )
+        parser.add_argument(
+            "--wire-loop-source",
+            choices=("code", "package"),
+            default=os.environ.get("AIFACE_WIRE_LOOP_SOURCE", "code"),
+            help="Wire-loop feed: lane-A c_t (default) or lane-B TickPackage bytes",
+        )
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -616,7 +632,7 @@ class AvatarFaceApp(FieldRuntime):
                 # do not boot with old hard-snap open-mouth greeting.
                 print(
                     "TickFeed demo: LOOK from package labels "
-                    "(measured timeline loops; chat overlays live speech)."
+                    "(one 8s calibration pass, then REST still; chat = live speech)."
                 )
             else:
                 self._speak_without_chat(
@@ -782,13 +798,26 @@ class AvatarFaceApp(FieldRuntime):
             self._tickfeed = TickFeedDriver.try_load_timeline(
                 self.world_path, face, mouth_uv
             )
+            if self._tickfeed is not None and bool(
+                getattr(self.argv, "wire_loop", False)
+            ):
+                self._tickfeed.wire_loop = True
+                self._tickfeed.wire_loop_source = str(
+                    getattr(self.argv, "wire_loop_source", "code") or "code"
+                )
             self._tickfeed_look_authority = bool(
                 self._tickfeed is not None and self._tickfeed.enabled
+            )
+            wire = (
+                f"wire-loop={self._tickfeed.wire_loop_source}"
+                if self._tickfeed is not None and self._tickfeed.wire_loop
+                else "local-ring"
             )
             print(
                 f"TickFeed: full-face ROI {face.w}x{face.h} @ ({face.x},{face.y}) "
                 f"— KEY/DELTA ingest (legacy ±4 cell plan disabled); "
-                f"LOOK authority={'tickfeed-labels' if self._tickfeed_look_authority else 'mouth-timeline'}"
+                f"LOOK authority={'tickfeed-labels' if self._tickfeed_look_authority else 'mouth-timeline'}; "
+                f"master={wire}"
             )
         except Exception as exc:  # noqa: BLE001 — adopt must not kill launch
             print(f"TickFeed: unavailable ({exc})")
@@ -2715,6 +2744,12 @@ class AvatarFaceApp(FieldRuntime):
                 "transport": (
                     transport.mode if transport is not None else "none"
                 ),
+                "wire_loop": bool(self._tickfeed.wire_loop),
+                "wire_loop_source": (
+                    self._tickfeed.wire_loop_source
+                    if self._tickfeed.wire_loop
+                    else None
+                ),
                 "wire": "KEY/DELTA full-face",
                 "labels": (
                     {
@@ -2876,6 +2911,9 @@ class AvatarFaceApp(FieldRuntime):
                 emotion=emotion,
                 live_speech=live,
             )
+            # Wire-loop: produce only pushes transport; master ring is fed from wire.
+            if self._tickfeed.wire_loop:
+                self._tickfeed.ingest_from_wire(produce_tick)
             pkg = self._tickfeed.pop_for_master(next_tick)
             self._apply_tickfeed_labels_to_look(pkg)
             self.queue_tick_package(pkg)

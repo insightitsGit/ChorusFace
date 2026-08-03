@@ -91,7 +91,7 @@ All multi-byte integers **little-endian**. Floats IEEE.
 | 24 | `u32` | `channel_mask` | Bit i set → channel i present (phase-1: bits 0+1 = `0x3`) |
 | 28 | `u8` | `value_dtype` | `1=f32`, `2=f16` |
 | 29 | `u8` | `delta_encoding` | see §4 |
-| 30 | `u8` | `flags` | bit0=has_labels, bit1=has_conf, bit2=vs_rest |
+| 30 | `u8` | `flags` | bit0=has_labels, bit1=has_conf; **bit2 `FLAG_VS_REST` reserved / unused in v1** |
 | 31 | `u8` | `reserved0` | 0 |
 | 32 | `u32` | `payload_bytes` | Size of body after header |
 | 36 | `u32` | `crc32` | CRC of header[0..35] + body (optional 0 in v1 lab) |
@@ -99,6 +99,10 @@ All multi-byte integers **little-endian**. Floats IEEE.
 | 48 | `u8[16]` | `reserved1` | 0 |
 
 **Header size = 64 bytes** every message.
+
+**Phase-1 channel count:** `channel_mask` must include `0x3` (vx, vy). v1
+decoders **may hardcode `C = 2`** (`PHASE1_CHANNELS`) and reject packages whose
+mask does not include those bits. Wider masks are reserved for later phases.
 
 ### 3.2 Labels block (optional, if `flags.has_labels`) — **48 bytes**
 

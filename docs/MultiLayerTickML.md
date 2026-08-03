@@ -147,8 +147,8 @@ L1 ──SpeechClock──► L2 ──LookDrive──► L3 ──FaceMotion─
 
 | Packet | Schema (design) | Produced by | Consumed by |
 | --- | --- | --- | --- |
-| `SpeechClock` | `tick, viseme, word, conf, audio_feat?` | L1 | L2, L3 |
-| `LookDrive` | `tick, smile, open, surprise, brow, conf` | L2 | L3, shader amounts |
+| `SpeechClock` | `schema` + `tick, viseme, word, conf, audio_feat?` | L1 | L2, L3 |
+| `LookDrive` | `schema` + `tick, smile, open, surprise, brow, conf` | L2 | L3, shader amounts |
 | `FaceMotion` | `tick, face_box, vx/vy patch or cell list, conf` | L3 / Side B | L4, L5 |
 | `TickCode` | `tick, c_t[], codec_id` | L4 encode | CHORUS / NWR |
 | `GapMask` | `tick, conf_map` | Side B tracker | L5, L3 |
@@ -156,7 +156,8 @@ L1 ──SpeechClock──► L2 ──LookDrive──► L3 ──FaceMotion─
 
 Rules:
 
-1. **Versioned schemas** — `aiface.packet.speech_clock.v1`, etc.  
+1. **Versioned schemas** — phase-1 dataclasses in `aiface.tickfeed.ml.packets`
+   use `aiface.packet.SpeechClock.v1` / `LookDrive.v1` / `FaceMotionCode.v1`.
 2. **No private tensors** across layers — only packets.  
 3. A layer may be swapped if it still reads/writes the same packets.  
 4. **Teacher data** for each layer is stored beside the world so that layer

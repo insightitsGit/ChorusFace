@@ -80,6 +80,23 @@ def test_timeline_teacher_tick_loops() -> None:
     assert drv._teacher_tick(25) == 5
 
 
+def test_rest_labels_zero_field() -> None:
+    face = FaceBox(10, 20, 8, 8)
+    drv = TickFeedDriver.create(face, mouth_uv=(14.0, 24.0))
+    drv.look_by_tick[0] = {
+        "smile": 0.0,
+        "open": 0.0,
+        "surprise": 0.0,
+        "emotion_id": 0,
+    }
+    drv.timeline[0] = np.ones((face.h, face.w, 2), dtype=np.float32)
+    drv.timeline_conf[0] = np.full(face.n_cells, 200, dtype=np.uint8)
+    drv.timeline_length = 1
+    pkg = drv.push_drives(tick=0, open_amt=0.0, smile_amt=0.0)
+    assert pkg.values is not None
+    assert float(np.abs(pkg.values).max()) < 1e-6
+
+
 def test_ring_producer_lead_absorbs_jitter() -> None:
     """B3: push tick+depth, pop current — early pops damp until lead fills."""
     from aiface.tickfeed.ring import FaceVelocityState, LockstepPlayer
@@ -115,3 +132,163 @@ def test_package_bytes_spool_lane_b(tmp_path) -> None:
     path = transport.push_package_bytes(3, blob)
     assert path is not None and path.is_file()
     assert transport.pull_latest_package_bytes() == blob
+
+
+def test_lane_b_magics_and_crc_survive_float32() -> None:
+    """Magics exact in f32; CRC round-trips via uint16 halves (not one u32 float)."""
+    import zlib
+
+    from aiface.tickfeed.chorus_transport import (
+        TPK_CHUNK_MAGIC,
+        TPK_REF_MAGIC,
+        TickFeedTransport,
+        assert_f32_exact_int,
+        crc32_from_halves,
+        crc32_to_halves,
+        parse_lane_b_header,
+        reassemble_lane_b_chunks,
+    )
+    from aiface.tickfeed.package import build_keyframe, encode
+
+    assert_f32_exact_int(TPK_CHUNK_MAGIC)
+    assert_f32_exact_int(TPK_REF_MAGIC)
+    # Prove the old date-style magic would have failed:
+    assert float(np.float32(20260803.0)) != 20260803.0
+
+    crc = 0xDEADBEEF
+    lo, hi = crc32_to_halves(crc)
+    assert crc32_from_halves(float(np.float32(lo)), float(np.float32(hi))) == crc
+    # Single-float packing loses low bits — must not be used:
+    assert int(np.float32(float(crc))) != crc
+
+    face = FaceBox(2, 2, 4, 4)
+    values = np.zeros((4, 4, 2), dtype=np.float32)
+    values[0, 0] = (0.25, -0.5)
+    blob = encode(build_keyframe(9, face, values))
+    transport = TickFeedTransport(world=".", use_chorus=False)
+    frames = transport._frame_chunks(blob, 9)
+    # Simulate wire: cast every frame through float32 storage
+    wire = [np.asarray(f, dtype=np.float32).copy() for f in frames]
+    header = parse_lane_b_header(wire[0])
+    assert header["kind"] == "chunk"
+    assert header["magic"] == float(np.float32(TPK_CHUNK_MAGIC))
+    assert header["crc32"] == (zlib.crc32(blob) & 0xFFFFFFFF)
+    assert reassemble_lane_b_chunks(wire) == blob
+
+    ref = np.zeros(64, dtype=np.float32)
+    ref[0] = np.float32(TPK_REF_MAGIC)
+    ref[1] = np.float32(9)
+    ref[2] = np.float32(len(blob))
+    lo, hi = crc32_to_halves(zlib.crc32(blob) & 0xFFFFFFFF)
+    ref[3] = np.float32(lo)
+    ref[4] = np.float32(hi)
+    rh = parse_lane_b_header(ref)
+    assert rh["kind"] == "ref"
+    assert rh["crc32"] == (zlib.crc32(blob) & 0xFFFFFFFF)
+
+
+def test_angry_beat_keeps_measured_field() -> None:
+    """Still-face gate must not erase ANGRY (brow-only LOOK amounts)."""
+    from aiface.tickfeed.schema import EmotionId
+
+    face = FaceBox(10, 20, 8, 8)
+    drv = TickFeedDriver.create(face, mouth_uv=(14.0, 24.0))
+    drv.look_by_tick[0] = {
+        "smile": 0.0,
+        "open": 0.0,
+        "surprise": 0.0,
+        "brow": 0.7,
+        "emotion_id": int(EmotionId.ANGRY),
+    }
+    measured = np.zeros((face.h, face.w, 2), dtype=np.float32)
+    measured[:, :, 1] = -0.4
+    drv.timeline[0] = measured
+    drv.timeline_conf[0] = np.full(face.n_cells, 220, dtype=np.uint8)
+    drv.timeline_length = 1
+    pkg = drv.push_drives(tick=0, open_amt=0.0, smile_amt=0.0)
+    assert pkg.values is not None
+    assert float(np.abs(pkg.values).max()) > 0.1
+
+
+def test_wire_loop_code_feeds_ring(tmp_path) -> None:
+    """Master ring is empty until ingest_from_wire expands the pushed c_t."""
+    from aiface.tickfeed.chorus_transport import TickFeedTransport
+
+    face = FaceBox(0, 0, 8, 8)
+
+    class _FakeML:
+        def encode_patch(self, patch):
+            flat = np.asarray(patch, dtype=np.float32).reshape(-1)
+            return [float(flat.max())] + [0.0] * 63
+
+        def decode_code(self, code):
+            v = float(np.asarray(code, dtype=np.float32).reshape(-1)[0])
+            return np.full(face.h * face.w * 2, v, dtype=np.float32)
+
+    drv = TickFeedDriver.create(face, mouth_uv=(4.0, 5.0))
+    # Measured timeline avoids ml.resolve; FakeML only encodes/decodes c_t.
+    patch = synthesize_velocity(face, open_amt=0.9, smile_amt=0.0)
+    drv.timeline[0] = patch
+    drv.timeline_conf[0] = np.full(face.n_cells, 220, dtype=np.uint8)
+    drv.timeline_length = 1
+    drv.ml = _FakeML()  # type: ignore[assignment]
+    drv.wire_loop = True
+    drv.wire_loop_source = "code"
+    drv.transport = TickFeedTransport(
+        world=tmp_path,
+        use_chorus=False,
+        spool_codes=False,
+        spool_packages=False,
+    )
+    drv.push_drives(tick=0, open_amt=0.9, smile_amt=0.0, phoneme="AH")
+    assert len(drv.player.ring) == 0
+    assert drv.transport.pull_latest_code() is not None
+    assert drv.ingest_from_wire(0) is not None
+    pkg = drv.pop_for_master(0)
+    assert pkg is not None
+    assert pkg.kind == PackageKind.KEYFRAME
+
+
+def test_wire_loop_package_feeds_ring(tmp_path) -> None:
+    from aiface.tickfeed.chorus_transport import TickFeedTransport
+
+    face = FaceBox(0, 0, 8, 8)
+    drv = TickFeedDriver.create(face, mouth_uv=(4.0, 5.0))
+    drv.wire_loop = True
+    drv.wire_loop_source = "package"
+    drv.transport = TickFeedTransport(
+        world=tmp_path,
+        use_chorus=False,
+        spool_packages=True,
+        spool_keys_only=False,
+        spool_codes=False,
+    )
+    drv.push_drives(tick=0, open_amt=0.85, smile_amt=0.1, phoneme="AH")
+    assert len(drv.player.ring) == 0
+    assert drv.ingest_from_wire(0) is not None
+    pkg = drv.pop_for_master(0)
+    assert pkg is not None
+    assert float(np.abs(pkg.values).max()) > 0.0 if pkg.values is not None else True
+
+
+def test_spool_trim_throttled(tmp_path) -> None:
+    from aiface.tickfeed.chorus_transport import TickFeedTransport
+
+    transport = TickFeedTransport(
+        world=tmp_path,
+        use_chorus=False,
+        spool_codes=True,
+        spool_packages=False,
+        spool_keep=5,
+        trim_every=3,
+    )
+    spool = tmp_path / "tickfeed_chorus_spool"
+    for i in range(2):
+        transport.push_code(i, np.zeros(64, dtype=np.float32))
+    assert len(list(spool.glob("tick_*.f32"))) == 2
+    transport.push_code(2, np.zeros(64, dtype=np.float32))  # 3rd write → trim
+    assert len(list(spool.glob("tick_*.f32"))) == 3  # 3 <= keep 5, nothing deleted
+    for i in range(3, 9):
+        transport.push_code(i, np.zeros(64, dtype=np.float32))
+    # Trims every 3 writes; after overflow, keep at most spool_keep.
+    assert len(list(spool.glob("tick_*.f32"))) <= 5

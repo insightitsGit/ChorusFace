@@ -26,6 +26,7 @@ from aiface.tickfeed.ring import FaceVelocityState, LockstepPlayer
 from aiface.tickfeed.schema import (
     KEY_REFRESH_TICKS,
     TICK_RATE_HZ,
+    BeatId,
     EmotionId,
     ValueDtype,
 )
@@ -59,7 +60,14 @@ class TickFeedDriver:
     cosmetics: CosmeticPrefs | None = None
     world: Path | None = None
     timeline_length: int = 0
-    loop_timeline: bool = True
+    # One calibration pass then settle at REST (looping forever looked "never still").
+    loop_timeline: bool = False
+    # Master consumes from transport (c_t or lane-B bytes) instead of local ring produce.
+    wire_loop: bool = False
+    wire_loop_source: str = "code"  # "code" | "package"
+    wire_prev_velocity: NDArray[np.float32] | None = None
+    wire_sent_key: bool = False
+    wire_ticks_since_key: int = 0
 
     @classmethod
     def create(
@@ -72,6 +80,29 @@ class TickFeedDriver:
             face=face,
             mouth_uv=mouth_uv,
             player=LockstepPlayer(state=state),
+        )
+
+    def _is_rest_still_gate(
+        self, labels: TickLabels, *, tick: int, live_speech: bool
+    ) -> bool:
+        """True only for neutral REST — never erase ANGRY/SMILE/SURPRISE motion."""
+        if live_speech:
+            return False
+        emo = int(labels.emotion_id)
+        if emo not in (int(EmotionId.NEUTRAL), int(EmotionId.UNKNOWN)):
+            return False
+        beat = int(labels.beat_id)
+        if beat not in (int(BeatId.REST), int(BeatId.UNKNOWN)):
+            return False
+        teacher = self._teacher_tick(tick)
+        brow = 0.0
+        if teacher in self.look_by_tick:
+            brow = float(self.look_by_tick[teacher].get("brow") or 0.0)
+        return (
+            float(labels.open_amt) < 0.08
+            and float(labels.surprise_amt) < 0.08
+            and float(labels.smile_amt) < 0.12
+            and brow < 0.15
         )
 
     def _teacher_tick(self, tick: int) -> int:
@@ -117,10 +148,23 @@ class TickFeedDriver:
             pass
         driver.ml = TickFeedMLStack.try_load(root)
         try:
+            import os
+
             from aiface.tickfeed.ml.train import CODE_DIM
 
+            spool_all = os.environ.get("AIFACE_CHORUS_SPOOL_ALL", "").lower() in (
+                "1",
+                "true",
+                "yes",
+            )
             driver.transport = TickFeedTransport(
-                world=root, dim=CODE_DIM, use_chorus=True, spool_packages=True
+                world=root,
+                dim=CODE_DIM,
+                use_chorus=True,
+                # Memory always holds latest; disk spool is KEY-only unless QA env set.
+                spool_packages=True,
+                spool_codes=spool_all,
+                spool_keys_only=not spool_all,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"TickFeed transport: {exc}")
@@ -220,6 +264,20 @@ class TickFeedDriver:
         live_speech: bool = False,
     ) -> TickPackage:
         teacher = self._teacher_tick(tick)
+        past_end = (
+            not live_speech
+            and self.timeline_length > 0
+            and not self.loop_timeline
+            and int(tick) >= int(self.timeline_length)
+        )
+        if past_end:
+            # Settled REST after one calibration pass — no ML thrash.
+            open_amt = 0.0
+            smile_amt = 0.0
+            surprise_amt = 0.0
+            phoneme = "REST"
+            emotion = "NEUTRAL"
+            word = ""
         labels = self._labels_for_tick(
             tick=tick,
             open_amt=open_amt,
@@ -234,8 +292,11 @@ class TickFeedDriver:
         conf: NDArray[np.uint8] | None = None
         code: list[float] = []
 
+        if past_end:
+            curr = np.zeros((self.face.h, self.face.w, 2), dtype=np.float32)
+            conf = np.full(self.face.n_cells, 255, dtype=np.uint8)
         # Authority: live speech synth/ML > measured timeline > ML decode > synth
-        if live_speech:
+        elif live_speech:
             if self.ml is not None:
                 speech, look, flat, code = self.ml.resolve(
                     tick=tick,
@@ -316,16 +377,45 @@ class TickFeedDriver:
             )
             conf = np.full(self.face.n_cells, 100, dtype=np.uint8)
 
+        # Still face only for neutral REST — never invent stillness for ANGRY/etc.
+        if self._is_rest_still_gate(labels, tick=tick, live_speech=live_speech):
+            curr = np.zeros((self.face.h, self.face.w, 2), dtype=np.float32)
+            conf = np.full(self.face.n_cells, 255, dtype=np.uint8)
+
         need_key = (
             not self.sent_key
             or self.ticks_since_key >= KEY_REFRESH_TICKS
             or self.prev_velocity is None
         )
-        if need_key:
+        curr_f = np.asarray(curr, dtype=np.float32)
+        still = float(np.abs(curr_f).max()) < 1e-6
+        prev_still = (
+            self.prev_velocity is not None
+            and float(np.abs(self.prev_velocity).max()) < 1e-6
+        )
+        # Settled zeros: EMPTY delta instead of re-shipping a dense zero KEY.
+        if (
+            need_key
+            and self.sent_key
+            and self.prev_velocity is not None
+            and still
+            and prev_still
+        ):
+            pkg = build_delta(
+                tick,
+                self.face,
+                self.prev_velocity,
+                curr_f,
+                labels=labels,
+                conf=conf,
+                value_dtype=ValueDtype.F16,
+            )
+            self.ticks_since_key = 0
+        elif need_key:
             pkg = build_keyframe(
                 tick,
                 self.face,
-                curr,
+                curr_f,
                 labels=labels,
                 conf=conf,
                 value_dtype=ValueDtype.F16,
@@ -337,25 +427,29 @@ class TickFeedDriver:
                 tick,
                 self.face,
                 self.prev_velocity,
-                curr,
+                curr_f,
                 labels=labels,
                 conf=conf,
                 value_dtype=ValueDtype.F16,
             )
             self.ticks_since_key += 1
-        self.prev_velocity = np.asarray(curr, dtype=np.float32).copy()
-        self.player.submit(pkg)
+        self.prev_velocity = curr_f.copy()
         self.last_labels = labels
         self.last_code = code
         if self.ml is not None and not code:
             try:
-                self.last_code = self.ml.encode_patch(curr)
+                self.last_code = self.ml.encode_patch(curr_f)
             except Exception:  # noqa: BLE001
                 pass
         if self.transport is not None:
             if self.last_code:
                 self.transport.push_code(tick, self.last_code)
-            self.transport.push_package_bytes(tick, encode(pkg))
+            self.transport.push_package_bytes(
+                tick, encode(pkg), kind=int(pkg.kind)
+            )
+        # Local ring is fed here unless wire-loop (master pulls transport instead).
+        if not self.wire_loop:
+            self.player.submit(pkg)
         pkg.time_seconds = float(tick) / float(TICK_RATE_HZ)
         self.last_package = pkg
         return pkg
@@ -387,7 +481,7 @@ class TickFeedDriver:
         if self.ml is None:
             raise RuntimeError("ML stack required to expand c_t")
         flat = self.ml.decode_code(code)
-        curr = flat.reshape(self.face.h, self.face.w, 2)
+        curr = flat.reshape(self.face.h, self.face.w, 2).astype(np.float32)
         labels = self._labels_for_tick(
             tick=tick,
             open_amt=open_amt,
@@ -398,12 +492,32 @@ class TickFeedDriver:
             word="",
         )
         conf = np.full(self.face.n_cells, 130, dtype=np.uint8)
-        if self.prev_velocity is None or not self.sent_key:
+        # Wire-loop keeps a separate KEY/Δ chain so produce prev_velocity stays intact.
+        if self.wire_loop:
+            prev = self.wire_prev_velocity
+            need_key = prev is None or not self.wire_sent_key
+            if not need_key and self.wire_ticks_since_key >= KEY_REFRESH_TICKS:
+                need_key = True
+            if need_key:
+                pkg = build_keyframe(
+                    tick, self.face, curr, labels=labels, conf=conf
+                )
+                self.wire_sent_key = True
+                self.wire_ticks_since_key = 0
+            else:
+                assert prev is not None
+                pkg = build_delta(
+                    tick, self.face, prev, curr, labels=labels, conf=conf
+                )
+                self.wire_ticks_since_key += 1
+            self.wire_prev_velocity = curr.copy()
+        elif self.prev_velocity is None or not self.sent_key:
             pkg = build_keyframe(
                 tick, self.face, curr, labels=labels, conf=conf
             )
             self.sent_key = True
             self.ticks_since_key = 0
+            self.prev_velocity = curr.copy()
         else:
             pkg = build_delta(
                 tick,
@@ -414,7 +528,7 @@ class TickFeedDriver:
                 conf=conf,
             )
             self.ticks_since_key += 1
-        self.prev_velocity = curr.copy()
+            self.prev_velocity = curr.copy()
         self.player.submit(pkg)
         self.last_code = list(np.asarray(code, dtype=np.float32).reshape(-1))
         self.last_labels = labels
@@ -422,13 +536,34 @@ class TickFeedDriver:
         return pkg
 
     def pull_remote_code_if_any(self, tick: int) -> TickPackage | None:
-        """If CHORUS/spool has a newer c_t, expand and submit."""
+        """If transport has a newer c_t, expand and submit to the ring."""
         if self.transport is None or self.ml is None:
             return None
         code = self.transport.pull_latest_code()
         if code is None:
             return None
         return self.expand_code_to_package(tick, code)
+
+    def ingest_from_wire(self, tick: int) -> TickPackage | None:
+        """Wire-loop consumer: transport → ring (c_t expand or lane-B decode)."""
+        if self.transport is None:
+            return None
+        source = (self.wire_loop_source or "code").strip().lower()
+        if source == "package":
+            from aiface.tickfeed.package import decode
+
+            blob = self.transport.pull_latest_package_bytes()
+            if blob is None:
+                return None
+            pkg = decode(blob)
+            # Retarget to the produce tick so the producer-lead ring stays aligned.
+            pkg.tick = int(tick)
+            self.player.submit(pkg)
+            if pkg.labels is not None:
+                self.last_labels = pkg.labels
+            self.last_package = pkg
+            return pkg
+        return self.pull_remote_code_if_any(tick)
 
 
 def face_box_from_profile(
