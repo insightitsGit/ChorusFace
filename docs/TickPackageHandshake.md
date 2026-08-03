@@ -1,6 +1,8 @@
 # TickPackage handshake — full-face ROI
 
-**Status:** implemented — `aiface.tickfeed.package` (HELLO/KEY/DELTA, f16, sparse conf).  
+**Status:** contract + local runtime **implemented**; CHORUS lane A+B push
+**implemented** for lab (framed inline / TPK_REF); multi-host HELLO_ACK still
+operator-owned (see TickFeedDesign §6.2 / §16).  
 **Master:** [`TickFeedDesign.md`](TickFeedDesign.md).  
 **Pair with:** [`CellFeedBandwidth.md`](CellFeedBandwidth.md) ·
 [`SideB_VideoCellCollection.md`](SideB_VideoCellCollection.md) ·
@@ -56,15 +58,16 @@ PRODUCER                              NWR MASTER (60 Hz)
 | Phase-1 channels | **ch 0 = vx, ch 1 = vy** | Kinematics write set |
 | Rest reference | zeros (or digest rest) | Δ vs rest optional |
 
-### Don’t have yet (must be produced)
+### Produced vs remaining
 
-| Missing | |
+| Item | State |
 | --- | --- |
-| Actual `vx/vy` arrays per tick from video | Side B |
-| Packed KEY/DELTA bytes on the wire | Side A |
-| Confidence map per tick | Side B |
-| Beat/word/look/emotion filled @ 60 Hz | script + align |
-| Master apply path for full-face patch | not ±4-only |
+| Actual `vx/vy` arrays per tick from video | **Yes** (Farneback → 60 Hz; per-tick `source` provenance) |
+| Packed KEY/DELTA bytes (codec) | **Yes** |
+| KEY/Δ on remote CHORUS | **Partial** — framed lane B / TPK_REF |
+| Confidence map per tick | **Yes** |
+| Beat/word/look/emotion @ 60 Hz | **Yes** (script + energy force-align) |
+| Master apply full-face patch | **Yes** (`tick_ingest.comp`) |
 
 ---
 
@@ -209,17 +212,19 @@ ACK returns: `apply_mode` (`velocity_write` | `displacement_write`), max payload
 
 ## 7. Handshake checklist — have / don’t
 
-| Item | Have in contract | Have in runtime |
-| --- | --- | --- |
-| Full-face ROI box | **Yes** | Yes (profile) |
-| Header + kind KEY/DELTA | **Yes** | No |
-| Phase-1 vx,vy mask `0x3` | **Yes** | No |
-| f16/f32 + sparse/dense/empty | **Yes** | No |
-| Labels 48 B | **Yes** | No |
-| Byte sizes / rates | **Yes** | No |
-| Side B fills values | Spec | **No** |
-| CHORUS carries bytes | Spec | **No** |
-| Master S←S+Δ apply | Spec | **No** |
+| Item | Contract | Local runtime | Remote CHORUS |
+| --- | --- | --- | --- |
+| Full-face ROI box | **Yes** | Yes (profile) | n/a |
+| Header + kind KEY/DELTA/HELLO | **Yes** | Yes | framed / TPK_REF |
+| Phase-1 vx,vy mask `0x3` | **Yes** | Yes | via package / `c_t` |
+| f16/f32 + sparse/dense/empty | **Yes** | Yes | via package body |
+| Labels 48 B | **Yes** | Yes | in package |
+| CRC = header[0..35] + body | **Yes** | Yes | n/a |
+| Side B fills values | Spec | Yes + provenance | n/a |
+| CHORUS lane A (`c_t`) | Spec | Yes | Yes when plane up |
+| CHORUS lane B (TickPackage bytes) | Spec | Yes (`push_package_bytes`) | Yes when plane up (inline / TPK_REF) |
+| Master S←KEY / S←S+Δ apply | Spec | Yes (GPU) | consumer host |
+| HELLO remote ACK | Spec | Lab self-ACK + lane B push | multi-host ACK TBD |
 
 ---
 

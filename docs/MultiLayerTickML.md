@@ -67,7 +67,7 @@ Those are resident LOOK/FIELD assets; ML only outputs **drives / motion / codes*
 | **Section** | User words / chat / audio → time |
 | **In** | audio features, text/chat tokens, optional lip proxy |
 | **Out** | `viseme[t]`, `word[t]`, confidence @ 60 Hz |
-| **Teacher** | force-aligned transcript from the take |
+| **Teacher** | script beat windows + **audio-energy force-align** (lab); MFA when available |
 | **Must not** | move cells or paint RGB |
 
 ### L2 — LookDriveML
@@ -98,7 +98,7 @@ Those are resident LOOK/FIELD assets; ML only outputs **drives / motion / codes*
 | **Section** | Bandwidth (Side A) |
 | **In** | full face patch **or** compact `c_t` |
 | **Out** | the other side (encode / decode) |
-| **Teacher** | autoencoder on measured patches |
+| **Teacher** | **PCA** on measured patches (phase-1 codec); AE is a future upgrade |
 | **Role** | make push ≪ 251 MB/s while decoding to L3 quality |
 
 ### L5 — GapPriorML (optional)

@@ -58,6 +58,8 @@ class TickFeedDriver:
     calibration: dict | None = None
     cosmetics: CosmeticPrefs | None = None
     world: Path | None = None
+    timeline_length: int = 0
+    loop_timeline: bool = True
 
     @classmethod
     def create(
@@ -71,6 +73,14 @@ class TickFeedDriver:
             mouth_uv=mouth_uv,
             player=LockstepPlayer(state=state),
         )
+
+    def _teacher_tick(self, tick: int) -> int:
+        """Map master tick onto measured teacher length (loop for demo idle)."""
+        if self.timeline_length <= 0:
+            return int(tick)
+        if self.loop_timeline:
+            return int(tick) % int(self.timeline_length)
+        return int(tick)
 
     @classmethod
     def try_load_timeline(
@@ -90,6 +100,7 @@ class TickFeedDriver:
             for i, t in enumerate(ticks):
                 driver.timeline[int(t)] = vel[i]
                 driver.timeline_conf[int(t)] = conf[i].reshape(-1)
+            driver.timeline_length = int(len(ticks))
             if bundle.get("speech"):
                 for row in bundle["speech"].get("ticks") or []:
                     driver.speech_by_tick[int(row["tick"])] = row
@@ -98,7 +109,7 @@ class TickFeedDriver:
                     driver.look_by_tick[int(row["tick"])] = row
             print(
                 f"TickFeedDriver: loaded timeline "
-                f"({len(driver.timeline)} ticks, "
+                f"({len(driver.timeline)} ticks, loop={driver.loop_timeline}, "
                 f"speech={len(driver.speech_by_tick)}, "
                 f"look={len(driver.look_by_tick)})"
             )
@@ -109,7 +120,7 @@ class TickFeedDriver:
             from aiface.tickfeed.ml.train import CODE_DIM
 
             driver.transport = TickFeedTransport(
-                world=root, dim=CODE_DIM, use_chorus=True, spool_packages=False
+                world=root, dim=CODE_DIM, use_chorus=True, spool_packages=True
             )
         except Exception as exc:  # noqa: BLE001
             print(f"TickFeed transport: {exc}")
@@ -143,25 +154,28 @@ class TickFeedDriver:
         emotion: str,
         word: str,
         speech_viseme: int | None = None,
+        live_speech: bool = False,
     ) -> TickLabels:
-        # Side B look/speech teachers are sole authority when present (not max-merge).
-        if tick in self.look_by_tick:
-            lk = self.look_by_tick[tick]
-            smile_amt = float(lk.get("smile") or 0.0)
-            open_amt = float(lk.get("open") or 0.0)
-            surprise_amt = float(lk.get("surprise") or 0.0)
-            if int(lk.get("emotion_id", -1)) >= 0:
-                emotion_map = {
-                    int(EmotionId.HAPPY): "HAPPY",
-                    int(EmotionId.SURPRISED): "SURPRISED",
-                    int(EmotionId.ANGRY): "ANGRY",
-                }
-                emotion = emotion_map.get(int(lk["emotion_id"]), emotion)
-        if tick in self.speech_by_tick:
-            sp = self.speech_by_tick[tick]
-            phoneme = str(sp.get("viseme") or phoneme)
-            word = str(sp.get("word") or word)
-            speech_viseme = int(sp.get("viseme_id", speech_viseme or 0))
+        teacher = self._teacher_tick(tick)
+        # Live chat/TTS owns amounts; otherwise Side B teachers are sole authority.
+        if not live_speech:
+            if teacher in self.look_by_tick:
+                lk = self.look_by_tick[teacher]
+                smile_amt = float(lk.get("smile") or 0.0)
+                open_amt = float(lk.get("open") or 0.0)
+                surprise_amt = float(lk.get("surprise") or 0.0)
+                if int(lk.get("emotion_id", -1)) >= 0:
+                    emotion_map = {
+                        int(EmotionId.HAPPY): "HAPPY",
+                        int(EmotionId.SURPRISED): "SURPRISED",
+                        int(EmotionId.ANGRY): "ANGRY",
+                    }
+                    emotion = emotion_map.get(int(lk["emotion_id"]), emotion)
+            if teacher in self.speech_by_tick:
+                sp = self.speech_by_tick[teacher]
+                phoneme = str(sp.get("viseme") or phoneme)
+                word = str(sp.get("word") or word)
+                speech_viseme = int(sp.get("viseme_id", speech_viseme or 0))
 
         labels = labels_from_drives(
             phoneme=phoneme,
@@ -173,9 +187,12 @@ class TickFeedDriver:
         )
         if speech_viseme is not None:
             labels.viseme_id = int(speech_viseme)
-        if self.calibration is not None:
-            t = float(tick) / float(TICK_RATE_HZ)
-            if t < float(self.calibration.get("duration_s") or 8.0):
+        if self.calibration is not None and not live_speech:
+            t = float(teacher) / float(TICK_RATE_HZ)
+            duration = float(self.calibration.get("duration_s") or 8.0)
+            if self.loop_timeline and duration > 0:
+                t = t % duration
+            if t < duration:
                 beat = beat_at_time(self.calibration, t)
                 labels.beat_id = int(beat.get("beat_id", labels.beat_id))
                 speech = str(beat.get("speech") or "")
@@ -200,7 +217,9 @@ class TickFeedDriver:
         phoneme: str = "REST",
         emotion: str = "NEUTRAL",
         word: str = "",
+        live_speech: bool = False,
     ) -> TickPackage:
+        teacher = self._teacher_tick(tick)
         labels = self._labels_for_tick(
             tick=tick,
             open_amt=open_amt,
@@ -209,15 +228,31 @@ class TickFeedDriver:
             phoneme=phoneme,
             emotion=emotion,
             word=word,
+            live_speech=live_speech,
         )
         curr: NDArray[np.float32] | None = None
         conf: NDArray[np.uint8] | None = None
         code: list[float] = []
 
-        # Authority: measured timeline > ML decode > synth
-        if tick in self.timeline:
-            curr = self.timeline[tick]
-            conf = self.timeline_conf.get(tick)
+        # Authority: live speech synth/ML > measured timeline > ML decode > synth
+        if live_speech:
+            if self.ml is not None:
+                speech, look, flat, code = self.ml.resolve(
+                    tick=tick,
+                    open_amt=open_amt,
+                    smile_amt=smile_amt,
+                    surprise_amt=surprise_amt,
+                )
+                # Live amounts stay authoritative; ML only fills FIELD patch.
+                del speech, look
+                try:
+                    curr = flat.reshape(self.face.h, self.face.w, 2)
+                    conf = np.full(self.face.n_cells, 150, dtype=np.uint8)
+                except ValueError:
+                    curr = None
+        elif teacher in self.timeline:
+            curr = self.timeline[teacher]
+            conf = self.timeline_conf.get(teacher)
             mean_conf = float(np.mean(conf)) if conf is not None else 255.0
             if (
                 mean_conf < 90.0
@@ -225,7 +260,7 @@ class TickFeedDriver:
                 and self.ml.l5 is not None
             ):
                 speech, look, flat, code = self.ml.resolve(
-                    tick=tick,
+                    tick=teacher,
                     open_amt=open_amt,
                     smile_amt=smile_amt,
                     surprise_amt=surprise_amt,
@@ -246,6 +281,7 @@ class TickFeedDriver:
                     emotion=emotion,
                     word=speech.word or word,
                     speech_viseme=int(speech.viseme_id),
+                    live_speech=False,
                 )
         elif self.ml is not None:
             speech, look, flat, code = self.ml.resolve(
@@ -263,6 +299,7 @@ class TickFeedDriver:
                 emotion=emotion,
                 word=speech.word or word,
                 speech_viseme=int(speech.viseme_id),
+                live_speech=False,
             )
             try:
                 curr = flat.reshape(self.face.h, self.face.w, 2)

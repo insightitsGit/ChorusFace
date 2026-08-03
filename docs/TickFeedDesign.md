@@ -1,18 +1,26 @@
 # Tick Feed Design — full face @ 60 Hz (design session master)
 
-**Status:** Side A + Side B **implemented** on `tickfeedmaster` for design fidelity
-(HELLO, KEY/Δ, ring→GPU, labels→LOOK, every-frame flow timeline dir, speech/look
-align, L1–L5, CHORUS/`c_t`). Legacy ±4 **disabled**.  
+**Status (three planes — do not collapse):**
+
+| Plane | State on `tickfeedmaster` |
+| --- | --- |
+| **Contract** (bytes, labels, KEY/Δ rules) | **Done** — see handshake |
+| **Local Side A apply** (ring → GPU ingest → LOOK) | **Done** — codec + `tick_ingest.comp` |
+| **Remote CHORUS transport of KEY/Δ** | **Done (lab)** — lane A `c_t` + lane B framed packages / TPK_REF; multi-host HELLO_ACK still operator |
+
+Legacy ±4 **disabled**. TickFeed-native demo: labels sole LOOK authority (no
+MouthLayerTimeline hard-snap). Measured timeline carries per-tick `source`
+provenance (no synth sold as measured).  
+
 **Branch:** `tickfeedmaster`  
 **Split from:** AminIntheLoop  
 **Operator step:** generate `calibration_take.mp4` from
 [`AvatarCalibrationPrompt.md`](AvatarCalibrationPrompt.md) when replacing the
-lab video, then `python scripts/train_tickfeed_ml.py --prepare`.  
-
-
+lab video, then `python scripts/build_tickfeed_demo.py --clean` (or
+`train_tickfeed_ml.py --prepare`). Play: `python scripts/run_tickfeed_demo.py`.
 
 **Purpose:** Single from-scratch design doc capturing the Side A / Side B
-conversation so you can research and decide before build.
+conversation **and** the implementation map on this branch (see §16).
 
 **Related detail docs**
 
@@ -164,13 +172,25 @@ Artifact: `calibration_script.json` (beat windows + tick_rate=60).
 ```text
 Scripted video + audio + calibration_script
   → every frame registered to face_box (= .bds UV)
-  → dense whole-face track (engine TBD: UV-flow / mesh / 3DMM+residual)
-  → rasterize to face patch values
+  → dense whole-face track (lab: Farneback optical flow on face crop)
   → resample / interpolate to 60 Hz ticks
-  → align words/visemes (SAY_HI / TALK windows)
-  → attach beat / look / emotion labels
-  → write FaceCellTimeline / TickPackages
+  → align words/visemes (audio-energy force-align inside script windows)
+  → attach beat / look / emotion labels (look floors may boost amounts;
+     they must NOT be blended into stored FIELD velocities)
+  → write FaceCellTimeline with per-tick source provenance
+  → train L1–L5 / emit TickPackages at runtime
 ```
+
+**Provenance (required):** each tick stores `source`:
+
+| Code | Meaning | May win as “measured”? |
+| --- | --- | --- |
+| `0` | `measured_optical_flow` | **Yes** |
+| `1` | `blend_legacy` (forbidden for new writes) | No |
+| `2` | `synthetic_fallback` (no flow) | No — ML/gap only |
+
+§10 forbids inventing dense flow sold as measured. Synth is allowed only as an
+explicit fallback with `source=2` and lowered confidence.
 
 **Live path does not re-run dense tracking inside 16.7 ms** — it reads prepared
 packages (or ML that was trained on them).
@@ -199,6 +219,26 @@ Producer **pushes**; master does not echo full face state each tick.
 - Binary **float32/f16 vector** transport (AI API ↔ AIFace/NWR).  
 - Better than JSON/REST for vectors.  
 - Cipher does **not** replace content compression (ROI + delta + optional `c_t`).
+
+**CHORUS ↔ TickPackage binding (two lanes)**
+
+CHORUS Fabric carries **float32 vectors of fixed `CHORUS_DIM`** (TickFeed: 64).
+A TickPackage is an **arbitrary byte blob** (64 B header + 48 B labels + body).
+Those are not the same shape — the binding is explicit:
+
+| Lane | Payload | When |
+| --- | --- | --- |
+| **A — `c_t`** | one `float32[64]` compact code | every tick (bandwidth path) |
+| **B — TickPackage** | zlib bytes → framed into N×`float32[64]` chunks, or a **TPK_REF** ticket + shared spool when too large for inline | KEY / Δ / HELLO fidelity path |
+
+Frame meta (first floats of each chunk): magic, tick, n_chunks, chunk_i, nbytes, crc32
+(`TPK_CHUNK_MAGIC` / `TPK_REF_MAGIC` in `chorus_transport.py`). Bytes are packed as
+safe 0..255 floats (fabric matmul must not see NaNs).
+
+Inline threshold (`AIFACE_CHORUS_TPK_INLINE_MAX`, default 4096 compressed bytes):
+sparse Δ usually inlines; large KEY uses **TPK_REF + spool**.  
+Lab HELLO: self-ACK in-process **and** both HELLO/ACK blobs pushed on lane B.
+Remote multi-host ACK remains the production upgrade.
 
 ### 6.3 First load + deltas
 
@@ -245,16 +285,34 @@ Header `face_x/y/w/h` maps patch index → world cell. GPU does the scatter.
 #### B3 — Ring buffer + velocity decay
 
 ```text
-Incoming packages → 3-tick lockstep ring (~50 ms)
-  → if tick T present: apply KEY/Δ
-  → if missing: v_xy *= γ  (γ ≈ 0.82–0.88), no invented coast integrate
-Periodic KEY refresh clears drift
+Producer clock and master clock are related but not the same step:
+
+  produce_tick = master_tick + RING_DEPTH   # schedule ~50 ms ahead (depth=3)
+  ring[produce_tick] ← package
+  at master_tick T: pop ring[T] only
+    → if present: apply KEY/Δ
+    → if missing: v_xy *= γ  (γ ≈ 0.82–0.88), no invented coast integrate
+
+Warm-up: first RING_DEPTH master ticks may damp until the lead fills.
+Never “push then pop the same tick” as a substitute for the ring.
+Periodic KEY refresh clears drift.
 ```
 
 #### B4 — FIELD-driven LOOK
 
 Master velocities warp sampling UVs; resident plates composite by **label
 amounts** (smile/open/surprise/…). Full look stack, not smile-only.
+
+**Label authority precedence (when TickFeed enabled):**
+
+```text
+1. TickPackage labels (smile/open/surprise/viseme)     ← sole LOOK amounts
+2. Emotion-catalog easing                              ← only if TickFeed off
+3. MouthLayerTimeline hard-snap                        ← disabled under TickFeed
+```
+
+Catalog ease must not overwrite `_expr_plate_blend` / plate amounts while
+TickFeed owns LOOK.
 
 ```text
 CHORUS → TickPackage → [3-tick ring] → GPU ingest (B1+B2)
@@ -283,8 +341,10 @@ value_dtype    = f16 preferred on wire
 delta_encoding = SPARSE first; DENSE if very dense change
 ```
 
-**Have today:** face_box geometry, conceptual channels.  
-**Don’t have yet:** filled arrays, wire, master apply of full-face patches.
+**Have today:** filled KEY/Δ arrays, codec (CRC = header[0..35]+body), GPU master
+apply, labels→LOOK, lane A + lane B CHORUS push, producer-lead ring, measured
+timeline provenance.  
+**Operator-owned:** lab MFA; production multi-host HELLO_ACK / separate master pod.
 
 ---
 
@@ -292,13 +352,13 @@ delta_encoding = SPARSE first; DENSE if very dense change
 
 Not one giant model. Layers retrain independently via versioned packets.
 
-| Layer | Job | Teacher |
+| Layer | Job | Teacher | Phase-1 lab note |
 | --- | --- | --- |
-| L1 SpeechClock | audio/text → viseme/word @ 60 Hz | force-align + script |
-| L2 LookDrive | → smile/open/surprise amounts | catalog + curves |
-| L3 FaceMotion | → full-face vx,vy (gaps + live) | Side B timeline |
-| L4 TickCodec | patch ↔ compact `c_t` | autoencode patches |
-| L5 GapPrior | inpaint low-confidence only | synthetic holes |
+| L1 SpeechClock | audio/text → viseme/word @ 60 Hz | script windows + **audio-energy force-align** | MFA is the upgrade path |
+| L2 LookDrive | → smile/open/surprise amounts | catalog + curves | |
+| L3 FaceMotion | → full-face vx,vy (gaps + live) | Side B timeline (**measured** conf high) | |
+| L4 TickCodec | patch ↔ compact `c_t` | **PCA** on measured patches (phase-1) | AE remains a future upgrade |
+| L5 GapPrior | inpaint low-confidence only | synthetic holes | |
 
 ```text
 SpeechClock → LookDrive → FaceMotion → TickCode → CHORUS → NWR
@@ -321,16 +381,18 @@ See [`AvatarScaffolding.md`](AvatarScaffolding.md).
 ## 10. End-to-end authority
 
 ```text
-calibration video (measured)
-  → Side B TickPackages
-  → ML only for gaps / live
-  → KEY + Δ push (CHORUS)
-  → NWR apply under Master Lock
-  → LOOK plates by label amounts
+calibration video
+  → Side B FaceCellTimeline (source=0 measured flow preferred)
+  → ML only for gaps / live (source≠0 or low conf)
+  → KEY + Δ + c_t push (CHORUS lanes A+B)
+  → 3-tick producer-lead ring
+  → NWR GPU apply under Master Lock
+  → LOOK plates by TickPackage label amounts (sole authority)
 ```
 
 Forbidden: generative face RGB as identity; inventing dense flow sold as measured
-without a collect path; round-tripping 241 MB/s both ways.
+(no silent synth blend into FIELD); round-tripping full-face both ways;
+MouthLayerTimeline hard-snap overriding TickFeed labels.
 
 ---
 
@@ -350,114 +412,72 @@ without a collect path; round-tripping 241 MB/s both ways.
 
 ### Open (research / build choices)
 
-1. Dense tracker engine (UV-flow vs mesh vs 3DMM+residual)  
-2. When L4 `c_t` becomes mandatory vs raw sparse Δ  
-3. Apply/expand on AIFace CPU vs NWR GPU  
-4. Lab Gemini sample first vs user self-take first  
-5. Exact ε for sparse omit; KEY refresh interval tuning  
+1. Better dense tracker than Farneback (UV-flow / mesh / 3DMM+residual)  
+2. When L4 `c_t` becomes mandatory vs raw sparse Δ on the wire  
+3. Multi-host remote HELLO_ACK (lab self-ACK today)  
+4. MFA upgrade for L1 (energy force-align is the lab teacher)  
+5. L4 autoencoder upgrade (PCA is phase-1)  
+6. Exact ε / KEY refresh interval tuning  
 
 ---
 
-## 12. Completeness check (design only)
+## 12. Completeness check (design + branch)
 
-| Area | Components defined? | Connected? |
+| Area | Designed? | Implemented on `tickfeedmaster`? |
 | --- | --- | --- |
-| Side B | Yes | → TickPackage / teachers |
-| Side A | Yes | ← TickPackage → NWR |
-| Handshake | Yes | HELLO → KEY → Δ |
-| ML | Yes | Via packets between sides |
-| Scaffolding | Yes | Same contract for all users |
+| Side B collect + timeline | Yes | **Yes** — Farneback→60 Hz + `source` provenance |
+| Side A codec KEY/Δ/HELLO | Yes | **Yes** — `package.py`, CRC scope correct |
+| GPU ingest B1+B2 | Yes | **Yes** — `tick_ingest.comp` sparse/dense/EMPTY/lock |
+| Ring B3 producer lead | Yes | **Yes** — `produce_tick = master + RING_DEPTH` |
+| LOOK B4 label authority | Yes | **Yes** — TickFeed sole LOOK; catalog ease blocked |
+| CHORUS lane A (`c_t`) | Yes | **Yes** — `push_code` |
+| CHORUS lane B (packages) | Yes | **Yes** — framed inline / TPK_REF |
+| ML L1–L5 | Yes | **Yes** — energy align + PCA L4 (lab notes in §8) |
+| Scaffolding / cosmetics | Yes | **Yes** — prefs + GLSL grade uniforms |
+| Legacy ±4 disabled | Yes | **Yes** |
 
-**Verdict:** Side A, Side B, and the connection are designed enough to research
-and later implement. Remaining work is engine choice + implementation, not a
-missing third architecture.
+**Verdict:** Side A, Side B, and the connection are **implemented** for the lab
+single-host path. Remaining work is tracker/MFA/AE upgrades and multi-host ACK —
+not a missing third architecture.
 
 ---
 
-## 13. Bridge solutions — adopted (design verify)
+## 13. Bridge solutions — adopted and implemented
 
-**Status:** adopted into §6.5. Verified against this design only (not legacy code).
+**Status:** adopted into §6.5 **and** wired in runtime (see §16 code map).
 
-### 1) Direct staging buffer / compute ingest
-
-| Design need | Does the proposal match? |
-| --- | --- |
-| Apply ~31k face velocities every 16.7 ms | **Yes** — parallel patch ingest, not per-cell CPU loops |
-| `S := KEY` and `S := S + Δ` | **Yes** — `u_is_keyframe` write vs add |
-| Phase-1 vx, vy | **Yes** — packed f16 pair |
-| One-way push into master | **Yes** — buffer in, no echo |
-| Sparse Δ + EMPTY (handshake) | **Partial** — sketch is dense-only; design also needs sparse unpack |
-| Master Lock / identity not overwritten | **Must keep** — ingest only unlocked / allowed channels |
-
-**Verdict:** **Aligned.** This *is* the Side A apply mechanism the design implies. Extend sketch for sparse/EMPTY and lock policy.
-
-### 2) ROI patch remapping (face_box header)
-
-| Design need | Match? |
-| --- | --- |
-| ROI = full face, not full 256² on wire | **Yes** |
-| Contiguous patch ~31,442 | **Yes** |
-| Header `face_x/y/w/h` → world map | **Yes** — same as TickPackage handshake |
-| Labels separate from velocity body | **Yes** (amounts not in velocity buffer) |
-
-**Verdict:** **Aligned.** Exact fit to locked transport + handshake.
-
-### 3) Ring buffer + velocity decay on miss
-
-| Design need | Match? |
-| --- | --- |
-| Master ticks at 60 Hz even if push jitters | **Yes** — 3-tick queue (~50 ms) |
-| One-way CHORUS can drop/delay | **Yes** — starve policy |
-| Phase-1 values = **velocity** | **Careful** — on miss, design wants **damp `v → 0`**, not a second physics that double-applies velocity as position |
-| Periodic KEY refresh kills drift | **Yes** — pairs with decay |
-
-**Verdict:** **Aligned with a rule tweak:**  
-`missing Δ → v *= γ` (graceful stop). Optional short ring for smoothness. Do **not** require “coast by integrating v again” unless the design later switches meaning to displacement.
-
-### 4) Field-driven LOOK deform (UV + plates)
-
-| Design need | Match? |
-| --- | --- |
-| FIELD = cell velocities in TickPackage | **Yes** — sample field to warp |
-| LOOK plates resident; only **amounts** in labels | **Yes** — `u_smile_amount` etc. |
-| Identity photo under plates | **Yes** — base + smile mix |
-| Full display stack (open/atlas/surprise/jaw…) | **Partial** — sketch shows smile only; design has more label-driven looks |
-
-**Verdict:** **Aligned in principle.** FIELD warps; LOOK composites by label amounts. Design expects the full label set (smile/open/surprise/…), not smile alone.
-
-### Design-only summary
-
-| # | Needed by new design? | Proposal fills it? | Notes |
-| --- | --- | --- | --- |
-| 1 Compute ingest | **Yes** | **Yes** | Add sparse/EMPTY + lock |
-| 2 Face ROI map | **Yes** | **Yes** | Handshake |
-| 3 Ring + damp | **Yes** (push path) | **Yes** | Damp on miss; KEY resync |
-| 4 LOOK via field warp | **Yes** | **Yes** | Generalize beyond smile |
+| Bridge | Design | Runtime |
+| --- | --- | --- |
+| B1 Compute ingest | KEY write / Δ add / sparse / EMPTY / lock | `tick_ingest.comp` + `field._run_tick_ingest` |
+| B2 ROI remap | `face_x/y/w/h` → world scatter | uniforms from package face box |
+| B3 Ring + damp | producer lead + miss `v *= γ` | `app._simulate_tick` + `ring.py` (`γ=0.85`) |
+| B4 LOOK by labels | smile/open/surprise/viseme sole amounts | `_apply_tickfeed_labels_to_look` + no catalog overwrite |
 
 ```text
-DESIGN BRIDGE (no legacy assumed)
+DESIGN BRIDGE (implemented lab path)
 
 Side B / ML → TickPackage (KEY|Δ, full-face, labels)
-     → CHORUS one-way push
-     → [3-tick ring]
+     → CHORUS lane A (c_t) + lane B (framed TPK / TPK_REF)
+     → [3-tick producer-lead ring]
      → GPU ingest: S:=KEY or S+=Δ  (vx,vy)
      → if miss: damp v
      → render: field warps UVs; plates mix by label amounts
 ```
 
-**Overall:** all four solutions **belong in this design**. They close the Side A apply + jitter + FIELD/LOOK bridge the TickFeed doc already assumes. Only tighten: sparse Δ ingest, damp-not-double-coast, full label-driven looks.
-
 ---
 
-## 14. Suggested research order
+## 14. Suggested research order (remaining)
 
-1. Dense monocular face trackers that output UV/grid-aligned deformation  
-2. Sparse delta codecs / f16 face patches over gRPC (CHORUS Fabric)  
-3. Force-alignment of short scripted speech to 60 Hz  
-4. **Compute TickPackage ingest** (Gap 1–2) into Cell SSBO + lock  
-5. Jitter ring + damp policy (Gap 3) on push path  
-6. Wire label amounts into existing L04–L07 (Gap 4) — no stack rewrite  
-7. Per-avatar L3 training size vs quality on 8s teachers  
+**Done on branch:** compute ingest, ring lead, label LOOK, CHORUS two-lane push,
+energy force-align, measured provenance, PCA L4.
+
+Still useful next:
+
+1. Stronger dense face tracker than Farneback  
+2. MFA (or better) speech align vs energy placement  
+3. Multi-host HELLO_ACK + remote master consumer  
+4. L4 AE if PCA quality is insufficient  
+5. Per-avatar L3 size vs quality on more takes  
 
 ---
 
@@ -465,14 +485,41 @@ Side B / ML → TickPackage (KEY|Δ, full-face, labels)
 
 ```text
 TickFeedDesign.md          ← this master (start here)
-TickPackageHandshake.md    ← binary contract
+TickPackageHandshake.md    ← binary contract + status table
 CellFeedBandwidth.md       ← MB/s math + CHORUS
 SideB_VideoCellCollection.md
 MultiLayerTickML.md
 AvatarScaffolding.md
-DesignMissingParts.md      ← P0–P6 backlog when building
+DesignMissingParts.md      ← operator-owned / future only
 ```
 
 ---
 
-*End of master design. No code claimed implemented by this document.*
+## 16. Implementation map (`tickfeedmaster`)
+
+Honest code pointers for the improvements above. Prefer these over stale §7 text.
+
+| Concern | Module / entry |
+| --- | --- |
+| TickPackage encode/decode + CRC | `src/aiface/tickfeed/package.py` |
+| CHORUS lanes A+B | `src/aiface/tickfeed/chorus_transport.py` |
+| Driver push / HELLO / timeline loop | `src/aiface/tickfeed/driver.py` |
+| Producer-lead ring | `src/aiface/tickfeed/ring.py`, `app._simulate_tick` |
+| GPU KEY/Δ ingest | `src/aiface/shaders/tick_ingest.comp`, `runtime/field.py` |
+| LOOK label authority | `app._apply_tickfeed_labels_to_look`, `_fire_impulse` TickFeed path |
+| Measured collect + provenance | `src/aiface/tickfeed/collect.py`, `timeline_io.py` (`source`) |
+| Audio-energy force-align | `src/aiface/tickfeed/force_align.py` |
+| L1–L5 train/load | `src/aiface/tickfeed/ml/` |
+| Cosmetics GLSL | `cosmetics.py` + `avatar.frag` uniforms |
+| Clean demo | `scripts/build_tickfeed_demo.py`, `scripts/run_tickfeed_demo.py` |
+| Local CHORUS plane | `scripts/start_chorus_local.py` |
+| Contract tests | `tests/test_tickfeed*.py` |
+
+Canonical world: `output/worlds/tickfeed/` (identity `source_face.png`, timeline,
+`ml/`). Do not treat old `output/worlds/avatar*` demos as TickFeed truth.
+
+---
+
+*End of master design. Implementation status is summarized in the header table
+and §12 / §16; detail checklists live in `TickPackageHandshake.md` §7 and
+`DesignMissingParts.md`.*

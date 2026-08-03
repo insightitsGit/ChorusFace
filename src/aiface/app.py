@@ -522,6 +522,8 @@ class AvatarFaceApp(FieldRuntime):
         self._cell_clusters: CellClusterIndex | None = None
         self._tickfeed: TickFeedDriver | None = None
         self._tickfeed_look_authority = False
+        # Live chat/TTS overlay for TickFeed (bypasses MouthLayerTimeline LOOK).
+        self._tickfeed_live: dict[str, float | str] | None = None
         try:
             from aiface.tickfeed.cosmetics import load_cosmetic_prefs
 
@@ -609,9 +611,17 @@ class AvatarFaceApp(FieldRuntime):
             Path(self._capture_directory).mkdir(parents=True, exist_ok=True)
 
         if bool(getattr(self.argv, "demo", False)):
-            self._speak_without_chat(
-                "[EMOTION:HAPPY] Ah, oh — hello! My smile and lips follow the capture."
-            )
+            if self._tickfeed_look_authority:
+                # TickFeed-native demo: idle plays measured REST→SMILE→OPEN…;
+                # do not boot with old hard-snap open-mouth greeting.
+                print(
+                    "TickFeed demo: LOOK from package labels "
+                    "(measured timeline loops; chat overlays live speech)."
+                )
+            else:
+                self._speak_without_chat(
+                    "[EMOTION:HAPPY] Ah, oh — hello! My smile and lips follow the capture."
+                )
         if not bool(getattr(self.argv, "no_chat", False)):
             self._start_chat_thread()
         if bool(getattr(self.argv, "bridge", False)):
@@ -1143,6 +1153,10 @@ class AvatarFaceApp(FieldRuntime):
         amount = 1.0 - math.exp(-max(frame_time, 0.0) * rate)
         self._expr_eye_widen += (self._expr_target_widen - self._expr_eye_widen) * amount
         self._expr_brow_raise += (self._expr_target_brow - self._expr_brow_raise) * amount
+        if self._tickfeed_look_authority:
+            # B4: TickPackage surprise_amt already set _expr_plate_blend — do not
+            # ease it back toward the emotion-catalog target.
+            return
         self._expr_plate_blend += (
             self._expr_target_blend - self._expr_plate_blend
         ) * amount
@@ -1236,19 +1250,83 @@ class AvatarFaceApp(FieldRuntime):
         self._plate_blend = (float(mix), amount)
         self._plate_blend_current = (float(mix), amount)
 
+    def _tickfeed_live_active(self) -> bool:
+        live = self._tickfeed_live
+        if live is None:
+            return False
+        now = time.perf_counter() - self._clock0
+        return now <= float(live.get("until", 0.0))
+
+    def _layer_command_from_tickfeed(self) -> LayerCommand:
+        """Build GPU layer directive from TickPackage labels (not MouthLayerTimeline)."""
+        from aiface.tickfeed.schema import VISEME_TABLE
+
+        labels = (
+            self._tickfeed.last_labels
+            if self._tickfeed is not None
+            else None
+        )
+        open_amt = float(labels.open_amt) if labels is not None else 0.0
+        smile_amt = float(labels.smile_amt) if labels is not None else 0.0
+        phoneme = str(self._held_speech_viseme or "REST")
+        if labels is not None and getattr(labels, "viseme_id", None) is not None:
+            vid = int(labels.viseme_id)
+            if 0 <= vid < len(VISEME_TABLE):
+                phoneme = VISEME_TABLE[vid]
+        src = "tickfeed-live" if self._tickfeed_live_active() else "tickfeed-labels"
+        return LayerCommand(
+            phoneme=phoneme,
+            atlas_viseme=phoneme,
+            open_amount=open_amt,
+            smile_amount=smile_amt,
+            jaw_target=open_amt * 0.85,
+            plate_openness=open_amt,
+            source=src,
+            active_until=float(
+                self._tickfeed_live.get("until", 0.0)
+                if self._tickfeed_live is not None
+                else 0.0
+            ),
+        )
+
     def _update_open_close_ml(self, frame_time: float) -> None:
-        """Viseme timeline owns layers; LiveVector is width/cover only."""
+        """LOOK: TickFeed labels when enabled; else MouthLayerTimeline."""
         del frame_time  # Layer visibility snaps; no openness ease clock.
         from aiface.biomechanics.intent import PHONEME_JAW_TARGET
         from aiface.plates import HARD_SNAP_THRESHOLD
 
+        now = time.perf_counter() - self._clock0
+        if self._tickfeed_look_authority and self._tickfeed is not None:
+            # Expire live overlay
+            if self._tickfeed_live is not None and not self._tickfeed_live_active():
+                self._tickfeed_live = None
+            cmd = self._layer_command_from_tickfeed()
+            self._layer_command = cmd
+            self._ml_openness = float(cmd.plate_openness)
+            self._ml_smile = float(cmd.smile_amount)
+            self._plate_openness_current = float(cmd.plate_openness)
+            self._held_speech_viseme = cmd.atlas_viseme
+            self._open_close_source = cmd.source
+            self._ml_jaw = float(cmd.jaw_target)
+            self._biomech.jaw.set_speech_target(float(cmd.jaw_target))
+            phoneme = cmd.phoneme
+            phoneme_jaw = float(
+                self._condition_jaw.get(
+                    phoneme, PHONEME_JAW_TARGET.get(phoneme, 0.1)
+                )
+            )
+            controls = self._live_vector.resolve(
+                phoneme=phoneme, phoneme_jaw=phoneme_jaw
+            )
+            self._ml_width = float(controls.width_n)
+            self._ml_plate_gate = float(controls.plate_gate)
+            self._refresh_frame_layers()
+            return
+
         envelope = self._open_close_envelope
         start = self._open_close_start
-        now = time.perf_counter() - self._clock0
-        speech_t: float | None = None
         if envelope is not None and start is not None:
             t = now - float(start)
-            speech_t = t
             if 0.0 <= t <= float(envelope.duration) + 0.05:
                 self._live_vector.push_from_envelope(envelope, t)
                 self._behavior.push_from_envelope(envelope, t)
@@ -1261,7 +1339,6 @@ class AvatarFaceApp(FieldRuntime):
             if not self._behavior.has_history:
                 self._behavior.push_rms(0.0)
 
-        # Resolve ML cover against the *timeline* phoneme (same-frame fire).
         phoneme = self._mouth_timeline.phoneme
         phoneme_jaw = float(
             self._condition_jaw.get(
@@ -1271,7 +1348,6 @@ class AvatarFaceApp(FieldRuntime):
         controls = self._live_vector.resolve(
             phoneme=phoneme, phoneme_jaw=phoneme_jaw
         )
-        del speech_t  # reserved for capture-replay clock later
         recipe = self._display_recipe
         hard = float(recipe.plate_sharpness) >= HARD_SNAP_THRESHOLD
         upcoming_due, upcoming_phoneme = self._upcoming_viseme()
@@ -1286,7 +1362,6 @@ class AvatarFaceApp(FieldRuntime):
             upcoming_due_at=upcoming_due,
             upcoming_phoneme=upcoming_phoneme,
         )
-        # After plates resolve: pull behavior toward measured smile/open vectors.
         behavior = self._behavior.resolve(
             phoneme=cmd.phoneme,
             video_t=None,
@@ -1306,31 +1381,15 @@ class AvatarFaceApp(FieldRuntime):
                 source=f"{controls.source}+{behavior.source}",
             )
         self._layer_command = cmd
-        if self._tickfeed_look_authority and self._tickfeed is not None:
-            # TickFeed labels already set LOOK; keep jaw assist only.
-            labels = self._tickfeed.last_labels
-            if labels is not None:
-                self._ml_openness = float(labels.open_amt)
-                self._ml_smile = float(labels.smile_amt)
-                self._plate_openness_current = float(labels.open_amt)
-                self._expr_plate_blend = float(labels.surprise_amt)
-                self._open_close_source = "tickfeed-labels"
-                jaw_t = max(float(cmd.jaw_target), float(labels.open_amt) * 0.85)
-                self._ml_jaw = jaw_t
-                self._biomech.jaw.set_speech_target(jaw_t)
-            self._ml_width = float(controls.width_n)
-            self._ml_plate_gate = float(controls.plate_gate)
-        else:
-            self._ml_openness = float(cmd.plate_openness)
-            self._ml_jaw = float(cmd.jaw_target)
-            self._ml_width = float(controls.width_n)
-            self._ml_plate_gate = float(controls.plate_gate)
-            self._ml_smile = float(cmd.smile_amount)
-            self._plate_openness_current = float(cmd.plate_openness)
-            self._held_speech_viseme = cmd.atlas_viseme
-            self._open_close_source = cmd.source
-            self._biomech.jaw.set_speech_target(float(cmd.jaw_target))
-        # FIELD velocity is TickFeed KEY/DELTA (not MouthCellPlan ±4).
+        self._ml_openness = float(cmd.plate_openness)
+        self._ml_jaw = float(cmd.jaw_target)
+        self._ml_width = float(controls.width_n)
+        self._ml_plate_gate = float(controls.plate_gate)
+        self._ml_smile = float(cmd.smile_amount)
+        self._plate_openness_current = float(cmd.plate_openness)
+        self._held_speech_viseme = cmd.atlas_viseme
+        self._open_close_source = cmd.source
+        self._biomech.jaw.set_speech_target(float(cmd.jaw_target))
         self._refresh_frame_layers()
 
     def _refresh_frame_layers(self) -> FrameLayerState:
@@ -2529,29 +2588,55 @@ class AvatarFaceApp(FieldRuntime):
     ) -> None:
         """Speech does not write geometry. It injects muscle impulses."""
         started = time.perf_counter()
-        from aiface.plates import OPEN_TOOTH_VISEMES
+        from aiface.plates import OPEN_TOOTH_VISEMES, VISEME_OPENNESS
         from aiface.speech import canonical_viseme
 
         now = time.perf_counter() - self._clock0
-        # GPU layers follow the *schedule* span; muscle hold may last longer.
-        self._mouth_timeline.fire(
-            phoneme,
-            now=now,
-            duration=float(duration),
-            emotion=emotion,
-            next_due_at=next_due_at,
-        )
-        hold_floor = float(getattr(self, "_mouth_hold_min", 0.36))
         key = canonical_viseme(phoneme)
-        if key in OPEN_TOOTH_VISEMES:
-            # Mild dwell so open plates read without freezing the mouth.
-            hold_floor = max(hold_floor, hold_floor * 1.15)
-        self._biomech.submit_phoneme(
-            phoneme,
-            tick=self.tick + 1,
-            emotion_label=emotion,
-            duration=max(float(duration), hold_floor),
-        )
+
+        if self._tickfeed_look_authority:
+            # Brand-new TickFeed path: amounts from viseme table, not hard-snap 1.0.
+            open_amt = float(VISEME_OPENNESS.get(key, 0.0))
+            smile_amt = 0.55 if (emotion or "").upper() in {"HAPPY", "JOY"} else 0.0
+            if key in {"REST", "CLOSED", "PP"}:
+                open_amt = 0.0
+            span = max(float(duration), 0.06)
+            if next_due_at is not None:
+                span = max(span, min(float(next_due_at) - now, 0.20))
+            self._tickfeed_live = {
+                "phoneme": key,
+                "open": open_amt,
+                "smile": smile_amt,
+                "surprise": 0.0,
+                "emotion": (emotion or "NEUTRAL").strip().upper() or "NEUTRAL",
+                "until": now + span,
+            }
+            self._held_speech_viseme = key
+            self._mouth_timeline.clear()
+            # Light jaw assist only — LOOK plates come from TickPackage labels.
+            self._biomech.submit_phoneme(
+                phoneme,
+                tick=self.tick + 1,
+                emotion_label=emotion,
+                duration=max(float(duration), 0.10),
+            )
+        else:
+            self._mouth_timeline.fire(
+                phoneme,
+                now=now,
+                duration=float(duration),
+                emotion=emotion,
+                next_due_at=next_due_at,
+            )
+            hold_floor = float(getattr(self, "_mouth_hold_min", 0.36))
+            if key in OPEN_TOOTH_VISEMES:
+                hold_floor = max(hold_floor, hold_floor * 1.15)
+            self._biomech.submit_phoneme(
+                phoneme,
+                tick=self.tick + 1,
+                emotion_label=emotion,
+                duration=max(float(duration), hold_floor),
+            )
         self._telemetry.last_phoneme = phoneme
         self._telemetry.last_emotion = emotion
         self._telemetry.impulses_fired += 1
@@ -2699,13 +2784,19 @@ class AvatarFaceApp(FieldRuntime):
             0.0,
             min(1.0, max(float(render.expression), float(getattr(self, "_ml_smile", 0.0)))),
         )
-        # Openness units for shader (/14): boost from plate drive so open.png
-        # has a strong signal even when jaw physics is still catching up.
-        openness = max(
-            float(render.mouth_openness),
-            float(self._plate_openness_current)
-            * float(self._display_recipe.openness_plate_boost),
-        )
+        if self._tickfeed_look_authority:
+            # Labels are already 0..1 LOOK amounts — do not apply old ×12 boost
+            # (that left the mouth stuck open on small residuals).
+            openness = float(self._plate_openness_current) * 8.0
+            expression = float(self._ml_smile)
+        else:
+            # Openness units for shader (/14): boost from plate drive so open.png
+            # has a strong signal even when jaw physics is still catching up.
+            openness = max(
+                float(render.mouth_openness),
+                float(self._plate_openness_current)
+                * float(self._display_recipe.openness_plate_boost),
+            )
         self._target_mouth_pose = MouthPose(
             width=render.mouth_width,
             openness=openness,
@@ -2756,19 +2847,35 @@ class AvatarFaceApp(FieldRuntime):
             self._plate_blend_current = (float(mix), open_amt)
 
     def _simulate_tick(self) -> None:
-        """Push → 3-tick ring → pop for master → GPU ingest (B1–B3)."""
+        """Push ahead into ring → master pops current tick → GPU ingest (B1–B3)."""
+        from aiface.tickfeed.schema import RING_DEPTH
+
         next_tick = self.tick + 1
         if self._tickfeed is not None and self._tickfeed.enabled:
-            # Producer push into ring (may also expand remote c_t)
+            live = self._tickfeed_live_active()
+            if live and self._tickfeed_live is not None:
+                open_amt = float(self._tickfeed_live.get("open", 0.0))
+                smile_amt = float(self._tickfeed_live.get("smile", 0.0))
+                surprise_amt = float(self._tickfeed_live.get("surprise", 0.0))
+                phoneme = str(self._tickfeed_live.get("phoneme") or "REST")
+                emotion = str(self._tickfeed_live.get("emotion") or "NEUTRAL")
+            else:
+                open_amt = 0.0
+                smile_amt = 0.0
+                surprise_amt = 0.0
+                phoneme = "REST"
+                emotion = "NEUTRAL"
+            # B3: schedule RING_DEPTH ticks ahead (~50 ms); master pops next_tick.
+            produce_tick = int(next_tick) + int(RING_DEPTH)
             self._tickfeed.push_drives(
-                tick=next_tick,
-                open_amt=float(self._ml_openness),
-                smile_amt=float(self._ml_smile),
-                surprise_amt=float(self._expr_plate_blend),
-                phoneme=str(self._held_speech_viseme or "REST"),
-                emotion=self._active_emotion(),
+                tick=produce_tick,
+                open_amt=open_amt,
+                smile_amt=smile_amt,
+                surprise_amt=surprise_amt,
+                phoneme=phoneme,
+                emotion=emotion,
+                live_speech=live,
             )
-            # Master consumes ring; None → GPU miss damp (encoding 4)
             pkg = self._tickfeed.pop_for_master(next_tick)
             self._apply_tickfeed_labels_to_look(pkg)
             self.queue_tick_package(pkg)

@@ -165,6 +165,8 @@ def prepare_face_timeline(
         flow_t, flow_v = flow_series
         velocities, conf = _interp_flow_to_60hz(flow_t, flow_v, face)
         n_ticks = velocities.shape[0]
+        # 0=measured optical flow (design §10 — do not sell synth as measured).
+        source = np.zeros(n_ticks, dtype=np.uint8)
         open_curve = [0.0] * n_ticks
         smile_curve = [0.0] * n_ticks
         if times:
@@ -175,27 +177,15 @@ def prepare_face_timeline(
                 t_sec = float(t) / float(TICK_RATE_HZ)
                 o = float(np.interp(t_sec, t_src, open_s))
                 s = float(np.interp(t_sec, t_src, smile_s))
-                # Script beats amplify weak closed-lip smile / angry (flow alone
-                # under-reads those LOOK sections vs OPEN/TALK).
+                # LOOK label floors only (not blended into stored FIELD velocities).
                 if 1.0 <= t_sec < 2.0:
                     s = max(s, 0.85)
                 if 2.0 <= t_sec < 3.0:
                     o = max(o, 0.85)
                 if 4.0 <= t_sec < 5.0:
                     o = max(o, 0.25)
-                sur = 0.75 if 4.0 <= t_sec < 5.0 else 0.0
                 open_curve[t] = o
                 smile_curve[t] = s
-                syn = synthesize_velocity(
-                    face,
-                    open_amt=o,
-                    smile_amt=s,
-                    surprise_amt=sur,
-                    mouth_uv=mouth,
-                )
-                # Closed-lip SMILE: lean synth harder (measured flow is subtle).
-                w_syn = 0.55 if 1.0 <= t_sec < 2.0 else 0.35
-                velocities[t] = (1.0 - w_syn) * velocities[t] + w_syn * syn
         out = write_face_cell_timeline(
             root,
             face=face,
@@ -204,10 +194,11 @@ def prepare_face_timeline(
             video_name=vid.name if vid else "",
             open_curve=open_curve,
             smile_curve=smile_curve,
+            source=source,
         )
         print(
             f"TickFeed collect: wrote {out} ticks={n_ticks} "
-            f"face={face.w}x{face.h} source=optical_flow_every_frame"
+            f"face={face.w}x{face.h} source=optical_flow_measured"
         )
         return out
 
@@ -242,7 +233,9 @@ def prepare_face_timeline(
     open_s = np.asarray(opens, dtype=np.float64)
     smile_s = np.asarray(smiles, dtype=np.float64)
     velocities = np.zeros((n_ticks, face.h, face.w, 2), dtype=np.float32)
-    conf = np.full((n_ticks, face.h * face.w), 160, dtype=np.uint8)
+    conf = np.full((n_ticks, face.h * face.w), 80, dtype=np.uint8)
+    # 2 = synthetic fallback (no optical flow) — never claim measured.
+    source = np.full(n_ticks, 2, dtype=np.uint8)
     open_curve = [0.0] * n_ticks
     smile_curve = [0.0] * n_ticks
     for t in range(n_ticks):
@@ -267,6 +260,7 @@ def prepare_face_timeline(
         conf=conf,
         video_name=vid.name if vid else "script",
         open_curve=open_curve,
+        source=source,
         smile_curve=smile_curve,
     )
     print(

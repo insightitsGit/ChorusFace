@@ -496,7 +496,7 @@ def encode(package: TickPackage) -> bytes:
             labels_blob = TickLabels().pack()
 
         payload = labels_blob + bytes(body)
-    # crc over header fields that precede crc + payload — fill crc after
+    # Handshake: crc32 of header[0..35] + body (crc field zeroed while hashing).
     header_wo_crc = _HEADER_STRUCT.pack(
         MAGIC,
         VERSION,
@@ -517,27 +517,11 @@ def encode(package: TickPackage) -> bytes:
         int(package.world_hash) & 0xFFFFFFFFFFFFFFFF,
         b"\x00" * 16,
     )
-    del header_wo_crc
-    crc = zlib.crc32(payload) & 0xFFFFFFFF
-    header = _HEADER_STRUCT.pack(
-        MAGIC,
-        VERSION,
-        int(package.kind),
-        int(package.tick),
-        float(package.resolved_time()),
-        int(face.x),
-        int(face.y),
-        int(face.w),
-        int(face.h),
-        int(package.channel_mask) & 0xFFFFFFFF,
-        int(package.value_dtype),
-        int(enc if package.kind == PackageKind.DELTA else DeltaEncoding.NONE),
-        int(flags) & 0xFF,
-        0,
-        len(payload),
-        crc,
-        int(package.world_hash) & 0xFFFFFFFFFFFFFFFF,
-        b"\x00" * 16,
+    crc = zlib.crc32(header_wo_crc[:36] + payload) & 0xFFFFFFFF
+    header = (
+        header_wo_crc[:36]
+        + struct.pack("<I", crc)
+        + header_wo_crc[40:]
     )
     return header + payload
 
@@ -572,8 +556,10 @@ def decode(blob: bytes) -> TickPackage:
     payload = blob[HEADER_BYTES : HEADER_BYTES + payload_bytes]
     if len(payload) != payload_bytes:
         raise ValueError("truncated payload")
-    if crc != 0 and (zlib.crc32(payload) & 0xFFFFFFFF) != crc:
-        raise ValueError("crc32 mismatch")
+    if crc != 0:
+        expect = zlib.crc32(blob[:36] + payload) & 0xFFFFFFFF
+        if expect != crc:
+            raise ValueError("crc32 mismatch")
 
     face = FaceBox(face_x, face_y, face_w, face_h)
     offset = 0

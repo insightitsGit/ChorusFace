@@ -135,6 +135,23 @@ def test_sparse_delta_with_conf() -> None:
     assert int(back.conf[0]) == 255
 
 
+def test_crc_covers_header_prefix_and_body() -> None:
+    """Handshake: crc32(header[0..35] + body), not payload alone."""
+    import zlib
+
+    face = _face()
+    values = np.zeros((face.h, face.w, 2), dtype=np.float32)
+    values[0, 0] = (0.1, -0.2)
+    pkg = build_keyframe(0, face, values, value_dtype=ValueDtype.F16)
+    blob = encode(pkg)
+    payload_len = int.from_bytes(blob[32:36], "little")
+    payload = blob[64 : 64 + payload_len]
+    crc = int.from_bytes(blob[36:40], "little")
+    assert crc == (zlib.crc32(blob[:36] + payload) & 0xFFFFFFFF)
+    assert crc != (zlib.crc32(payload) & 0xFFFFFFFF) or len(payload) == 0
+    decode(blob)  # must accept
+
+
 def test_gpu_pack_dense_and_sparse() -> None:
     face = _face()
     values = np.random.randn(face.h, face.w, 2).astype(np.float32) * 0.1
