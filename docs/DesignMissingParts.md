@@ -56,7 +56,7 @@ true neutral REST + wide OPEN + `TONGUE_TH` “think” + deliberate `BLINK`).
 
 | Item | Notes |
 | --- | --- |
-| New calibration take | `AvatarCalibrationPrompt.md` → rebuild world |
+| Dense take v3 | Landed (`second_avatar_calibration.mp4`); atlas α still weak vs `open.png` |
 | Full lab MFA phoneme align | Whisper words is the keyed teacher; Montreal MFA optional later |
 | Multi-host HELLO_ACK ceremony | Recv path works; separate ACK ceremony still optional ops |
 

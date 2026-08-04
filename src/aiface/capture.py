@@ -1300,13 +1300,22 @@ def _write_plate_atlas(
         # available; selection metrics stay from the grid-sized analysis pass.
         plate = (hires or {}).get(int(frame.index), frame)
         # Tight oral matte — wide cheek mattes were stamping smile corners onto
-        # the face even when the plate was "closed".
+        # the face even when the plate was "closed". Size from viseme ladder
+        # when measured openness collapses (AA used to bake as closed aperture).
+        from aiface.plates import OPEN_TOOTH_VISEMES, VISEME_OPENNESS
+
+        tag = plate_visemes.get(index, "")
+        matte_open = max(float(frame.metrics.mouth_open), 0.04)
+        if tag in OPEN_TOOTH_VISEMES:
+            matte_open = max(matte_open, 0.28)
+        elif tag:
+            matte_open = max(matte_open, float(VISEME_OPENNESS.get(tag, 0.0)) * 0.35)
         alpha = build_mouth_interior_matte(
             plate.image_bgr.shape[0],
             plate.image_bgr.shape[1],
             plate.face,
             plate.landmarks_meta,
-            openness=max(float(frame.metrics.mouth_open), 0.04),
+            openness=matte_open,
         )
         pixels = plate.image_bgr
         if reference is not None:
@@ -1314,18 +1323,24 @@ def _write_plate_atlas(
         rel = f"plates/plate_{index:02d}.png"
         path = write_expression_plate(destination.parent / rel, pixels, alpha)
         paths.append(path)
-        tag = plate_visemes.get(index, "")
-        open_v = float(frame.metrics.mouth_open)
-        # Closed / PP plates must index as sealed — capture floor (~0.15) lied.
-        if tag in {"CLOSED", "PP", "REST", "MM"} or open_v <= 0.16:
-            if tag in {"CLOSED", "PP", "REST", "MM"}:
-                open_v = 0.0
-        else:
-            # Atlas openness ladder: never park metadata in soft 0.15–0.55
-            # (that taught mid-band cross-fades / transition blur).
+        measured = float(frame.metrics.mouth_open)
+        # RF5: plate.openness must follow viseme ladder. Measured mid-band
+        # values (capture floor ~0.15–0.32) were snap_midband'd to 0.0 and
+        # collapsed AA/OH next to CLOSED in pair_for_openness.
+        if tag in {"CLOSED", "PP", "REST", "MM"}:
+            open_v = 0.0
+        elif tag in OPEN_TOOTH_VISEMES or float(VISEME_OPENNESS.get(tag, 0.0)) >= 0.9:
+            open_v = 1.0
+        elif tag:
             from aiface.mouth_owner import snap_midband_openness
 
-            open_v = snap_midband_openness(open_v)
+            open_v = snap_midband_openness(
+                max(measured, float(VISEME_OPENNESS.get(tag, 0.35)))
+            )
+        else:
+            from aiface.mouth_owner import snap_midband_openness
+
+            open_v = snap_midband_openness(measured)
         records.append(
             AtlasPlate(
                 index=index,

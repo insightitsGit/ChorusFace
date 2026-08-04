@@ -358,7 +358,8 @@ def select_viseme_atlas_frames(
     # Explicit aliases for runtime canonicalisation.
     if "PP" in viseme_to_plate:
         viseme_to_plate.setdefault("MM", int(viseme_to_plate["PP"]))
-    if "CLOSED" in viseme_to_plate and "REST" not in viseme_to_plate:
+    # REST must share CLOSED — never inherit a PP/smile-closed frame.
+    if "CLOSED" in viseme_to_plate:
         viseme_to_plate["REST"] = int(viseme_to_plate["CLOSED"])
     return unique, viseme_to_plate
 

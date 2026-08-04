@@ -23,11 +23,11 @@ Baseline (good): commit `2ea6fa3` + prior §14 mouth path
 | **2** | Fidelity HUD only (`--fidelity-hud` / **F**) — no shader change | `tests/test_render_ladder.py` Step 2 | ✅ kept |
 | **3** | `resolve_mouth_ownership(..., hard_snap=True)` matches GPU commit | `test_mouth_owner` + ladder Step 3 | ✅ kept |
 | **4** | Bind `plate_b = plate_a` when mix already 0 | ladder Step 4 | ✅ kept (no visible change) |
-| **stop** | Dense-kit MP4 (script v2 in code) before atlas-only / geometry experiments | validate + rebuild | Drop into `assets/.../calibration_takes/` |
+| **5** | Atlas plate `openness` from viseme ladder (AA/OH not snap→0) | rebuild plates + unit | Open vowels use open atlas rungs; `open.png` kept |
+| **stop** | Atlas-only / kill `open.png` | — | Still blocked: atlas oral α ≪ `open.png` |
 
-Script/prompt for the denser take are ready (`BeatId.TONGUE_TH`, true REST,
-wide OPEN). After the MP4 lands and `build_tickfeed_demo --clean` succeeds,
-revisit atlas-primary / occlusion / jaw-residual as **new** ladder steps.
+Dense take v3 is in the world. Do **not** kill `open.png` until atlas oral α
+is competitive. Occlusion / jaw-residual still blocked.
 
 ## Demo QA command
 
