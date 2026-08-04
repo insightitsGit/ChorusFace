@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from aiface.biomechanics.eyes import (
+from chorusface.biomechanics.eyes import (
     BLINK_CLOSE_S,
     BLINK_HOLD_S,
     BLINK_MAX_STEP_S,

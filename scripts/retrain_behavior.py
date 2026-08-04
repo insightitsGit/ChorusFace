@@ -27,9 +27,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from aiface.avatar_profile import write_avatar_profile  # noqa: E402
-from aiface.behavior.pipeline import train_behavior_from_video  # noqa: E402
-from aiface.behavior.schema import (  # noqa: E402
+from chorusface.avatar_profile import write_avatar_profile  # noqa: E402
+from chorusface.behavior.pipeline import train_behavior_from_video  # noqa: E402
+from chorusface.behavior.schema import (  # noqa: E402
     BEHAVIOR_META,
     BEHAVIOR_MODEL,
     TRACK_JSON,
@@ -93,7 +93,7 @@ def main() -> int:
     print()
     print(f"Active model: {world_dir / BEHAVIOR_MODEL}")
     print(
-        "Play: aiface --demo --tts --gpu-log --world "
+        "Play: chorusface --demo --tts --gpu-log --world "
         f"{(world_dir / 'avatar_face.bds').as_posix()}"
     )
     return 0

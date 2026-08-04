@@ -22,14 +22,14 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from amin_loop.pipeline import run_all_steps  # noqa: E402
-from aiface.tickfeed.calibration import (
+from chorusface.tickfeed.calibration import (
     validate_calibration_take,
     write_calibration_script,
 )
-from aiface.tickfeed.collect import prepare_face_timeline  # noqa: E402
-from aiface.tickfeed.cosmetics import write_cosmetic_prefs  # noqa: E402
-from aiface.tickfeed.ml.train import fit_all_layers  # noqa: E402
-from aiface.tickfeed.qa import qa_beat_motion  # noqa: E402
+from chorusface.tickfeed.collect import prepare_face_timeline  # noqa: E402
+from chorusface.tickfeed.cosmetics import write_cosmetic_prefs  # noqa: E402
+from chorusface.tickfeed.ml.train import fit_all_layers  # noqa: E402
+from chorusface.tickfeed.qa import qa_beat_motion  # noqa: E402
 
 
 def main() -> int:
@@ -113,7 +113,7 @@ def main() -> int:
         return 5
 
     play = (
-        f'python -m aiface --demo --tts --gpu-log --world "{bds}" '
+        f'python -m chorusface --demo --tts --gpu-log --world "{bds}" '
         f'--face-image "{source}"'
     )
     print()

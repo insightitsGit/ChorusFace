@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(report, indent=2))
     print()
     print(
-        "Play: aiface --demo --tts --world "
+        "Play: chorusface --demo --tts --world "
         f"{(Path(args.world_dir) / 'avatar_face.bds').as_posix()}"
     )
     return 0

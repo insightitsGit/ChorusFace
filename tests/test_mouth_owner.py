@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from aiface.mouth_owner import (
+from chorusface.mouth_owner import (
     commit_plate_amount,
     hold_speech_viseme,
     look_field_gain_scale,

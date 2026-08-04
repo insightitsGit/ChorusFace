@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from aiface.cell_cluster import CellCluster, CellClusterIndex
-from aiface.mouth_cell_plan import (
+from chorusface.cell_cluster import CellCluster, CellClusterIndex
+from chorusface.mouth_cell_plan import (
     MouthCellPlan,
     detect_mouth_cells,
     flow_velocity,
@@ -39,7 +39,7 @@ def test_detect_assigns_upper_and_lower() -> None:
 
 
 def test_ah_flow_opens_vertically() -> None:
-    from aiface.mouth_cell_plan import DetectedCell
+    from chorusface.mouth_cell_plan import DetectedCell
 
     open_n, width_n, round_n = viseme_flow("AH")
     assert open_n > 0.9
@@ -53,7 +53,7 @@ def test_ah_flow_opens_vertically() -> None:
 
 def test_ee_flow_widens_corners() -> None:
     open_n, width_n, round_n = viseme_flow("EE")
-    from aiface.mouth_cell_plan import DetectedCell
+    from chorusface.mouth_cell_plan import DetectedCell
 
     left = DetectedCell(x=12, y=20, side=-0.9, lip=0.0, radial=0.8)
     right = DetectedCell(x=28, y=20, side=0.9, lip=0.0, radial=0.8)

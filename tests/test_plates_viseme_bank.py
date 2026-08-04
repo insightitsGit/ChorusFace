@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from aiface.plates import (
+from chorusface.plates import (
     HARD_SNAP_THRESHOLD,
     AtlasPlate,
     PlateAtlas,
     match_visemes_to_frames,
     select_viseme_atlas_frames,
 )
-from aiface.runtime.recipe import DisplayRecipe
+from chorusface.runtime.recipe import DisplayRecipe
 
 
 @dataclass

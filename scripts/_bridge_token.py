@@ -1,6 +1,6 @@
 """Resolve the live face-bridge Bearer for TickFeed QA scripts.
 
-Order: ``AIFACE_BRIDGE_TOKEN`` env → ``output/worlds/tickfeed/.bridge_token``.
+Order: ``CHORUSFACE_BRIDGE_TOKEN`` env → ``output/worlds/tickfeed/.bridge_token``.
 No hardcoded lab string (QA CR-001).
 """
 
@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from aiface.io_limits import resolve_bridge_token  # noqa: E402
+from chorusface.io_limits import resolve_bridge_token  # noqa: E402
 
 DEFAULT_TOKEN_FILE = ROOT / "output" / "worlds" / "tickfeed" / ".bridge_token"
 

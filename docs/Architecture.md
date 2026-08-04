@@ -7,19 +7,19 @@ New contracts: [`DisplayLayers.md`](DisplayLayers.md) ·
 [`AvatarAdoption.md`](AvatarAdoption.md) · [`AvatarBehavior.md`](AvatarBehavior.md) ·
 [`MouthCellGroups.md`](MouthCellGroups.md)
 
-AIFace is three layers with one hard rule between them: **nothing below the
+ChorusFace is three layers with one hard rule between them: **nothing below the
 speech layer is allowed to change who the face is.**
 
 ```
 chat text                         someone else's audio + transcript
     │                                          │
     ▼                                          ▼
-aiface.speech          pure Python — visemes, mouth poses, LLM client
+chorusface.speech          pure Python — visemes, mouth poses, LLM client
     │                                          │
-    │                             aiface.stream — locks visemes to arriving PCM
+    │                             chorusface.stream — locks visemes to arriving PCM
     │                                          │
     ▼◄─────────────────────────────────────────┘
-aiface.biomechanics    pure Python — muscles, jaw, eyes, breathing, emotion
+chorusface.biomechanics    pure Python — muscles, jaw, eyes, breathing, emotion
     │
     ├── render state (jaw angle, lid closure, gaze, brow raise, mouth pose)
     ├── MouthCellPlan / mouth_groups (L03 cell→neighbor ±4)
@@ -27,7 +27,7 @@ aiface.biomechanics    pure Python — muscles, jaw, eyes, breathing, emotion
     └── field impulse specs (velocity, radius, priority)
     │
     ▼
-aiface.runtime         GPU — constraint tick, Master Lock, continuous deform
+chorusface.runtime         GPU — constraint tick, Master Lock, continuous deform
     │                  avatar.frag composites L00–L11 (display_layers)
     ▼
 a face   (any world opened via avatar_profile.open_avatar)
@@ -38,7 +38,7 @@ side-effect-free Python, which is why the speech and simulation tests run
 everywhere and the rendering tests skip cleanly without a driver.
 
 Speech carries a rolling `ConversationSession` so emotion and topic survive
-across turns. An optional loopback `FaceBridge` (`aiface --bridge`) exposes
+across turns. An optional loopback `FaceBridge` (`chorusface --bridge`) exposes
 NWR-style `/speak`, `/preview`, `/status` jobs drained on the render thread.
 
 ## Three clocks, one mouth
@@ -48,12 +48,12 @@ which is which, because they carry very different claims:
 
 | Source | Timing from | Status |
 | --- | --- | --- |
-| `aiface.stream` | Audio arriving from another voice, chunk by chunk | The primary path |
-| `aiface.tts` | A clip this process synthesised and holds in full | Fixture, and the oracle's yardstick |
-| `aiface.speech` | Nominal phoneme durations — a letter count | Fallback when there is no audio at all |
+| `chorusface.stream` | Audio arriving from another voice, chunk by chunk | The primary path |
+| `chorusface.tts` | A clip this process synthesised and holds in full | Fixture, and the oracle's yardstick |
+| `chorusface.speech` | Nominal phoneme durations — a letter count | Fallback when there is no audio at all |
 
 The streaming path is the product; the batch path exists so the streaming path
-can be measured against something. `aiface.sync` runs an utterance through both
+can be measured against something. `chorusface.sync` runs an utterance through both
 and reports the difference in milliseconds — see
 [Voice Sync](VoiceSync.md).
 
@@ -68,7 +68,7 @@ render loop nothing but timed viseme events.
 A world is a `256 × 256 × 32` float32 grid stored in a `.bds` file: a 4 KiB
 JSON header (schema, CRC32, application metadata) followed by the raw payload.
 The 32 channels are grouped in fours of eight — kinematics, material, intent,
-rules — and defined in exactly one place, `aiface/runtime/bds.py`.
+rules — and defined in exactly one place, `chorusface/runtime/bds.py`.
 
 Channels this project actually cares about:
 
@@ -81,7 +81,7 @@ Channels this project actually cares about:
 | 30 | `authority_priority` | Who last claimed the cell |
 | 31 | `human_lock` | **Master Lock** — identity, enforced on the GPU |
 
-`aiface/runtime/shaders.py` generates a GLSL prelude from that same Python
+`chorusface/runtime/shaders.py` generates a GLSL prelude from that same Python
 schema and injects it into every stage, so the CPU and GPU views of a cell
 cannot drift. `tests/test_shader_contract.py` asserts the two stay equal.
 
@@ -117,7 +117,7 @@ Command rows encode their kind in the operation magnitude:
 | `±4` | Velocity impulse — `(V_x, V_y)` in a disc around `segment.xy` |
 
 The avatar only ever emits `±4`. Per-cell / neighbor / cluster drives share the
-same command budget (see `aiface.cell_cluster`, bridge `/cells/drive`).
+same command budget (see `chorusface.cell_cluster`, bridge `/cells/drive`).
 
 ### Display stack, adoption, behavior
 
@@ -134,7 +134,7 @@ cell plan overlay gaps and per-cell motion without inventing face RGB.
 ### What is deliberately missing
 
 A general field runtime would also run physics and semantic advection passes.
-AIFace ships neither. Advection moves matter between cells, and a face made of
+ChorusFace ships neither. Advection moves matter between cells, and a face made of
 moved matter is a smeared face. The tick is constraint-only, which is what makes
 `test_the_photograph_channels_never_mutate` pass after any amount of speech.
 
@@ -172,11 +172,14 @@ holder can make the face speak; it cannot overwrite who the face is. A `.bds`
 saved from a live session is written as a rest pose, so persistence cannot smuggle
 mid-word state into an identity artifact either.
 
+**Product beta.** Host products own the LLM and POST assistant text to
+`/speak` (`--bridge-direct-speak`). See [`ProductBeta.md`](ProductBeta.md).
+
 ## Portrait identity (Path 1)
 
 A seed is one colocated bundle: `.bds` + `source_face.png` + tissue maps +
-(diagnostic) part atlas. `aiface-seed --input` face-normalizes the photo,
-measures eyes/mouth (`aiface.landmarks`), and stores those centres in
+(diagnostic) part atlas. `chorusface-seed --input` face-normalizes the photo,
+measures eyes/mouth (`chorusface.landmarks`), and stores those centres in
 `application_metadata.avatar_seed.landmarks`. Tissue bake and lid uniforms
 prefer those measurements over definition defaults — that is what keeps blink
 and gaze on a real portrait.
@@ -189,7 +192,7 @@ Always reseed to replace identity.
 Visemes inject **muscle impulses + a jaw target**. The fragment shader inverse-
 warps the photograph through the summed displacement field and drops the jaw as
 bone-like occlusion. A parted lip line may show a **soft photo shadow** in the
-gap — never painted teeth. When `aiface-capture` has written `open.png` /
+gap — never painted teeth. When `chorusface-capture` has written `open.png` /
 `smile.png`, those **real plates** are composited inside `mouth_gap`. MouthPose
 uniforms are telemetry / debug, not a second deform path.
 
@@ -212,13 +215,13 @@ avatar_face.bds     the locked field seed, with face box + mouth centre metadata
 face_parts.npy      the RGBA part atlas
 face_parts.json     part anchors (used to register lip and eye pieces) and counts
 source_face.png     the immutable render portrait (rest identity)
-smile.png           optional real smile plate (aiface-capture)
-open.png            optional real open-mouth plate (aiface-capture)
+smile.png           optional real smile plate (chorusface-capture)
+open.png            optional real open-mouth plate (chorusface-capture)
 capture_meta.json   optional capture digest / travel priors
 ```
 
-`aiface-seed` writes the core four from the same resized pixels.
-`aiface-capture` seeds from a rest frame and adds smile/open plates + priors.
+`chorusface-seed` writes the core four from the same resized pixels.
+`chorusface-capture` seeds from a rest frame and adds smile/open plates + priors.
 `face_parts.png` is written alongside as a colourised preview for eyeballing
 the split.
 

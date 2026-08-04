@@ -1,4 +1,4 @@
-# AIFace / AminIntheLoop — documentation index
+# ChorusFace / AminIntheLoop — documentation index
 
 **Start here for the walkthrough:** [`AMIN_DESIGN.md`](AMIN_DESIGN.md)
 
@@ -42,6 +42,8 @@
 | [`PhoneticFidelity.md`](PhoneticFidelity.md) | Viseme / speech fidelity + TickFeed post-initial sync notes |
 | [`VoiceSync.md`](VoiceSync.md) | Audio ↔ face sync |
 | [`AvatarChat.md`](AvatarChat.md) | Chat / bridge UX |
+| [`ProductBeta.md`](ProductBeta.md) | Host-driven product beta (`/speak`, Insightits) |
+| [`FaceServiceEmbed.md`](FaceServiceEmbed.md) | Container API + PrismAPI + MJPEG web embed |
 | [`HANDOFF.md`](HANDOFF.md) | Historical handoff notes |
 
 ## Rules (permanent)
@@ -66,5 +68,5 @@ python scripts/amin_train.py --video assets/avatar_video_inputs/YOUR.mp4
 python scripts/retrain_behavior.py --video NEW_TAKE.mp4 --world-dir output/worlds/avatar
 
 # Play
-aiface --demo --tts --gpu-log --world output/worlds/avatar/avatar_face.bds
+chorusface --demo --tts --gpu-log --world output/worlds/avatar/avatar_face.bds
 ```

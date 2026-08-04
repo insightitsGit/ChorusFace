@@ -6,14 +6,14 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from aiface.tickfeed.calibration import (
+from chorusface.tickfeed.calibration import (
     validate_calibration_take,
     write_calibration_script,
 )
-from aiface.tickfeed.collect import prepare_face_timeline
-from aiface.tickfeed.cosmetics import write_cosmetic_prefs
-from aiface.tickfeed.ml.train import fit_layer
-from aiface.tickfeed.qa import qa_beat_motion
+from chorusface.tickfeed.collect import prepare_face_timeline
+from chorusface.tickfeed.cosmetics import write_cosmetic_prefs
+from chorusface.tickfeed.ml.train import fit_layer
+from chorusface.tickfeed.qa import qa_beat_motion
 
 
 def main() -> None:

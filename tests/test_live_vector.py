@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from aiface.live_vector.driver import LiveVectorDriver
-from aiface.live_vector.features import rms_history_features
-from aiface.live_vector.schema import FEATURE_DIM, LiveControlVector
+from chorusface.live_vector.driver import LiveVectorDriver
+from chorusface.live_vector.features import rms_history_features
+from chorusface.live_vector.schema import FEATURE_DIM, LiveControlVector
 
 
 def test_feature_dim() -> None:

@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from aiface.biomechanics.intent import PHONEME_JAW_TARGET
-from aiface.runtime.recipe import (
+from chorusface.biomechanics.intent import PHONEME_JAW_TARGET
+from chorusface.runtime.recipe import (
     DISPLAY_PATH,
     RECIPE_NAME,
     RECIPE_SCHEMA,
@@ -17,7 +17,7 @@ from aiface.runtime.recipe import (
 from amin_loop.gpu_recipe import build_gpu_recipe, write_gpu_recipe
 from amin_loop.mapping import write_condition_maps
 
-SHADER = Path(__file__).resolve().parents[1] / "src/aiface/shaders/avatar.frag"
+SHADER = Path(__file__).resolve().parents[1] / "src/chorusface/shaders/avatar.frag"
 
 
 def test_recipe_payload_round_trip() -> None:
@@ -109,8 +109,8 @@ def test_shader_snaps_plates_with_recipe_knob() -> None:
 
 def test_capture_exposes_display_resolution() -> None:
     """AMIN step 11: display plates are re-cut above the 256² field grid."""
-    from aiface.capture import DISPLAY_SIZE, resample_frames_hires
-    from aiface.runtime.bds import GRID_HEIGHT
+    from chorusface.capture import DISPLAY_SIZE, resample_frames_hires
+    from chorusface.runtime.bds import GRID_HEIGHT
 
     assert DISPLAY_SIZE >= 4 * GRID_HEIGHT
     # No frames → no work, no crash (worlds captured before step 11 keep 256).

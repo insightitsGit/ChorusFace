@@ -1,0 +1,44 @@
+# ChorusFace face service — shared TickFeed avatar for web embed + PrismAPI speak.
+#
+#   python scripts/generate_api_keys.py   # once — local encrypted keys
+#   docker compose up --build
+#   Use a key from secrets/api_keys.handoff.local.txt:
+#     curl -H "Authorization: Bearer <key>" -H "Content-Type: application/json" \
+#          -d "{\"text\":\"Hello there\"}" http://localhost:8766/prism/speak
+#     http://localhost:8766/stream.mjpg?token=<key>
+#
+# GPU (Linux + NVIDIA Container Toolkit):
+#   docker run --gpus all -p 8766:8766 -v ${PWD}/secrets:/app/secrets:ro chorusface-face:beta
+
+services:
+  chorusface:
+    build: .
+    image: chorusface-face:beta
+    ports:
+      - "${CHORUSFACE_BRIDGE_PORT:-8766}:8766"
+    environment:
+      CHORUSFACE_BRIDGE_HOST: "0.0.0.0"
+      CHORUSFACE_BRIDGE_PORT: "8766"
+      CHORUSFACE_BRIDGE_CORS: "${CHORUSFACE_BRIDGE_CORS:-*}"
+      CHORUSFACE_STREAM_FPS: "${CHORUSFACE_STREAM_FPS:-12}"
+      CHORUSFACE_WORLD: /app/output/worlds/tickfeed
+      CHORUSFACE_SECRETS_DIR: /app/secrets
+      MODERNGL_WINDOW: headless
+      MODERNGL_BACKEND: "${MODERNGL_BACKEND:-egl}"
+    volumes:
+      - ./output/worlds/tickfeed:/app/output/worlds/tickfeed:ro
+      # Mount local encrypted API key vault (never bake keys into the image).
+      - ./secrets:/app/secrets:ro
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8766/health', timeout=3)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s

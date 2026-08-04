@@ -44,11 +44,11 @@ Note: closed-lip SMILE is subtle in raw optical-flow energy; teacher blends scri
 ## How to run the primary avatar
 
 ```powershell
-python -m aiface --world-dir output/worlds/avatar
+python -m chorusface --world-dir output/worlds/avatar
 ```
 
 Male dual world (scaffold copied for TickFeed teacher; identity plates still from prior digest until re-adopt):
 
 ```powershell
-python -m aiface --world-dir output/worlds/avatar_male
+python -m chorusface --world-dir output/worlds/avatar_male
 ```

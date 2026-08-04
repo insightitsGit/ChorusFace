@@ -54,7 +54,7 @@ def main() -> int:
         print(f"FAIL: missing video {video}", file=sys.stderr)
         return 2
 
-    from aiface.capture import (
+    from chorusface.capture import (
         MIN_SHARPNESS_SOFT,
         RejectReport,
         _write_plate_atlas,
@@ -62,7 +62,7 @@ def main() -> int:
         resample_frames_hires,
         select_expression_frames,
     )
-    from aiface.plates import select_viseme_atlas_frames
+    from chorusface.plates import select_viseme_atlas_frames
 
     print(f"Sampling frames from {video.name} @ {args.sample_fps} fps …")
     report = RejectReport()
@@ -115,7 +115,7 @@ def main() -> int:
             f"smile={flat.metrics.smile_width:.3f} (was {rest.metrics.smile_width:.3f})"
         )
 
-    from aiface.plates import load_plate_atlas
+    from chorusface.plates import load_plate_atlas
 
     # Meta path is sibling of the .bds (with_name), not the world directory.
     atlas = load_plate_atlas(bds)
@@ -131,7 +131,7 @@ def main() -> int:
 
     if args.timeline:
         print("Rebuilding face_cell_timeline (denser Farneback) …")
-        from aiface.tickfeed.collect import prepare_face_timeline
+        from chorusface.tickfeed.collect import prepare_face_timeline
 
         prepare_face_timeline(world, video=video)
         print("  timeline OK")

@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from aiface.io_limits import (
+from chorusface.io_limits import (
     MAX_FACE_SIDE,
     MAX_TTS_RESPONSE_BYTES,
     MAX_VOICE_BUFFER_SECONDS,
@@ -23,8 +23,8 @@ from aiface.io_limits import (
     write_model_digest,
     zlib_decompress_capped,
 )
-from aiface.stream import StreamConfig, StreamError, VoiceStream
-from aiface.tickfeed.package import FaceBox, build_keyframe, decode, encode
+from chorusface.stream import StreamConfig, StreamError, VoiceStream
+from chorusface.tickfeed.package import FaceBox, build_keyframe, decode, encode
 
 
 def test_weak_token_and_fingerprint() -> None:
@@ -104,7 +104,7 @@ def test_safe_joblib_load_digest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     # Unpinned + require digest.
     model2 = tmp_path / "toy2.joblib"
     joblib.dump({"ok": 2}, model2)
-    monkeypatch.setenv("AIFACE_REQUIRE_MODEL_DIGEST", "1")
-    monkeypatch.delenv("AIFACE_ALLOW_UNPINNED_MODELS", raising=False)
+    monkeypatch.setenv("CHORUSFACE_REQUIRE_MODEL_DIGEST", "1")
+    monkeypatch.delenv("CHORUSFACE_ALLOW_UNPINNED_MODELS", raising=False)
     with pytest.raises(ValueError, match="unpinned model"):
         safe_joblib_load(model2, world_root=tmp_path)

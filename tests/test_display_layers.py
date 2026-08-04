@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aiface.display_layers import (
+from chorusface.display_layers import (
     DISPLAY_PATH,
     LAYER_SPECS,
     DisplayLayer,
@@ -12,9 +12,9 @@ from aiface.display_layers import (
     evaluate_frame_layers,
     hierarchy_table,
 )
-from aiface.runtime.recipe import DISPLAY_PATH as RECIPE_PATH, UNIFORM_MAP
+from chorusface.runtime.recipe import DISPLAY_PATH as RECIPE_PATH, UNIFORM_MAP
 
-SHADER = Path(__file__).resolve().parents[1] / "src/aiface/shaders/avatar.frag"
+SHADER = Path(__file__).resolve().parents[1] / "src/chorusface/shaders/avatar.frag"
 
 
 def test_layer_codes_are_contiguous_bottom_to_top() -> None:

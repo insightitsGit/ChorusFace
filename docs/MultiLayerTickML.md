@@ -1,9 +1,9 @@
 # Multi-layer ML for per-tick face data
 
-**Status:** lab implemented (`aiface.tickfeed.ml` + `scripts/train_tickfeed_ml.py`).  
+**Status:** lab implemented (`chorusface.tickfeed.ml` + `scripts/train_tickfeed_ml.py`).  
 L1 uses **WAV RMS** features when `audio_feat.npz` exists (`wav_rms`); otherwise
 honest `proxy_fallback` in meta. L4 = PCA, upgrading to a nonlinear AE when
-holdout MAE exceeds the threshold (or `AIFACE_TICKFEED_L4_AE=1`). L5 = recover
+holdout MAE exceeds the threshold (or `CHORUSFACE_TICKFEED_L4_AE=1`). L5 = recover
 codes from punched
 **patch** holes (not look-feature holes). Metrics include holdout.  
 **Master:** [`TickFeedDesign.md`](TickFeedDesign.md).  
@@ -161,8 +161,8 @@ L1 ──SpeechClock──► L2 ──LookDrive──► L3 ──FaceMotion─
 
 Rules:
 
-1. **Versioned schemas** — phase-1 dataclasses in `aiface.tickfeed.ml.packets`
-   use `aiface.packet.SpeechClock.v1` / `LookDrive.v1` / `FaceMotionCode.v1`.
+1. **Versioned schemas** — phase-1 dataclasses in `chorusface.tickfeed.ml.packets`
+   use `chorusface.packet.SpeechClock.v1` / `LookDrive.v1` / `FaceMotionCode.v1`.
 2. **No private tensors** across layers — only packets.  
 3. A layer may be swapped if it still reads/writes the same packets.  
 4. **Teacher data** for each layer is stored beside the world so that layer

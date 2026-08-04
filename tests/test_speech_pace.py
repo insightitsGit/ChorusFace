@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from aiface.audio import AudioClip, time_stretch
-from aiface.speech import PhonemeSpan
-from aiface.tts import PreparedSpeech, WordSpan, apply_speech_pace
+from chorusface.audio import AudioClip, time_stretch
+from chorusface.speech import PhonemeSpan
+from chorusface.tts import PreparedSpeech, WordSpan, apply_speech_pace
 
 
 def test_time_stretch_lengthens_clip() -> None:

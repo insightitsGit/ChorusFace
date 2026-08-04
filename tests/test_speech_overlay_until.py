@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from aiface.speech import speech_overlay_until
+from chorusface.speech import speech_overlay_until
 
 
 def test_overlay_until_uses_scheduled_span_end() -> None:

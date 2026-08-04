@@ -227,7 +227,7 @@ Producer **pushes**; master does not echo full face state each tick.
 
 ### 6.2 CHORUS Fabric
 
-- Binary **float32/f16 vector** transport (AI API ↔ AIFace/NWR).  
+- Binary **float32/f16 vector** transport (AI API ↔ ChorusFace/NWR).  
 - Better than JSON/REST for vectors.  
 - Cipher does **not** replace content compression (ROI + delta + optional `c_t`).
 
@@ -259,7 +259,7 @@ Magics and integer metas stay **≤ 2^24** so they survive IEEE-754 binary32.
 CRC32 is **never** stuffed into one float32 (24-bit mantissa) — always two
 uint16 halves. See `chorus_transport.py` + `reassemble_lane_b_chunks` tests.
 
-Inline threshold (`AIFACE_CHORUS_TPK_INLINE_MAX`, default 4096 compressed bytes):
+Inline threshold (`CHORUSFACE_CHORUS_TPK_INLINE_MAX`, default 4096 compressed bytes):
 sparse Δ usually inlines; large KEY uses **TPK_REF + spool**.  
 Lab HELLO: self-ACK in-process **and** both HELLO/ACK blobs pushed on lane B.
 Remote multi-host ACK remains the production upgrade.
@@ -344,7 +344,7 @@ never generative face RGB, never globally killing ``open.png``.
 **Emotion → face:** Side B `look_drive` carries `emotion_id` + `brow`; measured
 `face_cell_timeline` velocity is full-face FIELD (brows/cheeks included). Labels
 drive LOOK (plates/brow ease); FIELD warps identity. Steady path is KEY then Δ;
-`AIFACE_TICKFEED_ABSOLUTE=1` is QA-only (KEY every tick). Blink lids use overlay
+`CHORUSFACE_TICKFEED_ABSOLUTE=1` is QA-only (KEY every tick). Blink lids use overlay
 only — no blink muscle warp on top of FIELD.
 
 **FIELD semantics (phase-1):** ch0/1 are **rest-relative displacement** of the
@@ -353,7 +353,7 @@ optical flow. HELLO `apply_mode=disp_vs_rest` and package `FLAG_VS_REST` lock
 that meaning. The avatar samples them as warp vectors. Frame-Δ flow + constraint
 damping/neighbor blend left lower-lip residue; collect stores rest→frame, and
 TickFeed LOOK sets jaw assist to 0. Steady wire uses KEY then Δ; absolute KEY
-every tick is QA-only (`AIFACE_TICKFEED_ABSOLUTE=1`).
+every tick is QA-only (`CHORUSFACE_TICKFEED_ABSOLUTE=1`).
 
 Catalog ease must not overwrite `_expr_plate_blend` / plate amounts while
 TickFeed owns LOOK.
@@ -544,7 +544,7 @@ lab play default.
 | Playback clock | Viseme fire uses sink `media_time` when available | `audio.*Sink.media_time`, `app._speech_now` |
 | Bilabial onset pin | Leading PP gets ~45 ms at word start | `tts._subdivide`, `bias_bilabial_onsets` |
 | Energy valley snap | PP/MM/CLOSED pull toward nearby RMS trough | `tts.snap_bilabials_to_energy_valleys` |
-| Whisper words (when keyed) | `--tts-align words` default if `OPENAI_API_KEY` / `AIFACE_LLM_API_KEY` set; else energy | `app` CLI, `run_tickfeed_demo.py` |
+| Whisper words (when keyed) | `--tts-align words` default if `OPENAI_API_KEY` / `CHORUSFACE_LLM_API_KEY` set; else energy | `app` CLI, `run_tickfeed_demo.py` |
 
 ### 14.3 Renderer / transition ownership
 
@@ -619,8 +619,8 @@ These remain **future** — not part of the post-initial mouth/blink pass:
 4. Per-avatar L3 size/quality research on more takes  
 
 Landed since §14: Whisper Side B teacher when keyed; DIS dense tracker
-(`AIFACE_TICKFEED_FLOW=dis`); L4 AE when PCA holdout MAE is insufficient
-(`AIFACE_TICKFEED_L4_AE=1` to force); CHORUS master recv
+(`CHORUSFACE_TICKFEED_FLOW=dis`); L4 AE when PCA holdout MAE is insufficient
+(`CHORUSFACE_TICKFEED_L4_AE=1` to force); CHORUS master recv
 (`scripts/start_chorus_master.py` + `pull_recv_*`).
 
 ---
@@ -673,15 +673,15 @@ Honest code pointers. Prefer these over stale early-draft §7 text.
 
 | Concern | Module / entry |
 | --- | --- |
-| TickPackage encode/decode + CRC | `src/aiface/tickfeed/package.py` |
-| CHORUS lanes A+B | `src/aiface/tickfeed/chorus_transport.py` |
-| Driver push / HELLO / timeline loop | `src/aiface/tickfeed/driver.py` |
-| Producer-lead ring | `src/aiface/tickfeed/ring.py`, `app._simulate_tick` |
-| GPU KEY/Δ ingest | `src/aiface/shaders/tick_ingest.comp`, `runtime/field.py` |
+| TickPackage encode/decode + CRC | `src/chorusface/tickfeed/package.py` |
+| CHORUS lanes A+B | `src/chorusface/tickfeed/chorus_transport.py` |
+| Driver push / HELLO / timeline loop | `src/chorusface/tickfeed/driver.py` |
+| Producer-lead ring | `src/chorusface/tickfeed/ring.py`, `app._simulate_tick` |
+| GPU KEY/Δ ingest | `src/chorusface/shaders/tick_ingest.comp`, `runtime/field.py` |
 | LOOK label authority (B4) | `app._apply_tickfeed_labels_to_look` |
-| Measured collect + provenance | `src/aiface/tickfeed/collect.py`, `timeline_io.py` (`source`) |
-| Teacher audio-energy force-align | `src/aiface/tickfeed/force_align.py` |
-| L1–L5 train/load | `src/aiface/tickfeed/ml/` |
+| Measured collect + provenance | `src/chorusface/tickfeed/collect.py`, `timeline_io.py` (`source`) |
+| Teacher audio-energy force-align | `src/chorusface/tickfeed/force_align.py` |
+| L1–L5 train/load | `src/chorusface/tickfeed/ml/` |
 | Cosmetics GLSL | `cosmetics.py` + `avatar.frag` uniforms |
 | Clean demo build | `scripts/build_tickfeed_demo.py` |
 | Local CHORUS plane | `scripts/start_chorus_local.py` |

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aiface.tickfeed.lid_measure import commit_lid_for_look
+from chorusface.tickfeed.lid_measure import commit_lid_for_look
 
 
 def test_bj1_lid_teacher_latches_on_close() -> None:
@@ -29,7 +29,7 @@ def test_bj1_lid_teacher_latches_on_close() -> None:
 
 
 def test_bj1_app_source_does_not_clear_on_reopen() -> None:
-    text = Path("src/aiface/app.py").read_text(encoding="utf-8")
+    text = Path("src/chorusface/app.py").read_text(encoding="utf-8")
     assert "commit_lid_for_look" in text
     assert "self._tickfeed_lid_teacher = True" in text
     # Old ping-pong assignment must stay gone.
@@ -50,7 +50,7 @@ def test_lid_open_deadzone_keeps_rest_lashes_up() -> None:
 
 def test_bj3_hard_zero_jaw_under_tickfeed_look() -> None:
     """BJ3: GPU jaw angle forced to 0 while TickFeed owns LOOK."""
-    text = Path("src/aiface/app.py").read_text(encoding="utf-8")
+    text = Path("src/chorusface/app.py").read_text(encoding="utf-8")
     assert "BJ3: TickFeed LOOK owns mouth via FIELD + plates" in text
     assert "if bool(getattr(self, \"_tickfeed_look_authority\", False))" in text
     assert "phoneme_jaw=0.0" in text

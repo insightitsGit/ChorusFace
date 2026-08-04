@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from aiface.mouth_motion import (
+from chorusface.mouth_motion import (
     PHASE_ANTICIPATING,
     PHASE_CLOSING,
     PHASE_HOLDING,

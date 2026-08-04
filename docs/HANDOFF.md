@@ -1,12 +1,12 @@
-# AIFace agent handoff
+# ChorusFace agent handoff
 
-**Read this first** when opening a new Cursor window on `C:/code/AIFace`.
+**Read this first** when opening a new Cursor window on `C:/code/ChorusFace`.
 Prior chat lived under the NWR workspace (`C:/code/NWR`) while building this
 repo; the product code is here now.
 
 | | |
 | --- | --- |
-| **Repo** | `C:/code/AIFace` → private GitHub `insightitsGit/AIFace` |
+| **Repo** | `C:/code/ChorusFace` → private GitHub `insightitsGit/ChorusFace` |
 | **Origin** | configured; **no commits yet**, **do not push** without explicit permission |
 | **Tests** | `330 passed` (as of handoff) — `pip install -e ".[dev]"` then `pytest -q` |
 | **Parent project** | `C:/code/NWR` @ `f3ce4f5` (synced) — leave untouched unless the user asks |
@@ -26,10 +26,10 @@ good prototype, visible seams, limited naturalness.
 ### Chapter 2 — Standalone extraction
 
 The avatar was strong enough to be its own product. Per plan
-`extract_standalone_aiface_261d9b62`, everything was extracted to
-`C:/code/AIFace`:
+`extract_standalone_chorusface_261d9b62`, everything was extracted to
+`C:/code/ChorusFace`:
 
-- Package `aiface` with CLI `aiface` / `aiface-seed` / `aiface-capture` / `aiface-sync`
+- Package `chorusface` with CLI `chorusface` / `chorusface-seed` / `chorusface-capture` / `chorusface-sync`
 - Vendored minimal runtime (BDS, constraint tick, FieldRuntime) — **not** the
   full NWR sandbox
 - Synthetic seed path (no real portrait committed)
@@ -59,7 +59,7 @@ Implemented end-to-end:
 1. **Muscle groups** — systems address `Frontalis`, `OrbicularisOris`, etc.;
    registry expands to left/right members with asymmetry `bias`
 2. **`face_definition.json` v2.0** — 39 muscles, `travel`, `gate`, jaw landmarks
-3. **`aiface.skinning`** — tissue bake (mobility / mouth side / slit / eye
+3. **`chorusface.skinning`** — tissue bake (mobility / mouth side / slit / eye
    aperture), Wendland RBF packer, CPU `displacement_field` mirror of the shader
 4. **`avatar.frag`** — inverse-warp continuous deform + mouth cavity + lids
 5. **App uniforms** — tissue texture, muscle arrays, jaw profile + lateral span
@@ -87,15 +87,15 @@ error.”*
 
 So the primary path is now audio this process did **not** produce:
 
-- **`aiface.stream`** — push-based aligner. PCM chunks in, timed viseme decisions
+- **`chorusface.stream`** — push-based aligner. PCM chunks in, timed viseme decisions
   out, each one recording when it was decided so the latency is measured rather
   than claimed. Energy spends against a per-viseme budget; full stops may only be
   spent by silence; every phrase boundary re-measures the speaker's rate so error
   cannot accumulate past it.
-- **`aiface.sync`** — the oracle. Same utterance through the batch path (full
+- **`chorusface.sync`** — the oracle. Same utterance through the batch path (full
   lookahead, best possible) and the streaming path; reports bias, jitter,
   trimmed p95, decision lag, coverage. Clock-free, so it runs in milliseconds.
-- **`aiface-sync`** — CLI wrapper with a pass/fail budget for CI.
+- **`chorusface-sync`** — CLI wrapper with a pass/fail budget for CI.
 - **Bridge routes** `/voice/expect`, `/voice/pcm`, `/voice/end`, answered on the
   request thread because a 20 ms chunk must not wait for a frame.
 - **`--tts` now defaults off.** It is the fixture that feeds the oracle.
@@ -128,13 +128,13 @@ was still undelivered dropped the connection instead of returning the error.
 
 ```
 chat text  (in-window chat box, terminal chat>, or POST /speak)
-    → aiface.chatbox         panel state, transcript, portrait/panel framing
-    → aiface.speech          visemes / LLM / offline fallback
-    → aiface.stream          PRIMARY: locks visemes to arriving PCM (/voice/pcm)
-    → aiface.tts / audio     fixture: local synthesis + batch alignment (--tts)
-    → aiface.biomechanics    39 muscles, groups, jaw/eyes/emotion/idle/breath
-    → aiface.skinning        tissue maps + muscle uniform packing
-    → aiface.runtime         BDS + constraint tick + Master Lock
+    → chorusface.chatbox         panel state, transcript, portrait/panel framing
+    → chorusface.speech          visemes / LLM / offline fallback
+    → chorusface.stream          PRIMARY: locks visemes to arriving PCM (/voice/pcm)
+    → chorusface.tts / audio     fixture: local synthesis + batch alignment (--tts)
+    → chorusface.biomechanics    39 muscles, groups, jaw/eyes/emotion/idle/breath
+    → chorusface.skinning        tissue maps + muscle uniform packing
+    → chorusface.runtime         BDS + constraint tick + Master Lock
     → avatar.frag            continuous displacement warp + occlusion layers
 ```
 
@@ -160,20 +160,20 @@ displacement, Jacobian split (muscles vs jaw).
 
 | Path | Role |
 | --- | --- |
-| `src/aiface/app.py` | Avatar window; uniforms; tissue upload; chat wiring |
-| `src/aiface/chatbox.py` | In-window chat panel: editing, transcript, `frame_layout` |
-| `src/aiface/skinning.py` | Tissue bake, packer, jaw pose, CPU field |
-| `src/aiface/shaders/avatar.frag` | Displacement + occlusion |
-| `src/aiface/speech.py` | Text → visemes, chat backend, conversation memory |
-| `src/aiface/stream.py` | **Live sync channel**: arriving PCM → timed visemes |
-| `src/aiface/sync.py` | Streaming-vs-batch oracle; the millisecond number |
-| `src/aiface/service/bridge.py` | Loopback HTTP surface incl. the `/voice/*` routes |
-| `src/aiface/tts.py` | Fixture voice + batch (full-lookahead) alignment |
-| `src/aiface/audio.py` | WAVE decode, RMS envelope, voiced intervals, playback |
-| `src/aiface/biomechanics/data/face_definition.json` | Character / muscle authoring |
-| `src/aiface/biomechanics/muscles.py` | Registry, groups, gates, solver |
-| `src/aiface/biomechanics/face.py` | Orchestrator; group → mouth pose |
-| `src/aiface/seed.py` | Seed world + tissue + parts |
+| `src/chorusface/app.py` | Avatar window; uniforms; tissue upload; chat wiring |
+| `src/chorusface/chatbox.py` | In-window chat panel: editing, transcript, `frame_layout` |
+| `src/chorusface/skinning.py` | Tissue bake, packer, jaw pose, CPU field |
+| `src/chorusface/shaders/avatar.frag` | Displacement + occlusion |
+| `src/chorusface/speech.py` | Text → visemes, chat backend, conversation memory |
+| `src/chorusface/stream.py` | **Live sync channel**: arriving PCM → timed visemes |
+| `src/chorusface/sync.py` | Streaming-vs-batch oracle; the millisecond number |
+| `src/chorusface/service/bridge.py` | Loopback HTTP surface incl. the `/voice/*` routes |
+| `src/chorusface/tts.py` | Fixture voice + batch (full-lookahead) alignment |
+| `src/chorusface/audio.py` | WAVE decode, RMS envelope, voiced intervals, playback |
+| `src/chorusface/biomechanics/data/face_definition.json` | Character / muscle authoring |
+| `src/chorusface/biomechanics/muscles.py` | Registry, groups, gates, solver |
+| `src/chorusface/biomechanics/face.py` | Orchestrator; group → mouth pose |
+| `src/chorusface/seed.py` | Seed world + tissue + parts |
 | `scripts/probe_field.py` | Coverage / Jacobian probe |
 | `scripts/tune_voice_sync.py` | Grid-search the streaming defaults against a real voice |
 | `scripts/preview_chatbox.py` | Renders the framed window to PNG for layout QA |
@@ -195,8 +195,8 @@ displacement, Jacobian split (muscles vs jaw).
 - [x] In-window chat frame: portrait letterboxed above a live chat panel
 - [x] TTS-driven viseme timing (`--tts`): energy / words / linear alignment
 - [x] Windows SAPI offline voice, kept as the oracle's clip fixture
-- [x] **Live sync channel** (`aiface.stream`) + `/voice/expect|pcm|end`
-- [x] **Sync oracle** (`aiface.sync`, `aiface-sync`) with a CI latency budget:
+- [x] **Live sync channel** (`chorusface.stream`) + `/voice/expect|pcm|end`
+- [x] **Sync oracle** (`chorusface.sync`, `chorusface-sync`) with a CI latency budget:
       119 ms mean / 195 ms worst trimmed p95 on SAPI, 100% coverage
 - [x] TTS demoted to opt-in (`--tts`); the channel is the default path
 - [x] Natural offline replies (no canned phoneme filler)
@@ -210,10 +210,10 @@ displacement, Jacobian split (muscles vs jaw).
 
 ## NWR power — what we keep, what we leave
 
-**Standing position: NWR is the heart of the product, AIFace is a child of it.**
+**Standing position: NWR is the heart of the product, ChorusFace is a child of it.**
 NWR owns the substrate contract — cell schema, `.bds`, authority ordering,
-Master Lock — and AIFace does not redefine any of it. If the two disagree on a
-substrate rule, NWR wins and this repository is the bug. AIFace owns the face:
+Master Lock — and ChorusFace does not redefine any of it. If the two disagree on a
+substrate rule, NWR wins and this repository is the bug. ChorusFace owns the face:
 muscles, displacement field, speech, chat, character data. In that domain it
 runs deliberately ahead of NWR's reference avatar.
 
@@ -221,16 +221,16 @@ It does **not** re-import the NWR playground package (that would pull
 physics/swarm and the older rigid cut-out face). Instead it vendors the minimal
 substrate and brings NWR's control-surface pattern into the chat path:
 
-| NWR capability | In AIFace |
+| NWR capability | In ChorusFace |
 | --- | --- |
-| 32-ch BDS, Master Lock, constraint tick, 60 Hz, SSBO commands | Yes — `aiface.runtime` |
+| 32-ch BDS, Master Lock, constraint tick, 60 Hz, SSBO commands | Yes — `chorusface.runtime` |
 | Continuous muscle displacement (Wendland + occlusion) | Yes — ahead of NWR's old avatar |
 | Conversation memory across turns | Yes — `ConversationSession` |
 | Coarticulated viseme timing into muscle holds | Yes — `schedule_visemes` + event duration |
-| TTS-locked audio visemes | Yes — as a fixture: `aiface.tts` / `aiface.audio`, `--tts` |
-| Realtime lip-sync to an external voice | Yes — `aiface.stream`, `/voice/pcm`; ahead of NWR |
-| A measured latency figure, not a claim | Yes — `aiface.sync`, `aiface-sync` |
-| Loopback HTTP observe/command bridge | Yes — `aiface --bridge` (`FaceBridge`) |
+| TTS-locked audio visemes | Yes — as a fixture: `chorusface.tts` / `chorusface.audio`, `--tts` |
+| Realtime lip-sync to an external voice | Yes — `chorusface.stream`, `/voice/pcm`; ahead of NWR |
+| A measured latency figure, not a claim | Yes — `chorusface.sync`, `chorusface-sync` |
+| Loopback HTTP observe/command bridge | Yes — `chorusface --bridge` (`FaceBridge`) |
 | Chat and face in one surface | Yes — in-window chat box, `--no-chat-box` to opt out |
 | Physics / semantic advection, swarm, entities | No — would smear identity |
 
@@ -247,7 +247,7 @@ replay faithful."). Earlier audit was against `7d9740b`; the only substrate
 delta still needed here was the GPU AI lock-mint refusal in `constraint.comp`
 (AI may place barrier material, may not raise channel 31). `.bdl` replay,
 command-compiler lock refusal, and AI control-plane schema narrowing are N/A —
-AIFace has no paint/save/load bridge and no history log.
+ChorusFace has no paint/save/load bridge and no history log.
 
 A senior QA review of NWR at `main @ 7d9740b` raised twelve findings
 (`CR-001`…`CR-012`). Every one was checked against this repository. The review's
@@ -257,7 +257,7 @@ equivalents here, so the useful lesson generalised even where the code did not.
 | NWR finding | Here |
 | --- | --- |
 | CR-002 replay drops writer priority | **Was latent.** `PaintCommand.priority` defaulted to `user` even for `source=1`, so an AI row could carry human authority. Now rejected at construction; `tests/test_commands.py` pins it. Two of our own tests were building exactly that row. |
-| CR-005 bind not loopback-only | **Was present.** `--bridge-host` / `AIFACE_BRIDGE_HOST` accepted `0.0.0.0`. `FaceBridge` now refuses non-loopback binds unless `--allow-remote-bind`, using NWR's `net_guard` policy (resolve the name, require *every* answer to be loopback, fail closed) rather than a local variation. |
+| CR-005 bind not loopback-only | **Was present.** `--bridge-host` / `CHORUSFACE_BRIDGE_HOST` accepted `0.0.0.0`. `FaceBridge` now refuses non-loopback binds unless `--allow-remote-bind`, using NWR's `net_guard` policy (resolve the name, require *every* answer to be loopback, fail closed) rather than a local variation. |
 | CR-006 avatar destructive inheritance | **Partly present.** No `R` and no mouse paint here, but `S` persisted live speech state into the seed. Saves now write a rest pose, so save/load is a fixed point. |
 | CR-007 stale state after load | **Was present.** `L` left visemes and muscle state describing the replaced world. `_on_world_reloaded()` clears them. |
 | CR-008 unbounded relay input | **Analogue present.** Malformed `Content-Length` raised inside the handler, and the job list had no ceiling. Now a 400 and a 503. |
@@ -283,7 +283,7 @@ Auditing the field with that lens turned up two bugs of our own, both in
 Ordered by likely value:
 
 1. **Path 1 Phase B** — in-app / bridge identity hot-swap on top of the MVP
-   already shipped (`aiface.landmarks`, unified eye UV, `--preview` QA). Plan:
+   already shipped (`chorusface.landmarks`, unified eye UV, `--preview` QA). Plan:
    [`docs/Path1Portrait.md`](Path1Portrait.md).
 
 2. **Drive it from a real realtime API** end to end (OpenAI realtime, or any
@@ -297,7 +297,7 @@ Ordered by likely value:
    was tried and **made it worse** (292 ms vs 148 ms p95): RMS peaks under-detect
    in continuous voicing, and grapheme vowels do not line up with acoustic
    syllables. If revisited, it needs a real onset detector, and it needs to beat
-   `aiface-sync` before it lands.
+   `chorusface-sync` before it lands.
 
 4. **Richer motor programs** — prosody curves, asymmetric micro-expression.
    Deepen drives on the existing field; do **not** add rigid cut-out pieces. The
@@ -325,22 +325,22 @@ Ordered by likely value:
   `travel ≤ 0.21 × influence_radius` (Wendland slope bound).
 - Jaw: use `jaw_pose_from_definition` / `avatar_jaw` + `avatar_jaw_span`; do not
   scale mandible travel by the mobility rim.
-- Install: `pip install -e ".[dev]"` from `C:/code/AIFace`.
+- Install: `pip install -e ".[dev]"` from `C:/code/ChorusFace`.
 
 ---
 
 ## Quick commands
 
 ```bash
-cd C:/code/AIFace
+cd C:/code/ChorusFace
 pip install -e ".[dev]"
 pytest -q
 python scripts/probe_field.py
-aiface-seed --synthetic
-aiface --demo
-aiface-sync                         # streaming-vs-batch delta, pass/fail
-aiface --bridge --no-chat-box       # then POST /voice/pcm from your own voice
-aiface --tts --audio-backend null   # fixture voice, timing without speakers
+chorusface-seed --synthetic
+chorusface --demo
+chorusface-sync                         # streaming-vs-batch delta, pass/fail
+chorusface --bridge --no-chat-box       # then POST /voice/pcm from your own voice
+chorusface --tts --audio-backend null   # fixture voice, timing without speakers
 ```
 
 ---
@@ -351,15 +351,15 @@ Full history (NWR workspace Cursor session that built this):
 `C:/Users/parva/.cursor/projects/c-code-NWR/agent-transcripts/e76e265f-a4bf-4cdc-8846-bb407c86d4d8/`
 
 Extraction plan (do not re-execute unless asked):  
-`C:/Users/parva/.cursor/plans/extract_standalone_aiface_261d9b62.plan.md`
+`C:/Users/parva/.cursor/plans/extract_standalone_chorusface_261d9b62.plan.md`
 
 ---
 
 ## One-line status for the next window
 
-**AIFace is the flagship NWR use case: a continuous-muscle face that locks its
+**ChorusFace is the flagship NWR use case: a continuous-muscle face that locks its
 lips to audio somebody else is streaming (`/voice/pcm`), with the cost of doing
 that live measured rather than claimed — 119 ms mean / 195 ms worst trimmed p95
-against a 250 ms CI budget (`aiface-sync`). Local TTS is now just the fixture
+against a 250 ms CI budget (`chorusface-sync`). Local TTS is now just the fixture
 that produces the ground-truth clip. Next is a live realtime-API session and a
 real portrait seed — not more rigid pieces and not re-importing NWR.**

@@ -98,9 +98,9 @@ def _preflight() -> list[str]:
     meta_path = WORLD / "face_cell_timeline" / "meta.json"
     if meta_path.is_file():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if not str(meta.get("schema", "")).startswith("aiface.face_cell_timeline"):
+        if not str(meta.get("schema", "")).startswith("chorusface.face_cell_timeline"):
             fails.append(f"bad timeline schema {meta.get('schema')!r}")
-        if "source_codes" not in meta and meta.get("schema") != "aiface.face_cell_timeline.v2":
+        if "source_codes" not in meta and meta.get("schema") != "chorusface.face_cell_timeline.v2":
             # v2 required for provenance-aware demo
             fails.append("timeline meta missing provenance (need v2 / source_codes)")
         print(
@@ -173,7 +173,7 @@ def main() -> int:
     parser.add_argument(
         "--speech-pace",
         type=float,
-        default=float(os.environ.get("AIFACE_SPEECH_PACE", "0") or 0),
+        default=float(os.environ.get("CHORUSFACE_SPEECH_PACE", "0") or 0),
         help=(
             "Slow audio+visemes for clearer mouth (1.12=+12%%). "
             "0 = recipe default"
@@ -197,10 +197,10 @@ def main() -> int:
     parser.add_argument(
         "--tts-align",
         choices=("words", "energy", "linear"),
-        default=os.environ.get("AIFACE_TTS_ALIGN") or "",
+        default=os.environ.get("CHORUSFACE_TTS_ALIGN") or "",
         help=(
             "Viseme aligner. Default: words when OPENAI_API_KEY is set, "
-            "else energy. Override with this flag or AIFACE_TTS_ALIGN."
+            "else energy. Override with this flag or CHORUSFACE_TTS_ALIGN."
         ),
     )
     args = parser.parse_args()
@@ -231,20 +231,20 @@ def main() -> int:
     env["PYTHONPATH"] = str(ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
     env["PYTHONIOENCODING"] = "utf-8"
     env.setdefault("CHORUS_DIM", "64")
-    env.setdefault("AIFACE_CHORUS_CONTROL", "localhost:50051")
-    env.setdefault("AIFACE_CHORUS_TARGET", "localhost:50053")
+    env.setdefault("CHORUSFACE_CHORUS_CONTROL", "localhost:50051")
+    env.setdefault("CHORUSFACE_CHORUS_TARGET", "localhost:50053")
     cmd = [
         sys.executable,
         "-m",
-        "aiface",
+        "chorusface",
         "--demo",
         "--tts",
         "--bridge",
         "--bridge-direct-speak",
         "--bridge-token",
-        os.environ.get("AIFACE_BRIDGE_TOKEN", "tickfeed-lab"),
+        os.environ.get("CHORUSFACE_BRIDGE_TOKEN", "tickfeed-lab"),
         "--bridge-port",
-        os.environ.get("AIFACE_BRIDGE_PORT", "8766"),
+        os.environ.get("CHORUSFACE_BRIDGE_PORT", "8766"),
         "--world",
         str(BDS),
         "--face-image",
@@ -264,7 +264,7 @@ def main() -> int:
         cmd.extend(["--speech-pace", str(float(args.speech_pace))])
     align = str(args.tts_align or "").strip().lower()
     if not align:
-        if os.environ.get("OPENAI_API_KEY") or os.environ.get("AIFACE_LLM_API_KEY"):
+        if os.environ.get("OPENAI_API_KEY") or os.environ.get("CHORUSFACE_LLM_API_KEY"):
             align = "words"
         else:
             align = "energy"

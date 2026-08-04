@@ -9,8 +9,8 @@ import json
 from pathlib import Path
 from typing import Any, Final
 
-from aiface.biomechanics.intent import PHONEME_JAW_TARGET
-from aiface.speech import EMOTION_IMPULSES, canonical_viseme, mouth_pose
+from chorusface.biomechanics.intent import PHONEME_JAW_TARGET
+from chorusface.speech import EMOTION_IMPULSES, canonical_viseme, mouth_pose
 
 MAPPING_NAME: Final = "condition_maps.json"
 

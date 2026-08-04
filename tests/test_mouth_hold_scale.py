@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from aiface.mouth_speed import clamp_hold_scale, hold_scale_to_params
+from chorusface.mouth_speed import clamp_hold_scale, hold_scale_to_params
 
 
 def test_hold_scale_monotone() -> None:

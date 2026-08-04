@@ -266,7 +266,7 @@ full-face × velocity × deltas × f16 → typically **~0.3–2 MB/s**, often **
 
 ### Still open (implementation detail, not technique choice)
 
-1. Expander on **AIFace CPU** vs **NWR compute** (or both)?  
+1. Expander on **ChorusFace CPU** vs **NWR compute** (or both)?  
 2. Plate **amounts** in same CHORUS frame as cell tensor, or side channel?  
 
 **No implementation until you green-light build.**

@@ -5,18 +5,18 @@
 for still-image identity.
 
 **Status (implemented):** Phase A MVP is in the tree. Eye UV is unified at
-``v=0.472``, `aiface-seed --input` face-normalizes and measures landmarks
-(`aiface.landmarks`), tissue/app consume seed metadata, and `--preview` writes
+``v=0.472``, `chorusface-seed --input` face-normalizes and measures landmarks
+(`chorusface.landmarks`), tissue/app consume seed metadata, and `--preview` writes
 `seed_qa.png`. Phase B (in-app hot-swap) and Phase C remain future work.
 
-NWR authority bugs are closed in AIFace as of `f3ce4f5` sync (see scorecard
+NWR authority bugs are closed in ChorusFace as of `f3ce4f5` sync (see scorecard
 below).
 
 ---
 
 ## NWR bug parity (gate before Path 1)
 
-| Finding | Status in AIFace |
+| Finding | Status in ChorusFace |
 | --- | --- |
 | AI command claims human priority | Fixed — `PaintCommand` + tests |
 | Bridge binds off-loopback | Fixed — `is_loopback_host` |
@@ -43,14 +43,14 @@ photo | --synthetic
   → Haar face box (or synthetic fallback box)
   → fixed UV ellipses → locks + tissue + parts
   → write colocated bundle (bds + source_face + parts + tissue)
-  → aiface warps source_face / atlas RGB with muscle displacement
+  → chorusface warps source_face / atlas RGB with muscle displacement
 ```
 
 CLI today:
 
 ```bash
-aiface-seed --input portrait.jpg --preview
-aiface --tts
+chorusface-seed --input portrait.jpg --preview
+chorusface --tts
 ```
 
 Gemini / Imagen (or any generator) is the same pipeline: save a frontal
@@ -59,8 +59,8 @@ neutral PNG, then seed it. A demo portrait lives at
 environment:
 
 ```bash
-aiface-seed --input assets/gemini_style_avatar.png --preview
-aiface --tts
+chorusface-seed --input assets/gemini_style_avatar.png --preview
+chorusface --tts
 ```
 
 `--face-image` alone is **not** a face swap: it can desync the photo from
@@ -88,7 +88,7 @@ for filmstrip QA or terrain later, not identity.
 
 | Option | Decision |
 | --- | --- |
-| Harden `aiface-seed` | **Yes** — already emits the runtime contract |
+| Harden `chorusface-seed` | **Yes** — already emits the runtime contract |
 | New image converter package | **No** — forks the artifact contract |
 | Port NWR video driver for Path 1 | **No** — wrong problem |
 
@@ -134,7 +134,7 @@ Primary files: `landmarks.py`, `seed.py`, `skinning.py`, `app.py`,
 3. Multi-identity slots; filmstrip QA (NWR export pattern, vendored later).
 4. Webcam puppeteering as a **separate** driver — not Path 1 identity.
 5. **Open-mouth / smile plates (only honest path to teeth):** use
-   `aiface-capture` on a short HQ take (or stills). Real `open.png` /
+   `chorusface-capture` on a short HQ take (or stills). Real `open.png` /
    `smile.png` are composited inside `mouth_gap`. Do **not** invent enamel on a
    closed-mouth portrait. Speech motion stays muscles + jaw on
    `source_face.png`; judge lip silhouette first. See
@@ -155,7 +155,7 @@ Primary files: `landmarks.py`, `seed.py`, `skinning.py`, `app.py`,
 
 1. **MediaPipe** (best landmarks) vs **OpenCV-only** (smaller deps)?
 2. **MVP delivery:** CLI + QA preview first, or in-app file picker immediately?
-3. **Hot-swap** mid-session vs restart after `aiface-seed`?
+3. **Hot-swap** mid-session vs restart after `chorusface-seed`?
 4. **Gemini:** offline generate → seed, or in-app generate API later?
 5. Keep photo backdrop vs soft studio matte?
 
@@ -169,6 +169,6 @@ after reseed, offline Gemini images, keep backdrop until QA is green.
 1. Fix 0.365 → 0.472 UV split (synthetic + seed masks) — unjumbles current demo.
 2. Face-normalize + landmark mouth/eyes into metadata.
 3. Seed QA overlay + tests on a fixture portrait.
-4. Doc the one command path: `aiface-seed --input photo.jpg && aiface --tts`.
+4. Doc the one command path: `chorusface-seed --input photo.jpg && chorusface --tts`.
 
 That is Path 1 MVP. Everything else builds on it.

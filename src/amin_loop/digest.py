@@ -1,6 +1,6 @@
 """Step 4 — Digest image/video → .bds + plates (capture path on NWR cells).
 
-Uses ``aiface.capture`` so identity comes from real frames — never invented teeth.
+Uses ``chorusface.capture`` so identity comes from real frames — never invented teeth.
 """
 
 from __future__ import annotations
@@ -10,9 +10,9 @@ from typing import Any
 
 import numpy as np
 
-from aiface.capture import run_capture_from_video
-from aiface.paths import ensure_output_tree
-from aiface.runtime.bds import load_bds
+from chorusface.capture import run_capture_from_video
+from chorusface.paths import ensure_output_tree
+from chorusface.runtime.bds import load_bds
 from amin_loop.regions import digest_regions_from_grid, write_region_catalog
 
 

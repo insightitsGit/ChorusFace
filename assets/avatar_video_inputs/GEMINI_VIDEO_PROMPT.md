@@ -1,11 +1,11 @@
-# Gemini video prompt — AIFace 8s capture take
+# Gemini video prompt — ChorusFace 8s capture take
 
 Drop the exported MP4 in this folder as `face_take.mp4` (or any `.mp4` / `.mov`).
 
 Then run:
 
 ```bash
-aiface-capture --video assets/avatar_video_inputs/face_take.mp4 --output output/worlds/avatar/
+chorusface-capture --video assets/avatar_video_inputs/face_take.mp4 --output output/worlds/avatar/
 ```
 
 ---

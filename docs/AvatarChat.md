@@ -1,5 +1,10 @@
 # Avatar Chat — the biomechanical pipeline
 
+**Product beta (host owns the LLM):** see [`ProductBeta.md`](ProductBeta.md) —
+hosts POST assistant text to FaceBridge `/speak`; ChorusFace does not call the chat
+model. Window is resizable with locked aspect; avatar identity is fixed for this
+beta.
+
 The face is not a viseme clip player. Speech, emotion, blinking, breathing,
 idle micro-motion, and AI intent all inject **muscle impulses** into one queue,
 a solver integrates them, and the renderer only visualises the result.
@@ -8,17 +13,17 @@ a solver integrates them, and the renderer only visualises the result.
 chat text / LLM reply                  transcript + PCM from another voice
     │                                              │
     ▼                                              ▼
-extract_states → phoneme stream + emotion      aiface.speech
+extract_states → phoneme stream + emotion      chorusface.speech
     │                                              │
     ├─ (fixture) TTS synthesize + align          VoiceStream.feed
-    │       aiface.tts / aiface.audio              aiface.stream
+    │       chorusface.tts / chorusface.audio              chorusface.stream
     │       → measured PhonemeSpan timeline        → StreamedSpan, as decided
     │                                              │
     ▼◄─────────────────────────────────────────────┘
-schedule_visemes / schedule_spans              aiface.speech
+schedule_visemes / schedule_spans              chorusface.speech
     │
     ▼
-IntentSystem.speech_impulses                   aiface.biomechanics.intent
+IntentSystem.speech_impulses                   chorusface.biomechanics.intent
     │
     ▼
 MuscleImpulseQueue  ◄── Emotion, Eyes, Breathing, Idle
@@ -128,7 +133,7 @@ Any model that can emit JSON can drive the face directly, bypassing text:
 ```
 
 ```python
-from aiface.biomechanics import BiomechanicalFace
+from chorusface.biomechanics import BiomechanicalFace
 
 face = BiomechanicalFace.from_file(seed=5)
 face.submit_intent(payload, tick=1)
@@ -155,9 +160,9 @@ the whole pipeline runs offline and in tests.
 ## Building a seed
 
 ```bash
-aiface-seed --synthetic                        # deterministic drawn face
-aiface-seed --input portrait.jpg               # your own front-facing photo
-aiface-seed --input portrait.jpg --edge-threshold 0.35
+chorusface-seed --synthetic                        # deterministic drawn face
+chorusface-seed --input portrait.jpg               # your own front-facing photo
+chorusface-seed --input portrait.jpg --edge-threshold 0.35
 ```
 
 The seeder resizes the image, locates a frontal face (Haar cascade, with a
@@ -176,13 +181,13 @@ directions, the phoneme→muscle map, the rest pose, and the jaw limits. Point
 the app at a different file and the same engine drives a different face:
 
 ```bash
-aiface --face-definition creature.json
+chorusface --face-definition creature.json
 ```
 
 ## Reading the HUD
 
 ```
-AIFACE BIOMECH  FPS 87  |  GPU 2.14 ms  |  CPU 0.31 ms  |  view portrait
+CHORUSFACE BIOMECH  FPS 87  |  GPU 2.14 ms  |  CPU 0.31 ms  |  view portrait
 Phoneme AH/HAPPY  pending 6  impulses 14  dom valence:+0.62
 Jaw 0.238 rad  blink 1.42s  breath 0.71  muscles [Mas:0.41,Orb:0.22,Zyg:0.18]
 Mouth |V| mean 0.031 peak 0.480  cells 96  |  t=4.2s  tick 254@60Hz

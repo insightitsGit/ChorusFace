@@ -1,6 +1,6 @@
 """Step 3 — Control API: propose → validate → GPU command rows.
 
-Wraps the same command contract as ``aiface.runtime.commands`` / vendor NWR:
+Wraps the same command contract as ``chorusface.runtime.commands`` / vendor NWR:
 AI may emit ±4 velocity impulses; Master Lock (ch 31) rejects identity writes
 on the GPU. This module never invents face RGB.
 """
@@ -10,8 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from aiface.runtime.bds import PRIORITY_LEVELS
-from aiface.runtime.commands import SOURCE_AI, PaintCommand
+from chorusface.runtime.bds import PRIORITY_LEVELS
+from chorusface.runtime.commands import SOURCE_AI, PaintCommand
 
 
 @dataclass(frozen=True, slots=True)

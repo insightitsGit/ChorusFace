@@ -222,7 +222,7 @@ def main() -> int:
         raise SystemExit(f"missing {source}")
 
     import cv2
-    from aiface.capture import (
+    from chorusface.capture import (
         DISPLAY_SIZE,
         analyze_frame,
         build_eye_lid_matte,

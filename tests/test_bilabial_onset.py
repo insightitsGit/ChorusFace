@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from aiface.speech import TOKEN_WORD, PhonemeSpan, SpokenToken
-from aiface.tts import bias_bilabial_onsets, _subdivide
+from chorusface.speech import TOKEN_WORD, PhonemeSpan, SpokenToken
+from chorusface.tts import bias_bilabial_onsets, _subdivide
 
 
 def test_subdivide_pins_leading_pp() -> None:

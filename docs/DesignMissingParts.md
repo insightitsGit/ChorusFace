@@ -32,7 +32,7 @@ true neutral REST + wide OPEN + `TONGUE_TH` “think” + deliberate `BLINK`).
 | A1 Demo skipped measured pass | `_tickfeed_calibration_active` → measured ticks then zero-mood |
 | A2 `source[]` write-only | Driver loads + lowers conf / allows L5 on synth |
 | A4 Velocity vs displacement | HELLO `disp_vs_rest` + `FLAG_VS_REST` on KEY/Δ |
-| A5 Absolute KEY default | Default KEY→Δ; `AIFACE_TICKFEED_ABSOLUTE=1` QA-only |
+| A5 Absolute KEY default | Default KEY→Δ; `CHORUSFACE_TICKFEED_ABSOLUTE=1` QA-only |
 | A6 Wire default `code` | Default `package` (app + run_tickfeed_demo) |
 | A7 Miss LOOK from producer | `last_applied_labels` freeze |
 | B1 `lid_amt` dead | Packed in TickLabels; look_drive + collect lid measure |
@@ -45,8 +45,8 @@ true neutral REST + wide OPEN + `TONGUE_TH` “think” + deliberate `BLINK`).
 | Lane-B reassemble runtime | `pull_package_from_lane_b_frames` on transport |
 | Multi-host CHORUS recv | `chorus_master` TargetPod → recv spool; `pull_recv_*` |
 | Whisper Side B teacher | `force_align` → `whisper_words_force_align` when keyed |
-| Tracker beyond Farneback | DIS default (`AIFACE_TICKFEED_FLOW=dis`) |
-| L4 AE when PCA weak | `fit_l4_codec` upgrades; force `AIFACE_TICKFEED_L4_AE=1` |
+| Tracker beyond Farneback | DIS default (`CHORUSFACE_TICKFEED_FLOW=dis`) |
+| L4 AE when PCA weak | `fit_l4_codec` upgrades; force `CHORUSFACE_TICKFEED_L4_AE=1` |
 
 ---
 

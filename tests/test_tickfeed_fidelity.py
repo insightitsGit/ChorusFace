@@ -6,11 +6,11 @@ from pathlib import Path
 
 import numpy as np
 
-from aiface.tickfeed.calibration import write_calibration_script
-from aiface.tickfeed.driver import TickFeedDriver
-from aiface.tickfeed.package import FaceBox, TickLabels
-from aiface.tickfeed.schema import FLAG_VS_REST, PackageKind
-from aiface.tickfeed.timeline_io import (
+from chorusface.tickfeed.calibration import write_calibration_script
+from chorusface.tickfeed.driver import TickFeedDriver
+from chorusface.tickfeed.package import FaceBox, TickLabels
+from chorusface.tickfeed.schema import FLAG_VS_REST, PackageKind
+from chorusface.tickfeed.timeline_io import (
     SOURCE_MEASURED,
     SOURCE_SYNTH,
     write_face_cell_timeline,
@@ -92,7 +92,7 @@ def test_wire_loop_source_defaults_to_package() -> None:
 
 
 def test_hello_disp_vs_rest_and_flag() -> None:
-    from aiface.tickfeed.package import build_hello, negotiate_hello
+    from chorusface.tickfeed.package import build_hello, negotiate_hello
 
     face = FaceBox(1, 2, 8, 8)
     hello = build_hello(face, world_id="tickfeed")

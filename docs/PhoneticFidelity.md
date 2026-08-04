@@ -1,18 +1,18 @@
 # Phonetic fidelity (lip-reading assist)
 
-AIFace does **not** own playback. The LLM host speaks; we expose a **realtime
+ChorusFace does **not** own playback. The LLM host speaks; we expose a **realtime
 mouth timeline** the host can drive so the face lands on shapes a lip reader
 can use.
 
 ## Research takeaway
 
-| Approach | Role for AIFace |
+| Approach | Role for ChorusFace |
 | --- | --- |
 | Grapheme → viseme (current fallback) | Works without a phoneme model; good enough for demos |
 | **Oculus / MPEG-4 15-viseme set** | Standard visual inventory (sil, PP, FF, TH, DD, kk, CH, SS, nn, RR, aa, E, ih, oh, ou) |
 | Host phoneme / IPA timestamps | Best fidelity — host already aligned audio |
 | Energy alignment of text + PCM | When host has transcript + PCM but no phoneme clock |
-| Acoustic phoneme ASR inside AIFace | Out of scope — worse than reading the host’s text |
+| Acoustic phoneme ASR inside ChorusFace | Out of scope — worse than reading the host’s text |
 
 Speed/latency is already in live-chat range (~100–200 ms trimmed p95 vs offline).
 The remaining gap for lip-reading is **shape inventory + closures**, not more
@@ -37,13 +37,13 @@ flat rest + tongue-visible TH, and host phoneme timelines (`/voice/timeline`).
 
 ## What we ship
 
-1. **Canonical visemes** in `aiface.speech` (`canonical_viseme`, Oculus aliases).
+1. **Canonical visemes** in `chorusface.speech` (`canonical_viseme`, Oculus aliases).
 2. **Articulation = muscles + jaw** warping the immutable portrait. No shader
    MouthPose lip bias; no painted teeth / oral stamp.
 3. **Lip silhouette** differs by viseme (AH open jaw, PP closed oris, OU round,
    EE wide). Judge quality on outline, not interior fill.
 4. **Gap fill** is a tight photo-derived soft shadow by default. Real teeth
-   come from **`aiface-capture`** plates (`open.png` / `smile.png`) composited
+   come from **`chorusface-capture`** plates (`open.png` / `smile.png`) composited
    inside `mouth_gap` — not invented geometry (see
    [AvatarCapture.md](AvatarCapture.md)).
 5. **Two sync modes:**
@@ -71,7 +71,7 @@ Content-Type: application/json
 ```
 
 - Times are seconds from utterance start.
-- Names may be Oculus lowercase (`sil`, `ou`) or AIFace uppercase (`REST`, `OU`).
+- Names may be Oculus lowercase (`sil`, `ou`) or ChorusFace uppercase (`REST`, `OU`).
 - Unknown names become `REST` (closed), never a invented shape.
 - Use `--voice-trim` if the host’s first audible sample is delayed vs POST time.
 
@@ -90,15 +90,15 @@ Viseme *order* comes from the transcript; *when* comes from energy. See
 
 | Path | How |
 | --- | --- |
-| **User photo (product path)** | `aiface-seed --input portrait.jpg --preview` then `aiface` |
-| **Gemini / Imagen avatar** | Generate a frontal neutral portrait (API or Studio) → save PNG → same `aiface-seed --input …` |
+| **User photo (product path)** | `chorusface-seed --input portrait.jpg --preview` then `chorusface` |
+| **Gemini / Imagen avatar** | Generate a frontal neutral portrait (API or Studio) → save PNG → same `chorusface-seed --input …` |
 | **Bundled demo portrait** | `assets/gemini_style_avatar.png` (generated stand-in when no Gemini key is present) |
 
 Never use `--face-image` alone as a face swap — locks/tissue must be reseeded.
 
 ```bash
-aiface-seed --input assets/gemini_style_avatar.png --preview --require-qa 0.35
-aiface --tts   # local fixture voice only; production uses /voice/*
+chorusface-seed --input assets/gemini_style_avatar.png --preview --require-qa 0.35
+chorusface --tts   # local fixture voice only; production uses /voice/*
 ```
 
 Phase B (in-app hot-swap over the bridge) is still open; today swap = reseed + restart
@@ -129,7 +129,7 @@ or reload the colocated world bundle.
 ## Measuring
 
 ```bash
-aiface-sync --json --budget-ms 250
+chorusface-sync --json --budget-ms 250
 ```
 
 That gates **timing** fidelity. Shape fidelity is judged visually (and later by

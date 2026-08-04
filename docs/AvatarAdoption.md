@@ -4,7 +4,7 @@ Digestion learns **how each cell couples to the GPU** from the user's upload
 (identity photo + open/smile plates + unlocked mouth cluster). Runtime must
 not hard-code one face under `output/worlds/avatar/`.
 
-`aiface.avatar_profile` is the abstraction layer: one world directory in →
+`chorusface.avatar_profile` is the abstraction layer: one world directory in →
 same display stack (L00–L11) + cell plan out.
 
 Related: [`AvatarCapture.md`](AvatarCapture.md) · [`DisplayLayers.md`](DisplayLayers.md) ·
@@ -49,7 +49,7 @@ Capture hard gates still apply — see [`AvatarCapture.md`](AvatarCapture.md).
 ## API
 
 ```python
-from aiface.avatar_profile import open_avatar, list_avatars, meets_requirements
+from chorusface.avatar_profile import open_avatar, list_avatars, meets_requirements
 
 bundle = open_avatar("output/worlds/ava")          # dir or .bds
 bundle.require()                                  # raise if incomplete
@@ -63,7 +63,7 @@ Train writes the profile at the end of `run_all_steps`. Verify refreshes it:
 
 ```powershell
 python scripts/verify_world.py --world output/worlds/my_face
-aiface --demo --world output/worlds/my_face/avatar_face.bds
+chorusface --demo --world output/worlds/my_face/avatar_face.bds
 ```
 
 ## Behavior from the upload

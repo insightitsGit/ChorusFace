@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from aiface.chatbox import frame_layout, hit_test
-from aiface.mouth_speed import clamp_hold_scale
+from chorusface.chatbox import frame_layout, hit_test
+from chorusface.mouth_speed import clamp_hold_scale
 
 
 def test_hold_track_hit_in_panel_header() -> None:

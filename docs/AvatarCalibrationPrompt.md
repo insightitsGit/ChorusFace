@@ -3,7 +3,7 @@
 **This is the standard Side B teacher take (dense kit v3 — mouth + blink).**  
 Do not skip it. Without this video, TickFeed has code paths but **not** the agreed measured accuracy for smile / hi / angry / talk / tongue TH / blink lids.
 
-`calibration_script.json` locks the same beats in code (`aiface.tickfeed.calibration`).
+`calibration_script.json` locks the same beats in code (`chorusface.tickfeed.calibration`).
 
 ---
 

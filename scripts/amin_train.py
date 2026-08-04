@@ -7,7 +7,7 @@
 
 Then play (no Path A seals):
 
-    aiface --demo --tts --world output/worlds/avatar/avatar_face.bds
+    chorusface --demo --tts --world output/worlds/avatar/avatar_face.bds
 """
 
 from __future__ import annotations
@@ -58,8 +58,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=17)
     args = parser.parse_args()
     if bool(args.behavior_only):
-        from aiface.avatar_profile import write_avatar_profile
-        from aiface.behavior.pipeline import train_behavior_from_video
+        from chorusface.avatar_profile import write_avatar_profile
+        from chorusface.behavior.pipeline import train_behavior_from_video
 
         world_dir = Path(args.world_dir).resolve()
         meta = train_behavior_from_video(
@@ -91,7 +91,7 @@ def main() -> int:
     print(json.dumps(report, indent=2))
     print()
     print(
-        "Play: aiface --demo --tts --world "
+        "Play: chorusface --demo --tts --world "
         f"{(Path(args.world_dir) / 'avatar_face.bds').as_posix()}"
     )
     return 0

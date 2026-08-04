@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def patch_frag() -> None:
-    frag_path = ROOT / "src/aiface/shaders/avatar.frag"
+    frag_path = ROOT / "src/chorusface/shaders/avatar.frag"
     stash_path = ROOT / ".cursor_tmp/avatar_stash.frag"
     frag = frag_path.read_text(encoding="utf-8")
     stash = stash_path.read_text(encoding="utf-8")
@@ -47,7 +47,7 @@ def patch_frag() -> None:
 
 
 def patch_capture() -> None:
-    path = ROOT / "src/aiface/capture.py"
+    path = ROOT / "src/chorusface/capture.py"
     text = path.read_text(encoding="utf-8")
     stash = (ROOT / ".cursor_tmp/capture_stash.py").read_text(encoding="utf-8")
 
@@ -142,7 +142,7 @@ def default_eyes_closed_plate_path(world: str | Path) -> Path:
 
 
 def patch_app() -> None:
-    path = ROOT / "src/aiface/app.py"
+    path = ROOT / "src/chorusface/app.py"
     text = path.read_text(encoding="utf-8")
     stash = (ROOT / ".cursor_tmp/app_stash.py").read_text(encoding="utf-8")
 

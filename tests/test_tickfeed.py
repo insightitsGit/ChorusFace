@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from aiface.tickfeed.package import (
+from chorusface.tickfeed.package import (
     FaceBox,
     TickLabels,
     apply_to_state,
@@ -15,15 +15,15 @@ from aiface.tickfeed.package import (
     encode,
     negotiate_hello,
 )
-from aiface.tickfeed.ring import FaceVelocityState, LockstepPlayer
-from aiface.tickfeed.schema import BeatId
-from aiface.tickfeed.gpu_pack import (
+from chorusface.tickfeed.ring import FaceVelocityState, LockstepPlayer
+from chorusface.tickfeed.schema import BeatId
+from chorusface.tickfeed.gpu_pack import (
     dense_uints_from_package,
     ingest_encoding,
     pack_half2_uints,
     sparse_buffers_from_package,
 )
-from aiface.tickfeed.schema import DeltaEncoding, PackageKind, ValueDtype
+from chorusface.tickfeed.schema import DeltaEncoding, PackageKind, ValueDtype
 
 
 def _face() -> FaceBox:

@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import numpy as np
 
-from aiface.tickfeed.driver import TickFeedDriver
-from aiface.tickfeed.force_align import force_align_speech
-from aiface.tickfeed.package import FaceBox, decode, encode
-from aiface.tickfeed.schema import PackageKind
-from aiface.tickfeed.synth import synthesize_velocity
+from chorusface.tickfeed.driver import TickFeedDriver
+from chorusface.tickfeed.force_align import force_align_speech
+from chorusface.tickfeed.package import FaceBox, decode, encode
+from chorusface.tickfeed.schema import PackageKind
+from chorusface.tickfeed.synth import synthesize_velocity
 
 
 def test_synth_and_driver_key_then_delta(monkeypatch) -> None:
-    monkeypatch.setenv("AIFACE_TICKFEED_ABSOLUTE", "0")
+    monkeypatch.setenv("CHORUSFACE_TICKFEED_ABSOLUTE", "0")
     face = FaceBox(10, 20, 32, 24)
     drv = TickFeedDriver.create(face, mouth_uv=(26.0, 35.0))
     k0 = drv.push_drives(tick=0, open_amt=0.0, smile_amt=0.0, phoneme="REST")
@@ -28,8 +28,8 @@ def test_synth_and_driver_key_then_delta(monkeypatch) -> None:
 
 
 def test_absolute_key_opt_in(monkeypatch) -> None:
-    """Absolute KEY every tick is QA-only (AIFACE_TICKFEED_ABSOLUTE=1)."""
-    monkeypatch.setenv("AIFACE_TICKFEED_ABSOLUTE", "1")
+    """Absolute KEY every tick is QA-only (CHORUSFACE_TICKFEED_ABSOLUTE=1)."""
+    monkeypatch.setenv("CHORUSFACE_TICKFEED_ABSOLUTE", "1")
     face = FaceBox(10, 20, 8, 8)
     drv = TickFeedDriver.create(face, mouth_uv=(14.0, 24.0))
     k0 = drv.push_drives(tick=0, open_amt=0.5, smile_amt=0.0, phoneme="AH")
@@ -39,7 +39,7 @@ def test_absolute_key_opt_in(monkeypatch) -> None:
 
 
 def test_lid_amt_roundtrips_in_labels() -> None:
-    from aiface.tickfeed.package import TickLabels
+    from chorusface.tickfeed.package import TickLabels
 
     labels = TickLabels(lid_amt=0.35, brow_amt=0.5, open_amt=0.2)
     back = TickLabels.unpack(labels.pack())
@@ -48,8 +48,8 @@ def test_lid_amt_roundtrips_in_labels() -> None:
 
 
 def test_keyframe_sets_flag_vs_rest() -> None:
-    from aiface.tickfeed.package import build_keyframe
-    from aiface.tickfeed.schema import FLAG_VS_REST
+    from chorusface.tickfeed.package import build_keyframe
+    from chorusface.tickfeed.schema import FLAG_VS_REST
 
     face = FaceBox(0, 0, 4, 4)
     vel = np.zeros((4, 4, 2), dtype=np.float32)
@@ -69,7 +69,7 @@ def test_synth_open_moves_both_lips() -> None:
 
 
 def test_brow_amt_roundtrips_in_labels() -> None:
-    from aiface.tickfeed.package import TickLabels
+    from chorusface.tickfeed.package import TickLabels
 
     labels = TickLabels(brow_amt=0.7, surprise_amt=0.8, emotion_id=2)
     back = TickLabels.unpack(labels.pack())
@@ -97,7 +97,7 @@ def test_look_drive_sole_label_authority() -> None:
 
 
 def test_force_align_falls_back_without_video(tmp_path) -> None:
-    from aiface.tickfeed.calibration import write_calibration_script
+    from chorusface.tickfeed.calibration import write_calibration_script
 
     write_calibration_script(tmp_path)
     payload = force_align_speech(tmp_path, video=tmp_path / "missing.mp4", n_ticks=60)
@@ -202,8 +202,8 @@ def test_rest_labels_zero_field() -> None:
 
 def test_ring_producer_lead_absorbs_jitter() -> None:
     """B3: push tick+depth, pop current — early pops damp until lead fills."""
-    from aiface.tickfeed.ring import FaceVelocityState, LockstepPlayer
-    from aiface.tickfeed.schema import RING_DEPTH
+    from chorusface.tickfeed.ring import FaceVelocityState, LockstepPlayer
+    from chorusface.tickfeed.schema import RING_DEPTH
 
     face = FaceBox(10, 20, 8, 8)
     player = LockstepPlayer(state=FaceVelocityState.zeros(face))
@@ -212,7 +212,7 @@ def test_ring_producer_lead_absorbs_jitter() -> None:
     # Schedule ahead
     values = np.zeros((face.h, face.w, 2), dtype=np.float32)
     values[:] = (0.5, 0.0)
-    from aiface.tickfeed.package import build_keyframe
+    from chorusface.tickfeed.package import build_keyframe
 
     lead = int(RING_DEPTH)
     player.submit(build_keyframe(lead, face, values))
@@ -236,8 +236,8 @@ def test_local_ring_same_tick_has_no_misses() -> None:
 
 
 def test_package_bytes_spool_lane_b(tmp_path) -> None:
-    from aiface.tickfeed.chorus_transport import TickFeedTransport
-    from aiface.tickfeed.package import build_keyframe, encode
+    from chorusface.tickfeed.chorus_transport import TickFeedTransport
+    from chorusface.tickfeed.package import build_keyframe, encode
 
     face = FaceBox(2, 2, 4, 4)
     values = np.zeros((4, 4, 2), dtype=np.float32)
@@ -254,7 +254,7 @@ def test_lane_b_magics_and_crc_survive_float32() -> None:
     """Magics exact in f32; CRC round-trips via uint16 halves (not one u32 float)."""
     import zlib
 
-    from aiface.tickfeed.chorus_transport import (
+    from chorusface.tickfeed.chorus_transport import (
         TPK_CHUNK_MAGIC,
         TPK_REF_MAGIC,
         TickFeedTransport,
@@ -264,7 +264,7 @@ def test_lane_b_magics_and_crc_survive_float32() -> None:
         parse_lane_b_header,
         reassemble_lane_b_chunks,
     )
-    from aiface.tickfeed.package import build_keyframe, encode
+    from chorusface.tickfeed.package import build_keyframe, encode
 
     assert_f32_exact_int(TPK_CHUNK_MAGIC)
     assert_f32_exact_int(TPK_REF_MAGIC)
@@ -305,7 +305,7 @@ def test_lane_b_magics_and_crc_survive_float32() -> None:
 
 def test_angry_beat_keeps_measured_field() -> None:
     """Still-face gate must not erase ANGRY (brow-only LOOK amounts)."""
-    from aiface.tickfeed.schema import EmotionId
+    from chorusface.tickfeed.schema import EmotionId
 
     face = FaceBox(10, 20, 8, 8)
     drv = TickFeedDriver.create(face, mouth_uv=(14.0, 24.0))
@@ -328,7 +328,7 @@ def test_angry_beat_keeps_measured_field() -> None:
 
 def test_wire_loop_code_feeds_ring(tmp_path) -> None:
     """Master ring is empty until ingest_from_wire expands the pushed c_t."""
-    from aiface.tickfeed.chorus_transport import TickFeedTransport
+    from chorusface.tickfeed.chorus_transport import TickFeedTransport
 
     face = FaceBox(0, 0, 8, 8)
 
@@ -366,7 +366,7 @@ def test_wire_loop_code_feeds_ring(tmp_path) -> None:
 
 
 def test_wire_loop_package_feeds_ring(tmp_path) -> None:
-    from aiface.tickfeed.chorus_transport import TickFeedTransport
+    from chorusface.tickfeed.chorus_transport import TickFeedTransport
 
     face = FaceBox(0, 0, 8, 8)
     drv = TickFeedDriver.create(face, mouth_uv=(4.0, 5.0))
@@ -388,7 +388,7 @@ def test_wire_loop_package_feeds_ring(tmp_path) -> None:
 
 
 def test_spool_trim_throttled(tmp_path) -> None:
-    from aiface.tickfeed.chorus_transport import TickFeedTransport
+    from chorusface.tickfeed.chorus_transport import TickFeedTransport
 
     transport = TickFeedTransport(
         world=tmp_path,

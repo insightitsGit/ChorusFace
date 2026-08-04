@@ -2,7 +2,7 @@
 
 Master design: [`AMIN_DESIGN.md`](AMIN_DESIGN.md) · Index: [`README.md`](README.md)
 
-This is the **full dataset contract** for AIFace on NWR: what we extract from a
+This is the **full dataset contract** for ChorusFace on NWR: what we extract from a
 user upload, what we store beside the world, and what the GPU actually
 consumes each tick.
 
@@ -104,7 +104,7 @@ Gap fill needs measured avatar truth first. That package is
 
 | File | Schema | Producer | Consumer | Role |
 | --- | --- | --- | --- | --- |
-| `avatar_observations.json` | `aiface.avatar_observations.v1` | `observation.extract` | `BehaviorDriver` | look anchors + GPU contract |
+| `avatar_observations.json` | `chorusface.avatar_observations.v1` | `observation.extract` | `BehaviorDriver` | look anchors + GPU contract |
 | `avatar_observations.npz` | same | extract | train / QA | numeric pack |
 
 Per look (`rest` / `smile` / `open` / `surprise` + talk samples):
@@ -133,7 +133,7 @@ ML may only interpolate **between** these observations.
 | File | Schema | Producer | Consumer | Feeds |
 | --- | --- | --- | --- | --- |
 | `condition_maps.json` | `amin_loop.mapping.v1` | mapping | jaw table | speech clock |
-| `gpu_display_recipe.json` | `aiface.gpu_display_recipe.v3` | gpu_recipe | knobs / L-path | shader |
+| `gpu_display_recipe.json` | `chorusface.gpu_display_recipe.v3` | gpu_recipe | knobs / L-path | shader |
 
 Global (code, not per-world): `display_layers` L00–L11, Master Lock policy, ±4 op.
 
@@ -185,7 +185,7 @@ python scripts/retrain_behavior.py --video NEW.mp4 --world-dir output/worlds/ava
 
 | File | Schema | Role |
 | --- | --- | --- |
-| `avatar_profile.json` | `aiface.avatar_profile.v1` | Points at all layers; validation gates |
+| `avatar_profile.json` | `chorusface.avatar_profile.v1` | Points at all layers; validation gates |
 | `amin_data_store.json` | `amin_loop.store.v1` | On-disk inventory |
 | `amin_loop_report.json` | `amin_loop.run_all_steps.v1` | Last train audit |
 

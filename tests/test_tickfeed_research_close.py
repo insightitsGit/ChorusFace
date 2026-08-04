@@ -7,15 +7,15 @@ from unittest.mock import patch
 
 import numpy as np
 
-from aiface.tickfeed.calibration import write_calibration_script
-from aiface.tickfeed.chorus_transport import (
+from chorusface.tickfeed.calibration import write_calibration_script
+from chorusface.tickfeed.chorus_transport import (
     TickFeedTransport,
     reassemble_lane_b_chunks,
 )
-from aiface.tickfeed.force_align import force_align_speech
-from aiface.tickfeed.ml.train import fit_all_layers, fit_l4_codec
-from aiface.tickfeed.package import FaceBox, build_keyframe, encode
-from aiface.tts import WordSpan
+from chorusface.tickfeed.force_align import force_align_speech
+from chorusface.tickfeed.ml.train import fit_all_layers, fit_l4_codec
+from chorusface.tickfeed.package import FaceBox, build_keyframe, encode
+from chorusface.tts import WordSpan
 
 
 def test_pull_recv_code_and_package(tmp_path: Path) -> None:
@@ -58,13 +58,13 @@ def test_force_align_whisper_words_teacher(tmp_path: Path) -> None:
     ]
 
     with (
-        patch("aiface.tickfeed.force_align._extract_wav", return_value=True),
+        patch("chorusface.tickfeed.force_align._extract_wav", return_value=True),
         patch(
-            "aiface.tickfeed.force_align._rms_at_60hz",
+            "chorusface.tickfeed.force_align._rms_at_60hz",
             return_value=np.ones(480, dtype=np.float32),
         ),
         patch(
-            "aiface.tickfeed.force_align._whisper_word_spans",
+            "chorusface.tickfeed.force_align._whisper_word_spans",
             return_value=spans,
         ),
     ):
@@ -79,7 +79,7 @@ def test_force_align_whisper_words_teacher(tmp_path: Path) -> None:
 def test_dis_dense_flow_rest_relative() -> None:
     import cv2
 
-    from aiface.tickfeed.collect import _dense_rest_flow
+    from chorusface.tickfeed.collect import _dense_rest_flow
 
     rest = np.zeros((48, 48), dtype=np.uint8)
     rest[20:28, 10:38] = 180
@@ -103,7 +103,7 @@ def test_l4_ae_forced_codec(tmp_path: Path) -> None:
     ).astype(np.float64)[:, :dim]
     idx = np.arange(n)
     train, test = idx[:48], idx[48:]
-    with patch.dict("os.environ", {"AIFACE_TICKFEED_L4_AE": "1"}):
+    with patch.dict("os.environ", {"CHORUSFACE_TICKFEED_L4_AE": "1"}):
         codec, codes, metrics = fit_l4_codec(y, train, test, seed=3)
     assert metrics["kind"] == "ae"
     assert codec["kind"] == "ae"
@@ -116,12 +116,12 @@ def test_l4_ae_forced_codec(tmp_path: Path) -> None:
     for t in range(40):
         vel[t, :, :, 1] = 0.05 * np.sin(t / 3.0)
     conf = np.full((40, face.n_cells), 200, dtype=np.uint8)
-    from aiface.tickfeed.timeline_io import write_face_cell_timeline
+    from chorusface.tickfeed.timeline_io import write_face_cell_timeline
 
     write_calibration_script(tmp_path)
     write_face_cell_timeline(
         tmp_path, face=face, velocity=vel, conf=conf, video_name="t"
     )
-    with patch.dict("os.environ", {"AIFACE_TICKFEED_L4_AE": "1"}):
+    with patch.dict("os.environ", {"CHORUSFACE_TICKFEED_L4_AE": "1"}):
         meta = fit_all_layers(tmp_path)
     assert meta["layers"]["l4"]["kind"] == "ae"

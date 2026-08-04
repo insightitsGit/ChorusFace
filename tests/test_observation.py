@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from aiface.observation.extract import (
+from chorusface.observation.extract import (
     extract_avatar_observations,
     load_avatar_observations,
     save_avatar_observations,
 )
-from aiface.observation.schema import OBS_SCHEMA
+from chorusface.observation.schema import OBS_SCHEMA
 
 
 def test_extract_smile_vector_from_avatar_world() -> None:
@@ -46,8 +46,8 @@ def test_behavior_driver_uses_observed_smile(tmp_path: Path) -> None:
     world = Path("output/worlds/avatar")
     if not (world / "expression_catalog.json").is_file():
         return
-    from aiface.behavior.driver import BehaviorDriver
-    from aiface.observation.extract import (
+    from chorusface.behavior.driver import BehaviorDriver
+    from chorusface.observation.extract import (
         extract_avatar_observations,
         save_avatar_observations,
     )

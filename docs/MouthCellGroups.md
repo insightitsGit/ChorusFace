@@ -2,7 +2,7 @@
 
 Related: [`BDSMotionMap.md`](BDSMotionMap.md) · [`AMIN_STEPS.md`](AMIN_STEPS.md) ·
 [`DisplayLayers.md`](DisplayLayers.md) (groups are **L03**) ·
-`aiface.mouth_groups` · `aiface.mouth_cell_plan`
+`chorusface.mouth_groups` · `chorusface.mouth_cell_plan`
 
 ## Vision
 
@@ -50,7 +50,7 @@ a table (`retarget_group`) — not hardcoded forever.
 | REST | idle | idle | off | off |
 
 Full tables live in `DEFAULT_VISEME_GROUP_RECIPES`
-(`src/aiface/mouth_groups.py`).
+(`src/chorusface/mouth_groups.py`).
 
 ## Detect → assign → drive
 

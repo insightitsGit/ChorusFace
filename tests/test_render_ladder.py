@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aiface.tickfeed.timeline_io import SOURCE_MEASURED, SOURCE_SYNTH
+from chorusface.tickfeed.timeline_io import SOURCE_MEASURED, SOURCE_SYNTH
 
 
 def test_step1_l5_gap_never_on_measured() -> None:
@@ -20,7 +20,7 @@ def test_step1_l5_gap_never_on_measured() -> None:
 
 def test_step1_driver_source_matches_policy() -> None:
     """Guard against accidental re-introduction of measured L5 blend."""
-    text = Path("src/aiface/tickfeed/driver.py").read_text(encoding="utf-8")
+    text = Path("src/chorusface/tickfeed/driver.py").read_text(encoding="utf-8")
     assert "allow_gap = src_code != SOURCE_MEASURED" in text
     # Old policy blended on low conf even when measured — must stay gone.
     assert "mean_conf < 90.0\n                or src_code != SOURCE_MEASURED" not in text
@@ -28,7 +28,7 @@ def test_step1_driver_source_matches_policy() -> None:
 
 def test_step2_fidelity_hud_flag_and_snapshot_wired() -> None:
     """HUD is opt-in overlay; parked P-A knobs must stay out of app/shader."""
-    app_text = Path("src/aiface/app.py").read_text(encoding="utf-8")
+    app_text = Path("src/chorusface/app.py").read_text(encoding="utf-8")
     demo_text = Path("scripts/run_tickfeed_demo.py").read_text(encoding="utf-8")
     assert '"--fidelity-hud"' in app_text
     assert '"--fidelity-hud"' in demo_text
@@ -40,15 +40,15 @@ def test_step2_fidelity_hud_flag_and_snapshot_wired() -> None:
     assert "MouthMotionState" in app_text
     assert "mouth_muscles" not in app_text
     assert "_tickfeed_jaw_residual" not in app_text
-    frag = Path("src/aiface/shaders/avatar.frag").read_text(encoding="utf-8")
+    frag = Path("src/chorusface/shaders/avatar.frag").read_text(encoding="utf-8")
     assert "teeth_mask" not in frag
     assert "tongue_mask" not in frag
 
 
 def test_dense_kit_script_has_tongue_th_and_blink() -> None:
     """Dense calibration contract: tongue TH + deliberate BLINK lid window."""
-    from aiface.tickfeed.calibration import calibration_script_payload
-    from aiface.tickfeed.schema import BeatId
+    from chorusface.tickfeed.calibration import calibration_script_payload
+    from chorusface.tickfeed.schema import BeatId
 
     script = calibration_script_payload()
     assert int(BeatId.TONGUE_TH) == 7
@@ -63,7 +63,7 @@ def test_dense_kit_script_has_tongue_th_and_blink() -> None:
 
 def test_step4_plate_b_mirrors_a_when_mix_zero() -> None:
     """Step 4: upload binds plate_b=plate_a only when mix is already ~0."""
-    text = Path("src/aiface/app.py").read_text(encoding="utf-8")
+    text = Path("src/chorusface/app.py").read_text(encoding="utf-8")
     assert "if mix_ab <= 1e-6:" in text
     assert "plate_b = plate_a" in text
     # Must not force mix=0 / always-nearest (failed fidelity bundle).
@@ -73,12 +73,12 @@ def test_step4_plate_b_mirrors_a_when_mix_zero() -> None:
 
 def test_step3_ownership_hard_snap_wired() -> None:
     """Step 3: refresh path passes hard_snap; resolver matches GPU commit."""
-    app_text = Path("src/aiface/app.py").read_text(encoding="utf-8")
-    owner_text = Path("src/aiface/mouth_owner.py").read_text(encoding="utf-8")
+    app_text = Path("src/chorusface/app.py").read_text(encoding="utf-8")
+    owner_text = Path("src/chorusface/mouth_owner.py").read_text(encoding="utf-8")
     assert "hard_snap=hard," in app_text
     assert "mouth_state=str(getattr(self, \"_mouth_transition\", \"REST\"))" in app_text
     assert "commit_plate_amount(open_n, mouth_state)" in owner_text
-    from aiface.mouth_owner import commit_plate_amount, resolve_mouth_ownership
+    from chorusface.mouth_owner import commit_plate_amount, resolve_mouth_ownership
 
     own = resolve_mouth_ownership(
         openness=0.40,
@@ -91,7 +91,7 @@ def test_step3_ownership_hard_snap_wired() -> None:
 
 def test_step2_fidelity_snapshot_keys() -> None:
     """Snapshot shape is stable for status/HUD consumers."""
-    from aiface.app import AvatarFaceApp
+    from chorusface.app import AvatarFaceApp
 
     class _HudHost:
         _plate_pair = (3, 4)

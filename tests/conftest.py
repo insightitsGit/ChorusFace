@@ -10,7 +10,7 @@ from typing import Callable, Iterator
 import numpy as np
 import pytest
 
-from aiface.paths import DEFAULT_AVATAR_FACE
+from chorusface.paths import DEFAULT_AVATAR_FACE
 
 FAKE_SPEECH_RATE = 24_000
 
@@ -34,8 +34,8 @@ def fake_speech(
     Set ``honour_punctuation`` false for a voice that reads straight through its
     own commas, which real synthesisers do and which the channel has to survive.
     """
-    from aiface.audio import AudioClip
-    from aiface.speech import tokenize_speech
+    from chorusface.audio import AudioClip
+    from chorusface.speech import tokenize_speech
 
     rng = np.random.default_rng(7)
     pieces = [np.zeros(int(lead * sample_rate), dtype=np.float32)]
@@ -78,7 +78,7 @@ def _default_namespace(config_class: type, **overrides: object) -> argparse.Name
 def synthetic_world(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """A deterministic synthetic seed bundle: world, part atlas, and portrait."""
     pytest.importorskip("cv2")
-    from aiface.seed import build_avatar_seed, write_seed_bundle
+    from chorusface.seed import build_avatar_seed, write_seed_bundle
 
     directory = tmp_path_factory.mktemp("avatar")
     written = write_seed_bundle(
@@ -97,10 +97,10 @@ def headless_app(synthetic_world: Path) -> Iterator[object]:
     moderngl_window = pytest.importorskip("moderngl_window")
     from moderngl_window.context.headless import Window
 
-    from aiface.app import AvatarFaceApp
+    from chorusface.app import AvatarFaceApp
 
     try:
-        window = Window(gl_version=(4, 3), size=(512, 512), title="aiface-test")
+        window = Window(gl_version=(4, 3), size=(512, 512), title="chorusface-test")
     except Exception as exc:  # noqa: BLE001 - any driver failure means "no GPU here"
         pytest.skip(f"no headless OpenGL 4.3 context: {exc}")
 

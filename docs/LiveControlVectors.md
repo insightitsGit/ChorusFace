@@ -70,4 +70,4 @@ Playback = **same recipe**, driven by tables + live vectors.
 - [`AvatarCellDataflow.md`](AvatarCellDataflow.md)  
 - [`AMIN_DATA_STORE.md`](AMIN_DATA_STORE.md)  
 - [`AvatarCapture.md`](AvatarCapture.md)  
-- `src/aiface/live_vector/` · `scripts/amin_train.py`  
+- `src/chorusface/live_vector/` · `scripts/amin_train.py`  

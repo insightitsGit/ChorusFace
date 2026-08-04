@@ -6,7 +6,7 @@ Offline (always)::
 
 Live (demo must be running with --bridge)::
 
-    set AIFACE_BRIDGE_TOKEN=...
+    set CHORUSFACE_BRIDGE_TOKEN=...
     python scripts/probe_mouth_live.py
 """
 
@@ -17,7 +17,7 @@ import os
 import urllib.error
 import urllib.request
 
-from aiface.mouth_owner import resolve_mouth_ownership
+from chorusface.mouth_owner import resolve_mouth_ownership
 
 
 CASES = (
@@ -46,10 +46,10 @@ def _offline() -> None:
 
 
 def _live() -> None:
-    token = os.environ.get("AIFACE_BRIDGE_TOKEN", "").strip()
-    host = os.environ.get("AIFACE_BRIDGE_URL", "http://127.0.0.1:8766").rstrip("/")
+    token = os.environ.get("CHORUSFACE_BRIDGE_TOKEN", "").strip()
+    host = os.environ.get("CHORUSFACE_BRIDGE_URL", "http://127.0.0.1:8766").rstrip("/")
     if not token:
-        print("\n=== Live /probe skipped (set AIFACE_BRIDGE_TOKEN) ===")
+        print("\n=== Live /probe skipped (set CHORUSFACE_BRIDGE_TOKEN) ===")
         return
     req = urllib.request.Request(
         f"{host}/probe",

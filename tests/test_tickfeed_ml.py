@@ -6,23 +6,23 @@ from pathlib import Path
 
 import numpy as np
 
-from aiface.tickfeed.calibration import (
+from chorusface.tickfeed.calibration import (
     beat_at_time,
     calibration_script_payload,
     write_calibration_script,
 )
-from aiface.tickfeed.cosmetics import load_cosmetic_prefs, write_cosmetic_prefs
-from aiface.tickfeed.driver import TickFeedDriver
-from aiface.tickfeed.ml.runtime import TickFeedMLStack
-from aiface.tickfeed.ml.train import fit_all_layers
-from aiface.tickfeed.package import FaceBox
-from aiface.tickfeed.schema import PackageKind, BeatId
+from chorusface.tickfeed.cosmetics import load_cosmetic_prefs, write_cosmetic_prefs
+from chorusface.tickfeed.driver import TickFeedDriver
+from chorusface.tickfeed.ml.runtime import TickFeedMLStack
+from chorusface.tickfeed.ml.train import fit_all_layers
+from chorusface.tickfeed.package import FaceBox
+from chorusface.tickfeed.schema import PackageKind, BeatId
 
 
 def test_calibration_script_beats() -> None:
     script = calibration_script_payload()
     assert script["duration_s"] == 8.0
-    assert script["schema"] == "aiface.calibration_script.v3"
+    assert script["schema"] == "chorusface.calibration_script.v3"
     assert script["dense_kit"] is True
     assert script["blink_kit"] is True
     assert beat_at_time(script, 1.0)["id"] == "SMILE"
@@ -62,7 +62,7 @@ def test_ml_train_load_and_driver(tmp_path: Path) -> None:
         tick_rate=np.asarray([60.0]),
     )
     write_calibration_script(tmp_path)
-    from aiface.tickfeed.timeline_io import write_face_cell_timeline
+    from chorusface.tickfeed.timeline_io import write_face_cell_timeline
 
     write_face_cell_timeline(
         tmp_path,

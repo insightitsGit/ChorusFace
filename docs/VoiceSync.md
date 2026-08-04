@@ -13,7 +13,7 @@ system recognises phonemes from a waveform.
 That split is deliberate. Acoustic phoneme recognition is a whole research
 problem, it needs a model, and it would be strictly worse than reading the text
 the caller already has. So the viseme sequence comes from
-`aiface.speech.tokenize_speech` — the same phonetic source of truth the offline
+`chorusface.speech.tokenize_speech` — the same phonetic source of truth the offline
 path uses — and the arriving energy decides only where each viseme lands.
 
 The one consequence worth stating plainly: audio the transcript does not cover
@@ -96,9 +96,9 @@ Run one utterance through both paths and subtract. That is the entire idea, and
 it is the only honest way to state streaming quality:
 
 ```bash
-aiface-sync                                     # fixture set, local voice
-aiface-sync --text "Yes." --wav clip.wav --detail
-aiface-sync --json --budget-ms 250              # exit 1 if the budget is missed
+chorusface-sync                                     # fixture set, local voice
+chorusface-sync --text "Yes." --wav clip.wav --detail
+chorusface-sync --json --budget-ms 250              # exit 1 if the budget is missed
 ```
 
 | Number | What it means | Can a caller fix it? |

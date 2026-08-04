@@ -9,3 +9,16 @@ dist/
 build/
 .DS_Store
 Thumbs.db
+
+# Local API key vault — NEVER commit plaintext or master keys
+secrets/*
+!secrets/README.md
+**/.master_key
+**/api_keys.vault.enc
+**/api_keys.handoff.local.txt
+**/api_keys.hashes.json
+**/api_key_bindings.json
+**/*.handoff.local.*
+.env
+.env.*
+!.env.example

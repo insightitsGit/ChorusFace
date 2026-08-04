@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from aiface.cell_cluster import (
+from chorusface.cell_cluster import (
     CELL_RADIUS,
     cell_impulse,
     cluster_flow,
@@ -16,7 +16,7 @@ from aiface.cell_cluster import (
     to_commands,
     toward_neighbor,
 )
-from aiface.cell_cluster import CellCluster, CellClusterIndex
+from chorusface.cell_cluster import CellCluster, CellClusterIndex
 from amin_loop.control import validate_impulse
 
 

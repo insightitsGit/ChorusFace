@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from aiface.mouth_owner import snap_midband_openness
-from aiface.plates import OPEN_TOOTH_VISEMES, VISEME_OPENNESS
+from chorusface.mouth_owner import snap_midband_openness
+from chorusface.plates import OPEN_TOOTH_VISEMES, VISEME_OPENNESS
 
 
 def _atlas_openness_for_tag(tag: str, measured: float) -> float:
@@ -35,8 +35,8 @@ def test_rf5_closed_plates_stay_sealed() -> None:
 def test_rf5_capture_source_has_policy() -> None:
     from pathlib import Path
 
-    text = Path("src/aiface/capture.py").read_text(encoding="utf-8")
+    text = Path("src/chorusface/capture.py").read_text(encoding="utf-8")
     assert "RF5: plate.openness must follow viseme ladder" in text
     assert "tag in OPEN_TOOTH_VISEMES" in text
-    plates = Path("src/aiface/plates.py").read_text(encoding="utf-8")
+    plates = Path("src/chorusface/plates.py").read_text(encoding="utf-8")
     assert 'viseme_to_plate["REST"] = int(viseme_to_plate["CLOSED"])' in plates

@@ -113,7 +113,7 @@ def check_behavior_track(report: Report, world_dir: Path) -> None:
 
 def check_avatar_adoption(report: Report, world_dir: Path) -> None:
     """Adoption contract: any world dir that passes can plug into the GPU path."""
-    from aiface.avatar_profile import (
+    from chorusface.avatar_profile import (
         PROFILE_NAME,
         open_avatar,
         write_avatar_profile,
@@ -273,7 +273,7 @@ def check_plate_atlas(report: Report, world_dir: Path) -> None:
 
 def check_world_and_regions(report: Report, world_dir: Path) -> None:
     """Master Lock statistics + the digested mouth object address."""
-    from aiface.runtime.bds import HUMAN_LOCK_CHANNEL, load_bds
+    from chorusface.runtime.bds import HUMAN_LOCK_CHANNEL, load_bds
 
     try:
         header, grid = load_bds(world_dir / "avatar_face.bds")
@@ -420,7 +420,7 @@ def check_condition_maps_and_recipe(report: Report, world_dir: Path) -> None:
     knobs = (recipe or {}).get("knobs") or {}
     needed = {"open_jaw_full", "atlas_strength", "field_warp_gain", "plate_sharpness"}
     missing = sorted(needed - set(knobs))
-    if not recipe or str(recipe.get("schema", "")) != "aiface.gpu_display_recipe.v2":
+    if not recipe or str(recipe.get("schema", "")) != "chorusface.gpu_display_recipe.v2":
         report.add(FAIL, "display-recipe", "wrong/missing schema — re-run amin_train")
     elif missing:
         report.add(WARN, "display-recipe", f"knobs missing {missing} — re-run amin_train")

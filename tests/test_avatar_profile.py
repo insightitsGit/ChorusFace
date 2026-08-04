@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from aiface.avatar_profile import (
+from chorusface.avatar_profile import (
     MIN_MOUTH_CELLS,
     PROFILE_NAME,
     PROFILE_SCHEMA,
@@ -21,13 +21,13 @@ from aiface.avatar_profile import (
     validate_avatar_root,
     write_avatar_profile,
 )
-from aiface.runtime.bds import HUMAN_LOCK_CHANNEL
-from aiface.runtime.recipe import DisplayRecipe
+from chorusface.runtime.bds import HUMAN_LOCK_CHANNEL
+from chorusface.runtime.recipe import DisplayRecipe
 
 
 def _write_minimal_bds(path: Path, *, mouth_cells: int = 64) -> None:
     """Tiny HxWx32 grid with a permeable unlocked mouth cluster."""
-    from aiface.runtime.bds import save_bds
+    from chorusface.runtime.bds import save_bds
 
     h = w = 64
     grid = np.zeros((h, w, 32), dtype=np.float32)

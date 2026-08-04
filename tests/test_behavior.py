@@ -6,17 +6,17 @@ from pathlib import Path
 
 import numpy as np
 
-from aiface.behavior.driver import BehaviorDriver
-from aiface.behavior.schema import (
+from chorusface.behavior.driver import BehaviorDriver
+from chorusface.behavior.schema import (
     CONTROL_DIM,
     CONTROL_NAMES,
     FEATURE_DIM,
     landmarks_to_controls,
 )
-from aiface.behavior.track import TransitionTrack, save_transition_track
-from aiface.behavior.train import fit_behavior_model
-from aiface.mouth_cell_plan import MouthCellPlan, viseme_flow
-from aiface.cell_cluster import CellCluster
+from chorusface.behavior.track import TransitionTrack, save_transition_track
+from chorusface.behavior.train import fit_behavior_model
+from chorusface.mouth_cell_plan import MouthCellPlan, viseme_flow
+from chorusface.cell_cluster import CellCluster
 
 
 def _fake_track(n: int = 40, fps: float = 12.0) -> TransitionTrack:
@@ -106,7 +106,7 @@ def test_apply_behavior_flow_on_plan() -> None:
         [[10 + i, 20 + (i % 3)] for i in range(40)], dtype=np.int32
     )
     cluster = CellCluster(region_id=0, name="mouth_unlocked", cells=cells)
-    from aiface.cell_cluster import CellClusterIndex
+    from chorusface.cell_cluster import CellClusterIndex
 
     index = CellClusterIndex(width=64, height=64, clusters=[cluster])
     for x, y in cells.tolist():

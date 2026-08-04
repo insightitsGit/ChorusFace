@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from aiface.cell_cluster import CellCluster, CellClusterIndex
-from aiface.mouth_cell_plan import MouthCellPlan, detect_mouth_cells
-from aiface.mouth_groups import (
+from chorusface.cell_cluster import CellCluster, CellClusterIndex
+from chorusface.mouth_cell_plan import MouthCellPlan, detect_mouth_cells
+from chorusface.mouth_groups import (
     GroupMotion,
     assign_groups_geometric,
     build_mouth_group_plan,

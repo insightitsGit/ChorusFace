@@ -1,0 +1,17 @@
+.git
+.cursor
+.cursor_tmp
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+.venv
+venv
+output/previews
+output/**/*.mp4
+assets
+tests
+docs
+*.md
+!README.md
+vendor
+agent-transcripts

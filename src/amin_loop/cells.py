@@ -1,12 +1,12 @@
-"""Step 2 — 32-float cell properties (NWR schema, shared with aiface.runtime)."""
+"""Step 2 — 32-float cell properties (NWR schema, shared with chorusface.runtime)."""
 
 from __future__ import annotations
 
 from typing import Final
 
-# Prefer aiface runtime schema (same contract as vendor/nwr).
+# Prefer chorusface runtime schema (same contract as vendor/nwr).
 try:
-    from aiface.runtime.bds import CHANNEL_NAMES, CHANNEL_SCHEMA, HUMAN_LOCK_CHANNEL
+    from chorusface.runtime.bds import CHANNEL_NAMES, CHANNEL_SCHEMA, HUMAN_LOCK_CHANNEL
 except ImportError:  # pragma: no cover
     CHANNEL_SCHEMA = {
         "kinematics": [

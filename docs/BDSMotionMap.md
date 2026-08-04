@@ -2,24 +2,24 @@
 
 Investigation artifact after reviewing NWR design docs
 (`C:/code/NWR/docs/FinalDesign.md`, `AI_API.md`, README) and probing the
-AIFace avatar with phoneme / emotion / intent signals
+ChorusFace avatar with phoneme / emotion / intent signals
 (`scripts/probe_bds_motion.py` → `output/worlds/avatar/bds_motion_probe.json`).
 
 Related design: [`DisplayLayers.md`](DisplayLayers.md) (L01 field under plates) ·
 [`MouthCellGroups.md`](MouthCellGroups.md) · [`AvatarBehavior.md`](AvatarBehavior.md)
 
-## 1. Positioning (NWR parent vs AIFace child)
+## 1. Positioning (NWR parent vs ChorusFace child)
 
-| Rule (from NWR) | AIFace stance |
+| Rule (from NWR) | ChorusFace stance |
 | --- | --- |
 | 32-channel `.bds`, Master Lock ch.31 | Inherited; do not redefine |
 | AI proposes commands; GPU validates | Speech → muscle impulses → `±4` velocity on unlocked cells |
 | Human authority wins; AI cannot mint locks | Same |
 | Full NWR tick = physics + semantic + constraint | **Constraint-only** — no advection (would smear the face) |
-| Rendering may use a trained material MLP | AIFace warps an **immutable photograph** instead |
+| Rendering may use a trained material MLP | ChorusFace warps an **immutable photograph** instead |
 
 NWR purpose quote (FinalDesign §1): prove a GPU-resident field with authority,
-and that *rendering can be driven by a trained network*. AIFace uses the
+and that *rendering can be driven by a trained network*. ChorusFace uses the
 authority substrate but **does not** regenerate face RGB from an MLP each frame.
 Identity is the seeded albedo + Master Lock.
 
@@ -46,7 +46,7 @@ lock fingerprints stable across all signal probes.
 chat / audio / bridge
         │
         ▼
-  viseme + emotion + intent     (aiface.speech / biomechanics)
+  viseme + emotion + intent     (chorusface.speech / biomechanics)
         │
         ├──────────────────────────────┐
         ▼                              ▼
@@ -100,7 +100,7 @@ jaw still comes from the phoneme jaw target path.
 
 | Surface | Role |
 | --- | --- |
-| `aiface.cell_cluster` | Full mouth cell index from `.bds`; cell / cluster / neighbor drives |
+| `chorusface.cell_cluster` | Full mouth cell index from `.bds`; cell / cluster / neighbor drives |
 | `GET /cells` | List controllable regions + cell counts |
 | `POST /cells/drive` | `{mode:cell\|cluster\|neighbor\|batch, ...}` → AI ±4 at radius 0.5 |
 | `constraint.comp` | Unlocked soft cells exchange **velocity only** with Moore neighbors |
@@ -110,7 +110,7 @@ Command budget raised to **256 / tick** so a sweep can address many cells per fr
 
 ## 6. Where ML fits (without breaking positioning)
 
-Aligned with NWR’s “AI proposes, runtime validates” and AIFace identity rules:
+Aligned with NWR’s “AI proposes, runtime validates” and ChorusFace identity rules:
 
 ```text
 video take  →  labeled control trajectories
@@ -140,12 +140,12 @@ python scripts/probe_bds_motion.py
 # writes output/worlds/avatar/bds_motion_probe.json
 ```
 
-Live bridge (optional): `aiface --demo --tts --bridge` then `POST /speak` with
+Live bridge (optional): `chorusface --demo --tts --bridge` then `POST /speak` with
 bearer token — same speech path, GPU-visible.
 
 ## 8. Mouth ownership status (NWR-first — no Path A seals)
 
-Single status module: [`aiface/mouth_owner.py`](../src/aiface/mouth_owner.py).
+Single status module: [`chorusface/mouth_owner.py`](../src/chorusface/mouth_owner.py).
 Per [`AMIN_DESIGN.md`](AMIN_DESIGN.md) this is **reporting only**: it never
 blocks jaw, muscle warp, or field velocity. Master Lock (ch 31) on the GPU is
 the only hard reject, and field writes always propose ±4 impulses.
@@ -163,13 +163,13 @@ the only hard reject, and field writes always propose ±4 impulses.
 With the demo bridge on:
 
 ```bash
-aiface --demo --tts --bridge --world output/worlds/avatar/avatar_face.bds
+chorusface --demo --tts --bridge --world output/worlds/avatar/avatar_face.bds
 # note the printed Bearer token
 curl -s -H "Authorization: Bearer TOKEN" http://127.0.0.1:8766/probe
 ```
 
 Or: `python scripts/probe_mouth_live.py` (offline ownership table; hits `/probe`
-when `AIFACE_BRIDGE_TOKEN` is set).
+when `CHORUSFACE_BRIDGE_TOKEN` is set).
 
 `GET /status` also includes `mouth_owners` / `mouth_ownership`.
 
@@ -178,7 +178,7 @@ when `AIFACE_BRIDGE_TOKEN` is set).
 | Area | Status |
 | --- | --- |
 | Schema + Master Lock (NWR docs) | **Yes** |
-| AIFace constraint-only vs full physics | **Yes** |
+| ChorusFace constraint-only vs full physics | **Yes** |
 | What speech is allowed to write | **Yes** (velocity on unlocked cells) |
 | What actually moves pixels today | **Yes** (muscle warp + jaw + NWR field velocity warp; plates on top) |
 | Who owns the mouth each frame | **Yes** — `mouth_owner` + `/probe` |

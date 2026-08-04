@@ -41,6 +41,6 @@ def test_blink_evidence_accepts_near_closed() -> None:
 
 
 def test_shader_declares_eye_closed_plate() -> None:
-    source = (ROOT / "src/aiface/shaders/avatar.frag").read_text(encoding="utf-8")
+    source = (ROOT / "src/chorusface/shaders/avatar.frag").read_text(encoding="utf-8")
     assert "avatar_eye_closed_plate" in source
     assert "avatar_eye_closed_ready" in source

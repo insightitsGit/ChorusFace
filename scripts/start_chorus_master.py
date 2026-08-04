@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start CHORUS control plane + AIFace master target (vector consume spool)."""
+"""Start CHORUS control plane + ChorusFace master target (vector consume spool)."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def main() -> int:
     env["CHORUS_TARGET_HOST"] = "localhost"
     env["CHORUS_TARGET_PORT"] = TARGET_PORT
     env["TARGET_PORT"] = TARGET_PORT
-    env["AIFACE_CHORUS_RECV_SPOOL"] = str(RECV)
+    env["CHORUSFACE_CHORUS_RECV_SPOOL"] = str(RECV)
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONPATH"] = str(ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
     RECV.mkdir(parents=True, exist_ok=True)
@@ -36,7 +36,7 @@ def main() -> int:
     )
     time.sleep(0.8)
     target = subprocess.Popen(
-        [sys.executable, "-m", "aiface.tickfeed.chorus_master"],
+        [sys.executable, "-m", "chorusface.tickfeed.chorus_master"],
         cwd=str(ROOT),
         env=env,
     )

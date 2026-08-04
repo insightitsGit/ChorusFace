@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from aiface.tickfeed.collect import prepare_face_timeline
+from chorusface.tickfeed.collect import prepare_face_timeline
 
 
 def main() -> None:

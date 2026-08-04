@@ -4,16 +4,16 @@ Full design: [`AMIN_DESIGN.md`](AMIN_DESIGN.md) · Doc index: [`README.md`](READ
 
 | # | Step | Design idea | Implementation |
 | --- | --- | --- | --- |
-| 1 | What is NWR | Propose → validate → GPU field | `vendor/nwr`, `aiface.runtime` |
+| 1 | What is NWR | Propose → validate → GPU field | `vendor/nwr`, `chorusface.runtime` |
 | 2 | 32 floats / cell | Kinematics / material / intent / rules | `amin_loop.cells`, `runtime.bds` |
 | 3 | Control + neighbors | ±4 impulses; Moore clusters | `amin_loop.control` |
-| 4 | Digest → objects | Video/photo → `.bds` + plates | `amin_loop.digest`, `aiface.capture` |
+| 4 | Digest → objects | Video/photo → `.bds` + plates | `amin_loop.digest`, `chorusface.capture` |
 | 5 | x,y,(z),t | 2D grid; Z = channel; t = video/speech | `amin_loop.regions` |
 | 6 | Looks + maps | Real plates; word/sound/emotion tables | `amin_loop.mapping`, plates |
 | 7 | Props per region | mean[32] + lock + samples | `region_catalog.json` |
 | 8 | GPU recipe | Same display path at play (L00–L11) | `gpu_recipe`, `display_layers`, `avatar.frag` |
-| 9 | Live vectors | Video → controls → model | `aiface.live_vector` |
-| 10 | Train + play | One pipeline | `scripts/amin_train.py`, `aiface` |
+| 9 | Live vectors | Video → controls → model | `chorusface.live_vector` |
+| 10 | Train + play | One pipeline | `scripts/amin_train.py`, `chorusface` |
 
 See also: [`DisplayLayers.md`](DisplayLayers.md) · [`MouthCellGroups.md`](MouthCellGroups.md) ·
 [`AvatarAdoption.md`](AvatarAdoption.md) · [`AvatarBehavior.md`](AvatarBehavior.md)
@@ -97,11 +97,11 @@ The residual "blurry mouth" was compositing, not resolution:
   recipes and `retarget_group` so teeth vs lips can change later — see
   [`MouthCellGroups.md`](MouthCellGroups.md).
 - **Display layer hierarchy (L00–L11)**: one ordered stack
-  field → look plates → presentation, coded in `aiface.display_layers`,
+  field → look plates → presentation, coded in `chorusface.display_layers`,
   mirrored in `avatar.frag` comments and `gpu_display_recipe.json`. Per-tick
   `FrameLayerState` skips idle L03 cell work and marks atlas-owned capture /
   cavity inactive for consistent realtime — see [`DisplayLayers.md`](DisplayLayers.md).
-- **Avatar adoption**: `aiface.avatar_profile` abstracts any world directory that
+- **Avatar adoption**: `chorusface.avatar_profile` abstracts any world directory that
   meets requirements (`.bds` + identity + open/smile + `mouth_unlocked` cells).
   Train writes `avatar_profile.json`; runtime `open_avatar()` loads the bundle —
   see [`AvatarAdoption.md`](AvatarAdoption.md).
@@ -124,7 +124,7 @@ The residual "blurry mouth" was compositing, not resolution:
 
 ```powershell
 python scripts/amin_train.py --video assets/avatar_video_inputs/Generate_a_single_continuous_.mp4
-aiface --demo --tts --gpu-log --world output/worlds/avatar/avatar_face.bds
+chorusface --demo --tts --gpu-log --world output/worlds/avatar/avatar_face.bds
 ```
 
 `--gpu-log` writes 60 Hz GPU object drives to `output/previews/gpu_tick.log` (stdout every 12 ticks).

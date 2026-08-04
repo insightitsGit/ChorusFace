@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from aiface.live_vector.pipeline import train_avatar_from_video  # noqa: E402
+from chorusface.live_vector.pipeline import train_avatar_from_video  # noqa: E402
 
 
 def main() -> int:

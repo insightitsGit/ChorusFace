@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from aiface.mouth_timeline import (
+from chorusface.mouth_timeline import (
     MAX_BRIDGE_GAP_S,
     MIN_SPEECH_DWELL_S,
     MouthLayerTimeline,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from aiface.plates import score_frame_for_viseme
+from chorusface.plates import score_frame_for_viseme
 
 
 def _frame(*, mouth_open: float, smile: float, t: float, teeth: float = 0.5) -> object:
@@ -32,8 +32,8 @@ def test_rf6_aa_prefers_open_beat_window() -> None:
 def test_rf6_capture_thicker_vowel_matte() -> None:
     from pathlib import Path
 
-    text = Path("src/aiface/capture.py").read_text(encoding="utf-8")
+    text = Path("src/chorusface/capture.py").read_text(encoding="utf-8")
     assert "RF6: vowels need a taller oral disk" in text
     assert "matte_open = max(matte_open, 0.38)" in text
-    plates = Path("src/aiface/plates.py").read_text(encoding="utf-8")
+    plates = Path("src/chorusface/plates.py").read_text(encoding="utf-8")
     assert "_VISEME_TIME_HINTS" in plates

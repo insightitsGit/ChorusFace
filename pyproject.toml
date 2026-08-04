@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "aiface"
-version = "0.1.0"
-description = "Chat-driven photoreal avatar face with biomechanical muscle simulation on a locked GPU field substrate"
+name = "chorusface"
+version = "0.2.0b1"
+description = "Host-driven photoreal avatar face (product beta) with TickFeed LOOK/FIELD and FaceBridge /speak"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "insightits" }]
@@ -32,6 +32,7 @@ dependencies = [
     "moderngl-window>=2.4",
     "numpy>=1.24",
     "Pillow>=10.0",
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]
@@ -53,21 +54,25 @@ ml = [
 ]
 
 [project.scripts]
-aiface = "aiface.cli:main_app"
-aiface-seed = "aiface.cli:main_seed"
-aiface-capture = "aiface.cli:main_capture"
-aiface-sync = "aiface.cli:main_sync"
+chorusface = "chorusface.cli:main_app"
+chorusface-beta = "chorusface.cli:main_beta"
+chorusface-service = "chorusface.cli:main_service"
+chorusface-host = "chorusface.host_client:main"
+chorusface-prism = "chorusface.prism_adapter:main"
+chorusface-seed = "chorusface.cli:main_seed"
+chorusface-capture = "chorusface.cli:main_capture"
+chorusface-sync = "chorusface.cli:main_sync"
 amin-train = "amin_loop.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/insightitsGit/AIFace"
-Source = "https://github.com/insightitsGit/AIFace"
+Homepage = "https://github.com/insightitsGit/ChorusFace"
+Source = "https://github.com/insightitsGit/ChorusFace"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-aiface = [
+chorusface = [
     "shaders/*.vert",
     "shaders/*.frag",
     "shaders/*.comp",

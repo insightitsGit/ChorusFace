@@ -56,16 +56,16 @@ Optional stills if you have no video: three photos with the **same framing** —
 
 ```bash
 # Video take (preferred)
-aiface-capture --video face_take.mp4 --output output/worlds/avatar/
+chorusface-capture --video face_take.mp4 --output output/worlds/avatar/
 
 # Stills fallback (same hard gates; use --allow-soft only for slight blur)
-aiface-capture --rest r.png --smile s.png --open o.png --output output/worlds/avatar/
+chorusface-capture --rest r.png --smile s.png --open o.png --output output/worlds/avatar/
 
 # Play only after QA looks good
-aiface --world output/worlds/avatar/avatar_face.bds
+chorusface --world output/worlds/avatar/avatar_face.bds
 
 # Any other world dir that meets adoption requirements works the same way
-aiface --world output/worlds/my_face/avatar_face.bds
+chorusface --world output/worlds/my_face/avatar_face.bds
 ```
 
 Adoption contract (portable world dirs): [`AvatarAdoption.md`](AvatarAdoption.md).

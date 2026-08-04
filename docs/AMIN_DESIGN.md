@@ -49,7 +49,7 @@ flowchart LR
 | | |
 | --- | --- |
 | **Design** | Neural World Runtime: AI proposes commands → runtime validates → GPU executes on a field of cells. |
-| **Code** | `vendor/nwr/`, `aiface.runtime` (field, commands, shaders, `.bds`) |
+| **Code** | `vendor/nwr/`, `chorusface.runtime` (field, commands, shaders, `.bds`) |
 | **Docs** | This file, `Architecture.md`, README |
 
 ### Step 2 — 32 floats per cell
@@ -57,7 +57,7 @@ flowchart LR
 | | |
 | --- | --- |
 | **Design** | Every cell carries kinematics / material / intent / rules. Channel 31 = Master Lock. |
-| **Code** | `amin_loop.cells`, `aiface.runtime.bds.CHANNEL_SCHEMA` |
+| **Code** | `amin_loop.cells`, `chorusface.runtime.bds.CHANNEL_SCHEMA` |
 | **Docs** | `BDSMotionMap.md`, `AvatarCellDataflow.md` Stage B |
 
 | Group | Channels | Face job |
@@ -80,7 +80,7 @@ flowchart LR
 | | |
 | --- | --- |
 | **Design** | Frontal take → locked identity rest + real smile/open/surprise plates. Regions = connected matter clusters. |
-| **Code** | `amin_loop.digest` → `aiface.capture.run_capture_from_video` |
+| **Code** | `amin_loop.digest` → `chorusface.capture.run_capture_from_video` |
 | **Artifacts** | `avatar_face.bds`, `source_face.png`, `open.png`, `smile.png`, `surprise.png`, `capture_meta.json` |
 | **Docs** | `AvatarCapture.md` |
 
@@ -97,7 +97,7 @@ flowchart LR
 | | |
 | --- | --- |
 | **Design** | Known visemes/emotions → tables. Looks are **real frames** (plates), not invented RGB. |
-| **Code** | `amin_loop.mapping`, `aiface.plates`, `aiface.speech`, `aiface.biomechanics.intent` |
+| **Code** | `amin_loop.mapping`, `chorusface.plates`, `chorusface.speech`, `chorusface.biomechanics.intent` |
 | **Artifacts** | `condition_maps.json`, plate atlas, expression catalog |
 | **Runtime** | Visemes own **jaw timing**; HAPPY / smile width drives `smile.png`; open vowels drive `open.png` |
 
@@ -114,11 +114,11 @@ flowchart LR
 | | |
 | --- | --- |
 | **Design** | Digestion must learn **how the GPU shows** a look: textures, tissue maps, jaw/muscle uniforms, plate blend — same path at playback. |
-| **Code** | `aiface.runtime.recipe` (single source of truth), `amin_loop.gpu_recipe` (serialize), `aiface/shaders/avatar.frag` (`avatar_recipe` uniform), `aiface.app._update_avatar_uniforms` (load + drive) |
+| **Code** | `chorusface.runtime.recipe` (single source of truth), `amin_loop.gpu_recipe` (serialize), `chorusface/shaders/avatar.frag` (`avatar_recipe` uniform), `chorusface.app._update_avatar_uniforms` (load + drive) |
 | **Artifacts** | `gpu_display_recipe.json` (real knobs — loaded back at play, not prose) |
 
 Display path (order matters) — coded as **L00–L11** in
-[`DisplayLayers.md`](DisplayLayers.md) / `aiface.display_layers`:
+[`DisplayLayers.md`](DisplayLayers.md) / `chorusface.display_layers`:
 
 | Plane | Layers |
 | --- | --- |
@@ -133,7 +133,7 @@ Do not reorder Plane B without a deliberate shader change (blur / gap regression
 | | |
 | --- | --- |
 | **Design** | Video truth → `[openness_n, jaw_n, width_n]` over time → train audio→vector model. ML covers **unknowns**; tables cover known words. |
-| **Code** | `amin_loop.live_vectors` → `aiface.live_vector` (extract / train / driver) |
+| **Code** | `amin_loop.live_vectors` → `chorusface.live_vector` (extract / train / driver) |
 | **Artifacts** | `live_vector_trajectory.json`, `live_vector_dataset.npz`, `live_vector_model.joblib` |
 | **Docs** | `LiveControlVectors.md`, `FROM_SCRATCH_LIVE_VECTOR.md` |
 
@@ -142,13 +142,13 @@ Do not reorder Plane B without a deliberate shader change (blur / gap regression
 | | |
 | --- | --- |
 | **Design** | One pipeline writes the world set; runtime loads recipe + model; demo speaks. |
-| **Code** | `amin_loop.pipeline.run_all_steps`, `scripts/amin_train.py`, `amin-train` entry, `aiface --demo` |
+| **Code** | `amin_loop.pipeline.run_all_steps`, `scripts/amin_train.py`, `amin-train` entry, `chorusface --demo` |
 | **Manifest** | `amin_loop_report.json`, `amin_data_store.json` |
 
 ```powershell
 pip install -e ".[ml,voice]"
 python scripts/amin_train.py --video assets/avatar_video_inputs/YOUR.mp4
-aiface --demo --tts --world output/worlds/avatar/avatar_face.bds
+chorusface --demo --tts --world output/worlds/avatar/avatar_face.bds
 ```
 
 ### Step 15 — Mouth cell groups + word-timed cell plan
@@ -156,7 +156,7 @@ aiface --demo --tts --world output/worlds/avatar/avatar_face.bds
 | | |
 | --- | --- |
 | **Design** | Mouth is not one disc. Named groups (`upper_lip`, `lower_lip`, `lip_corners`, `teeth`, `cavity`) are retargetable; the word clock plans cell→neighbor ±4 drives (L03 → L01). |
-| **Code** | `aiface.mouth_groups`, `aiface.mouth_cell_plan`, `aiface.cell_cluster`; bridge `GET /cells`, `POST /cells/drive` |
+| **Code** | `chorusface.mouth_groups`, `chorusface.mouth_cell_plan`, `chorusface.cell_cluster`; bridge `GET /cells`, `POST /cells/drive` |
 | **Docs** | [`MouthCellGroups.md`](MouthCellGroups.md) |
 
 ### Step 16 — Avatar adoption (any qualifying face)
@@ -164,7 +164,7 @@ aiface --demo --tts --world output/worlds/avatar/avatar_face.bds
 | | |
 | --- | --- |
 | **Design** | Digestion learns cell↔GPU coupling per upload. Runtime must not hard-code one world path. A world dir that meets requirements (`.bds`, identity, open/smile, `mouth_unlocked`) opens through one adapter. |
-| **Code** | `aiface.avatar_profile` (`open_avatar`, `write_avatar_profile`, `list_avatars`) |
+| **Code** | `chorusface.avatar_profile` (`open_avatar`, `write_avatar_profile`, `list_avatars`) |
 | **Artifacts** | `avatar_profile.json` |
 | **Docs** | [`AvatarAdoption.md`](AvatarAdoption.md) |
 
@@ -174,7 +174,7 @@ aiface --demo --tts --world output/worlds/avatar/avatar_face.bds
 | --- | --- |
 | **Design** | Between capture seconds, per-cell ms paths were lost. Store **measured** mouth-group transitions + deltas from the upload; train an ML model to **fill gaps** and live speech. New upload → replace model in that world dir. |
 | **Authority** | measured track → ML fill → viseme table (existing live-vector / plates stay when present) |
-| **Code** | `aiface.behavior` (`extract_transition_track`, `fit_behavior_model`, `BehaviorDriver`); `scripts/retrain_behavior.py`; `amin_train --behavior-only` |
+| **Code** | `chorusface.behavior` (`extract_transition_track`, `fit_behavior_model`, `BehaviorDriver`); `scripts/retrain_behavior.py`; `amin_train --behavior-only` |
 | **Artifacts** | `cell_transition_track.npz/json`, `behavior_dataset.npz`, `behavior_model.joblib` |
 | **Docs** | [`AvatarBehavior.md`](AvatarBehavior.md) |
 
@@ -199,7 +199,7 @@ plate cross-fades that mix two mouth photos at 50/50 — is the mouth blur.
 | | |
 | --- | --- |
 | **Design** | The field stays 256×256×32 (physics + Master Lock authority). Display textures (photo, open/smile/surprise, atlas plates) are captured and uploaded at native face-crop resolution (1024²), registered to the same face box so grid-space warp coordinates are unchanged. |
-| **Code** | **Built.** `aiface.capture.resample_frames_hires` (re-cuts selected frames at `DISPLAY_SIZE=1024` via stored `frame_index`; the deterministic face-square crop keeps registration), `write_capture_bundle(hires=...)` (hi-res portrait + plates), `aiface.app` uploads at native size — photo mipmapped 8-bit, part ids split into a grid-res NEAREST `avatar_part_ids` texture (ids in the photo's alpha forced NEAREST + no mips on both). |
+| **Code** | **Built.** `chorusface.capture.resample_frames_hires` (re-cuts selected frames at `DISPLAY_SIZE=1024` via stored `frame_index`; the deterministic face-square crop keeps registration), `write_capture_bundle(hires=...)` (hi-res portrait + plates), `chorusface.app` uploads at native size — photo mipmapped 8-bit, part ids split into a grid-res NEAREST `avatar_part_ids` texture (ids in the photo's alpha forced NEAREST + no mips on both). |
 | **Rule** | Still real pixels only. Never a neural upscaler on the face (non-goal: generative RGB). |
 
 ### Step 12 — Plate compositing sharpness
@@ -215,7 +215,7 @@ plate cross-fades that mix two mouth photos at 50/50 — is the mouth blur.
 | | |
 | --- | --- |
 | **Design** | One real keyframe per canonical viseme, chosen by landmark match from the take — every sound shows the actual video mouth, not an interpolation between 8 openness bins. Take openness span still bounds how wide the jaw can look. |
-| **Code** | **Built.** `aiface.plates.select_viseme_atlas_frames` → `viseme_to_plate` in `plate_atlas.json` (up to 16 unique plates at `DISPLAY_SIZE=1024`); runtime prefers viseme→plate over eased openness. |
+| **Code** | **Built.** `chorusface.plates.select_viseme_atlas_frames` → `viseme_to_plate` in `plate_atlas.json` (up to 16 unique plates at `DISPLAY_SIZE=1024`); runtime prefers viseme→plate over eased openness. |
 
 ### Step 14 — Ground-truth playback check
 
@@ -270,7 +270,7 @@ src/amin_loop/
   live_vectors.py           Step 9
   pipeline.py / cli.py      Step 10 (+ behavior train)
   store.py                  Data manifest
-src/aiface/
+src/chorusface/
   runtime/                  Field, .bds, commands, shaders, recipe
   capture.py                Digest take → plates
   live_vector/              Extract / train / driver (Step 9)

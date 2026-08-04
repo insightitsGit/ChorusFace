@@ -254,7 +254,7 @@ refresh KEY    = every 120 ticks (2 s) optional
 **Locked for now:** velocity. Revisit displacement-only encoding only if build QA says so.
 
 **Implementation branch:** `tickfeedmaster`  
-Python codec: `aiface.tickfeed` · GPU ingest shader: `shaders/tick_ingest.comp`  
+Python codec: `chorusface.tickfeed` · GPU ingest shader: `shaders/tick_ingest.comp`  
 Bridges B1–B4 adopted in [`TickFeedDesign.md`](TickFeedDesign.md) §6.5 / §13
 (initial design). Post-initial mouth sync/blur work is §14 — does not change
 this byte contract.

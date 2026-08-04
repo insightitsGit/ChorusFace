@@ -1,7 +1,7 @@
 """Step 8 — GPU display recipe learned beside the digested look.
 
 The recipe is not prose: it is the exact contract `AvatarFaceApp` +
-`avatar.frag` execute at playback. `aiface.runtime.recipe.DisplayRecipe`
+`avatar.frag` execute at playback. `chorusface.runtime.recipe.DisplayRecipe`
 is the single source of truth; this module serializes it (plus the plates
 actually discovered next to the world) so train and play share one path.
 """
@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from aiface.runtime.recipe import RECIPE_NAME, DisplayRecipe
+from chorusface.runtime.recipe import RECIPE_NAME, DisplayRecipe
 
 
 def build_gpu_recipe(

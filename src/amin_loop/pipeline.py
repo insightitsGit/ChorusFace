@@ -11,7 +11,7 @@ from amin_loop.gpu_recipe import write_gpu_recipe
 from amin_loop.live_vectors import train_from_video
 from amin_loop.mapping import write_condition_maps
 from amin_loop.store import write_store_manifest
-from aiface.avatar_profile import write_avatar_profile
+from chorusface.avatar_profile import write_avatar_profile
 
 
 def run_all_steps(
@@ -64,7 +64,7 @@ def run_all_steps(
 
     # Measured group transitions + ML model to fill gaps / live speech.
     try:
-        from aiface.behavior.pipeline import train_behavior_from_video
+        from chorusface.behavior.pipeline import train_behavior_from_video
 
         report["steps"]["behavior"] = train_behavior_from_video(
             video,

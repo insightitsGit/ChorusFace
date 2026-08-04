@@ -1,12 +1,12 @@
 # Display layers — hierarchy for realtime
 
-Single coding for how AIFace gets from field → pixels. CPU
+Single coding for how ChorusFace gets from field → pixels. CPU
 (`display_layers.py`, timeline, cell plan) and GPU (`avatar.frag`) share the
 same **L00–L11** order. Do not reorder Plane B without a deliberate shader
 change — mid-stack swaps caused blur / gap regressions.
 
 Related: [`AMIN_STEPS.md`](AMIN_STEPS.md) · [`MouthCellGroups.md`](MouthCellGroups.md) ·
-[`AvatarAdoption.md`](AvatarAdoption.md) · `aiface.display_layers` · `aiface.runtime.recipe`
+[`AvatarAdoption.md`](AvatarAdoption.md) · `chorusface.display_layers` · `chorusface.runtime.recipe`
 
 ## Planes (authority)
 
@@ -58,4 +58,4 @@ Inspect live stack:
 ## Recipe contract
 
 `gpu_display_recipe.json` `display_path` is generated from `DISPLAY_PATH`
-(`aiface.gpu_display_recipe.v3`). Train and play share that list.
+(`chorusface.gpu_display_recipe.v3`). Train and play share that list.

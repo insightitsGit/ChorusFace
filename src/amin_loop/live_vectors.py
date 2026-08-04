@@ -1,6 +1,6 @@
 """Step 9 — Video → live control vectors (re-export + train helper).
 
-Delegates to ``aiface.live_vector`` — same GPU recipe at runtime.
+Delegates to ``chorusface.live_vector`` — same GPU recipe at runtime.
 """
 
 from __future__ import annotations
@@ -8,8 +8,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from aiface.live_vector import LiveVectorDriver, train_avatar_from_video
-from aiface.live_vector.schema import LiveControlVector
+from chorusface.live_vector import LiveVectorDriver, train_avatar_from_video
+from chorusface.live_vector.schema import LiveControlVector
 
 
 def train_from_video(

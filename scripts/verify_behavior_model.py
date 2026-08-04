@@ -90,7 +90,7 @@ def main() -> int:
         print("FAIL: predictions are constant — looks fake")
         return 1
 
-    from aiface.behavior.driver import BehaviorDriver
+    from chorusface.behavior.driver import BehaviorDriver
 
     driver = BehaviorDriver.try_load(WORLD)
     if not driver.using_ml or driver._pipeline is None:
@@ -140,7 +140,7 @@ def main() -> int:
 
     # Prove app wiring calls BehaviorDriver (not a dead field).
     import inspect
-    from aiface import app as app_mod
+    from chorusface import app as app_mod
 
     src = inspect.getsource(app_mod.AvatarFaceApp._update_open_close_ml)
     if "self._behavior.resolve" not in src:
@@ -156,7 +156,7 @@ def main() -> int:
         print(f"FAIL: training video missing: {VIDEO}")
         return 1
 
-    from aiface.behavior.pipeline import train_behavior_from_video
+    from chorusface.behavior.pipeline import train_behavior_from_video
 
     landmarker = WORLD / "face_landmarker.task"
     print("\n=== RETRAIN FRESH INTO TEMP DIR ===")

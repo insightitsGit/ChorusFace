@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from aiface.biomechanics.emotion import EmotionSystem
-from aiface.biomechanics.face import BiomechanicalFace
+from chorusface.biomechanics.emotion import EmotionSystem
+from chorusface.biomechanics.face import BiomechanicalFace
 
 
 def test_happy_emotion_drives_frontalis_axes() -> None:
