@@ -1,17 +1,135 @@
 # ChorusFace
 
-Talking avatar face service for host AI agents: one shared TickFeed face,
-**PrismAPI-shaped speak** (AI↔AI), and an **MJPEG stream** browsers can embed.
-Avatar identity is fixed for this beta (not user-selectable).
+**ChorusFace** is a talking-face companion for AI products. Your app (or agent)
+keeps the brain — LLM, tools, website chat, orchestration. ChorusFace is the
+**face**: it hears what the assistant is about to say, speaks it with TTS, and
+moves a photoreal avatar in sync so users see a living face instead of text alone.
+
+This repository is the **product beta** (`0.2.0b1`): one calibrated TickFeed
+avatar, a containerized API, and a browser-embeddable live stream.
+
+---
+
+## Why it exists
+
+Most AI products stop at text or browser TTS. Putting a real face on an agent
+usually means either a heavy 3D stack, a cloud lip-sync vendor, or rebuilding
+your whole UI in WebGL.
+
+ChorusFace takes a different cut:
+
+1. **Host owns the AI** — Insightits, PrismAPI agents, website hubs, or any
+   backend that can HTTP POST after an assistant reply.
+2. **ChorusFace owns the face** — one shared GPU world, lip sync, and stream.
+3. **Integrators send speech intent** — not vertices, not meshes, not a second
+   chat model. `POST /prism/speak` with the text; we handle voice + motion.
+4. **Humans see the face over MJPEG** — drop an `<img>` (or our embed script)
+   into an existing page. No WebGL port of the face runtime required for this beta.
+
+The face itself is an **NWR cell field** (see below): a locked photo identity
+with unlocked mouth/eye tissue driven by TickFeed LOOK/FIELD — not a puppet
+mesh and not invented face RGB.
+
+---
+
+## What you get in this beta
+
+| You get | You do not get (yet) |
+| --- | --- |
+| One fixed calibrated avatar (TickFeed world) | User-uploaded / swappable identities |
+| AI↔AI speak API (`/prism/speak` + FaceBridge) | ChorusFace-hosted LLM or chat UI as the product |
+| Local TTS + lip sync from assistant text | Multi-tenant cloud face SaaS |
+| Docker service + `GET /stream.mjpg` embed | Full WebGL face port in the browser |
+| Exclusive API keys (one key ↔ one `client_id`) | Anonymous public stream without auth |
+| Desktop window for local QA | Free-stretch window that warps the face |
+
+**Product shape:** face companion, not a chatbot. If the face container is down,
+the host chat should still work — degraded, without a face.
+
+---
+
+## How it fits together
 
 ```
-Your agent / website hub
-    → POST /auth/activate + POST /prism/speak   (API key + client_id)
-ChorusFace (Docker or local)
-    → GET /stream.mjpg?token=…&client_id=…     (live face embed)
+Your agent / website hub          (LLM, tools, session)
+        │
+        │  POST /auth/activate     (API key + stable client_id)
+        │  POST /prism/speak       { "text": "assistant reply…" }
+        ▼
+ChorusFace service                (Docker or local GPU/CPU)
+        │  TTS → TickFeed LOOK/FIELD → NWR field commands
+        │
+        ├─► humans:  GET /stream.mjpg?token=…&client_id=…
+        └─► ops QA:  desktop window via run_chorusface_beta.py
 ```
 
-Pinned NWR substrate: `vendor/nwr/` (see `vendor/nwr/NWR_REVISION.txt`).
+Typical host loop:
+
+1. User talks to **your** product.
+2. Your LLM produces the assistant reply.
+3. Your backend fire-and-forgets that text to ChorusFace `/prism/speak`.
+4. Your page shows the live face via `/stream.mjpg` (mute browser TTS when the
+   face is speaking to avoid double audio).
+
+---
+
+## NWR — technical brief
+
+**NWR (Neural World Runtime)** is the GPU field substrate ChorusFace runs on.
+Pinned copy: [`vendor/nwr/`](vendor/nwr/) (`vendor/nwr/NWR_REVISION.txt`).
+
+### What NWR is
+
+NWR is **not** a face renderer and **not** a second neural net in the hot path.
+It is a deterministic, GPU-resident **cell field**:
+
+| Idea | Detail |
+| --- | --- |
+| World | Dense 2D grid (face worlds use **256×256**) |
+| Cell | **32 float channels** — kinematics, material, intent, rules |
+| Authority | Channel **31 Master Lock** (`human_lock`) — GPU rejects AI writes on locked cells |
+| Tick | OpenGL compute advances the field; CPU is not in the simulation loop |
+| Snapshot | `.bds` binary world (~8.4 MB for 256×256×32×f32) |
+| Contract | AI / host **proposes** commands → runtime **validates** → GPU **executes** |
+
+Channel groups (simplified):
+
+| Group | Channels | Face use |
+| --- | --- | --- |
+| Kinematics | 0–7 | Soft-tissue velocity / displacement (±4 impulses) |
+| Material | 8–15 | Photo albedo / opacity (identity RGB) |
+| Intent | 16–23 | Sparse / future control |
+| Rules | 24–31 | Priority + **Master Lock** |
+
+### How ChorusFace uses NWR
+
+```text
+Calibration video
+  → digest / TickFeed train
+  → avatar_face.bds + LOOK plates + GPU display recipe (L00–L11)
+Host agent
+  → POST /prism/speak
+  → TTS + TickFeed LOOK / FIELD vectors
+  → validated ±4 (and related) writes into the NWR field
+GPU
+  → same recipe paints the locked photo identity; mouth / lids move on unlocked cells
+  → MJPEG / window shows the live field
+```
+
+Concrete mapping in this repo:
+
+| NWR concept | ChorusFace |
+| --- | --- |
+| Substrate libs | `vendor/nwr/` |
+| Field runtime / `.bds` / shaders | `src/chorusface/runtime/`, `shaders/` |
+| Digest + cell learning | `src/amin_loop/` |
+| Live motion from video / speech | TickFeed (`src/chorusface/tickfeed/`) → LOOK/FIELD |
+| Host speak path | FaceBridge / Prism → speech → field commands |
+| Identity invariant | Photo + Master Lock — **no invented face RGB / teeth** |
+
+**Why this shape:** the face is one shared NWR world, not a mesh swap or per-user 3D model. Hosts only send speech intent; NWR ownership and the GPU recipe keep identity stable while unlocked mouth/eye cells move.
+
+Deeper docs: [`docs/AMIN_DESIGN.md`](docs/AMIN_DESIGN.md), [`docs/NWRDataDesign.md`](docs/NWRDataDesign.md), [`docs/BDSMotionMap.md`](docs/BDSMotionMap.md).
 
 ---
 
