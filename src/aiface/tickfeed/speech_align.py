@@ -189,7 +189,11 @@ def build_look_drive(
             smile = 0.0
             surprise = 0.0
             brow = 0.0
-            lid = min(lid, 0.08)
+            # Prefer measured close; only force if EAR missed the blink.
+            if lid > 0.45:
+                lid = 0.05
+            else:
+                lid = min(lid, 0.12)
         elif beat_id == "TALK":
             open_ = max(0.35, min(curve_o if curve_o > 0.05 else 0.45, 0.75))
             smile = min(curve_s, 0.3)

@@ -758,6 +758,9 @@ class AvatarFaceApp(FieldRuntime):
                     self._tickfeed_calibration_active = True
                     self._presence = PRESENCE_CALIBRATION
                     self._tickfeed_live = None
+                    # Measured lids own LOOK from tick 0 (no EyeSystem pre-roll).
+                    self._tickfeed_lid_teacher = True
+                    self._tickfeed_lid_amt = 1.0
                     print(
                         "TickFeed demo: measured calibration pass "
                         f"({length} ticks @ 60 Hz), then 0-state "
@@ -1491,6 +1494,10 @@ class AvatarFaceApp(FieldRuntime):
         # after speech ends (full-cycle QA: idle still o≈0.9).
         self._plate_open_hyst = 0.0
         self._plate_openness_current = 0.0
+        # BJ1: release measured lid teacher so EyeSystem can idle-blink
+        # until BJ2 packs EyeSystem lids onto lid_amt for live/zero.
+        self._tickfeed_lid_teacher = False
+        self._tickfeed_lid_amt = 1.0
         if hasattr(self, "_biomech"):
             gaze_x, gaze_y = 0.0, 0.0
             if str(getattr(self, "_zero_mood", "")) == ZERO_MOOD_WAITING:
@@ -3680,9 +3687,22 @@ class AvatarFaceApp(FieldRuntime):
         surprise = float(labels.surprise_amt)
         brow = float(getattr(labels, "brow_amt", 0.0) or 0.0)
         lid = float(getattr(labels, "lid_amt", 1.0) or 1.0)
-        self._tickfeed_lid_amt = lid
-        # Teacher present when take actually varies lids (not always 1.0).
-        self._tickfeed_lid_teacher = lid < 0.98
+        from aiface.tickfeed.lid_measure import commit_lid_for_look
+
+        # Open deadzone: rest EAR ~0.8 must not ghost eyes_closed lashes.
+        target_lid = commit_lid_for_look(lid)
+        prev_lid = float(getattr(self, "_tickfeed_lid_amt", 1.0) or 1.0)
+        if getattr(self, "_tickfeed_calibration_active", False):
+            # Follow closes faster than opens so lashes drop with the take,
+            # without popping open between blink frames.
+            rate = 0.55 if target_lid < prev_lid else 0.28
+            self._tickfeed_lid_amt = prev_lid + (target_lid - prev_lid) * rate
+            self._tickfeed_lid_teacher = True
+        else:
+            self._tickfeed_lid_amt = target_lid
+            # BJ1: latch once a real close is seen (post-calibration packages).
+            if target_lid < 0.98:
+                self._tickfeed_lid_teacher = True
         # field_only: keep label openness for debug/status, but force plates closed
         # so NWR FIELD is the only visible mouth motion.
         plate_amt = self._hysteresis_plate_open(open_amt)

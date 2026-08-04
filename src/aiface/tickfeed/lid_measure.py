@@ -126,4 +126,27 @@ def measure_lid_series(
     return times, [float(x) for x in lid]
 
 
-__all__ = ["measure_lid_series", "resolve_landmarker_model"]
+# Rest EAR often lands ~0.75–0.90 after percentile norm. Below this, treat as
+# fully open so eyes_closed.png does not ghost lashes before a real blink.
+LID_OPEN_DEADZONE = 0.72
+
+
+def commit_lid_for_look(
+    lid_amt: float,
+    *,
+    open_deadzone: float = LID_OPEN_DEADZONE,
+) -> float:
+    """Map teacher lid for LOOK: open deadzone + stretch real closes to 0..1."""
+    lid_n = max(0.0, min(1.0, float(lid_amt)))
+    floor = max(0.05, min(0.95, float(open_deadzone)))
+    if lid_n >= floor:
+        return 1.0
+    return lid_n / floor
+
+
+__all__ = [
+    "LID_OPEN_DEADZONE",
+    "commit_lid_for_look",
+    "measure_lid_series",
+    "resolve_landmarker_model",
+]
