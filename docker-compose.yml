@@ -1,11 +1,12 @@
-# ChorusFace face service — shared TickFeed avatar for web embed + PrismAPI speak.
+# ChorusFace face service — shared TickFeed avatar for web embed.
+# Host owns TTS; drive lips via /voice/* (lab --tts is opt-in on the service).
 #
 #   python scripts/generate_api_keys.py   # once — local encrypted keys
 #   docker compose up --build
 #   Use a key from secrets/api_keys.handoff.local.txt:
-#     curl -H "Authorization: Bearer <key>" -H "Content-Type: application/json" \
-#          -d "{\"text\":\"Hello there\"}" http://localhost:8766/prism/speak
-#     http://localhost:8766/stream.mjpg?token=<key>
+#     POST /voice/expect → /voice/pcm → /voice/end   (product default)
+#     or POST /prism/speak for mouth-cue only (no face audio)
+#     http://localhost:8766/stream.mjpg?token=<key>&client_id=<uuid>
 #
 # GPU (Linux + NVIDIA Container Toolkit):
 #   docker run --gpus all -p 8766:8766 -v ${PWD}/secrets:/app/secrets:ro chorusface-face:beta

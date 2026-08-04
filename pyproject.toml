@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "chorusface"
 version = "0.2.0b1"
-description = "Host-driven photoreal avatar face (product beta) with TickFeed LOOK/FIELD and FaceBridge /speak"
+description = "Host-driven photoreal avatar face (product beta): host owns LLM+TTS; TickFeed LOOK/FIELD + /voice/* lip-lock"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "insightits" }]

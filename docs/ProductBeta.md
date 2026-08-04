@@ -2,16 +2,21 @@
 
 **Version:** `0.2.0b1` (TickFeed LOOK/FIELD fidelity beta)
 
-ChorusFace is the **face companion**. The host product (e.g. Insightits website chat)
-owns the LLM. After each assistant reply, the host POSTs the spoken text to
-FaceBridge (or PrismAPI `/prism/speak`); ChorusFace TTS + TickFeed drive the mouth.
+ChorusFace is the **face companion**. The host product (e.g. Insightits website
+chat) owns the **LLM and the TTS**. After each assistant reply, the host plays
+its own voice and drives the face over FaceBridge `/voice/*` (or cues the mouth
+with `/prism/speak` when PCM is not available yet).
 
 **Web product path (preferred):** containerized face service + MJPEG embed — see
-[`FaceServiceEmbed.md`](FaceServiceEmbed.md).
+[`FaceServiceEmbed.md`](FaceServiceEmbed.md). Host-voice lip-lock details:
+[`VoiceSync.md`](VoiceSync.md).
 
 ```
-Host chat (LLM)  →  POST /prism/speak  →  ChorusFace TTS + TickFeed LOOK
-Website page     ←  GET /stream.mjpg   (embed)
+Host chat (LLM + TTS)
+    → play host audio
+    → POST /voice/expect|/pcm|/end   (or /voice/timeline)
+ChorusFace TickFeed LOOK
+Website page ← GET /stream.mjpg   (embed)
 ```
 
 ---
@@ -21,8 +26,9 @@ Website page     ←  GET /stream.mjpg   (embed)
 | Included | Not in this beta |
 | --- | --- |
 | Fixed calibrated TickFeed avatar (blonde woman take) | **Avatar is not changeable** — no user photo swap, no multi-identity picker |
-| Host-driven `/speak` (LLM outside ChorusFace) | ChorusFace-hosted chat model |
-| Local TTS + lip sync from assistant text | Host PCM `/voice/*` lip-lock (documented upgrade) |
+| Host-owned TTS → `/voice/*` lip-lock (**product default**) | ChorusFace as the default TTS engine |
+| Mouth-cue `/speak` / `/prism/speak` (text timing, no face audio) | ChorusFace-hosted chat model |
+| Optional lab `--tts` / `CHORUSFACE_TTS=1` | Required local synthesis for production hosts |
 | Resizable window with **locked aspect ratio** | Free-stretch window that warps the face |
 | FaceBridge CORS + host connectors | Cloud multi-tenant face relay |
 | Fidelity ladder through RF6 / P3 / P12 HUD | Parked blink BJ2, kill `open.png`, occlusion (see [`RenderQualityParked.md`](RenderQualityParked.md)) |
@@ -31,6 +37,33 @@ Website page     ←  GET /stream.mjpg   (embed)
 the dense calibration take. Operators rebuild that world with
 `scripts/build_tickfeed_demo.py`; end users do not pick or upload a face in this
 release. Hot-swap identity is out of scope until a later product cut.
+
+---
+
+## Voice contract (read this first)
+
+| Path | Who speaks | When to use |
+| --- | --- | --- |
+| **`/voice/expect` + `/voice/pcm` + `/voice/end`** | **Host TTS** | **Default.** Host has transcript + PCM (or realtime chunks). |
+| **`/voice/timeline`** | **Host TTS** | Host already timed phonemes to its audio clock. |
+| **`/speak` / `/prism/speak`** | Host (or silent) | Mouth cue from text only — ChorusFace does **not** play audio. |
+| **`--tts` on ChorusFace** | ChorusFace | **Lab only** — demos without a host voice stack. |
+
+Python helper (product default):
+
+```python
+from chorusface.host_client import drive_host_voice
+
+drive_host_voice("Hello there.", host_tts_pcm16_bytes, sample_rate=24000)
+```
+
+CLI:
+
+```powershell
+python -m chorusface.host_client --voice --pcm-file reply.pcm "Hello there."
+# text-only mouth cue (no face audio):
+python -m chorusface.host_client "Hello there."
+```
 
 ---
 
@@ -46,8 +79,8 @@ Default composition: **1024×1320** (square portrait + bottom chat band).
 
 ```powershell
 python scripts/run_chorusface_beta.py
-# optional initial width (height derived):
-python -m chorusface --product-beta --bridge --bridge-direct-speak --tts --window-width 900 ...
+# lab local TTS (optional):
+python scripts/run_chorusface_beta.py --tts
 ```
 
 Internals: [`src/chorusface/window_layout.py`](../src/chorusface/window_layout.py) +
@@ -69,7 +102,7 @@ Optional flags on the launcher:
 | --- | --- |
 | `--fidelity-hud` | Show FIDELITY overlay |
 | `--allow-remote-bind` | LAN kiosk (with `CHORUSFACE_BRIDGE_HOST=0.0.0.0`) |
-| `--no-tts` | Text-only visemes (not recommended for QA) |
+| `--tts` | Lab only: local ChorusFace TTS (`CHORUSFACE_TTS=1` also works) |
 
 Env:
 
@@ -78,11 +111,10 @@ Env:
 | `CHORUSFACE_WORLD` | `output/worlds/tickfeed` | Calibrated world directory (**fixed avatar**) |
 | `CHORUSFACE_BRIDGE_HOST` | `127.0.0.1` | Bind host |
 | `CHORUSFACE_BRIDGE_PORT` | `8766` | Bind port |
-| `CHORUSFACE_BRIDGE_TOKEN` | `chorusface-beta` | Bearer token |
+| `CHORUSFACE_BRIDGE_TOKEN` | `chorusface-beta` | Bearer token (or vault key) |
 | `CHORUSFACE_BRIDGE_CORS` | `*` | CORS origins (`*` or comma list) |
 | `CHORUSFACE_PRODUCT_BETA` | set by launcher | Banner / product mode |
-
-**LAN kiosk** (Flask server → face machine):
+| `CHORUSFACE_TTS` | unset / off | Lab local TTS |
 
 ```powershell
 $env:CHORUSFACE_BRIDGE_HOST="0.0.0.0"
@@ -90,60 +122,29 @@ $env:CHORUSFACE_BRIDGE_TOKEN="replace-me"
 python scripts/run_chorusface_beta.py --allow-remote-bind
 ```
 
-Build / rebuild the fixed world (operator only):
-
-```powershell
-python scripts/build_tickfeed_demo.py --clean
-```
-
 ---
 
-## Host contract
-
-### Speak (beta path)
-
-```http
-POST /speak
-Authorization: Bearer <token>
-Content-Type: application/json
-
-{"text":"Hello there. How are you today?"}
-```
-
-Accepted text keys: `text` | `speech` | `message` | `response`.
-
-Response: `{ "queued": true, "text": "..." }`.
+## FaceBridge surface
 
 Liveness (no auth): `GET /health` → `{ "ok": true, "service": "chorusface", "product": "beta" }`.
 
-Other routes (auth required): `GET /status|/probe|/cells|/preview|/screenshot`,
-`POST /voice/expect|pcm|end|timeline`, `POST /cells/drive`, `POST /calibrate`.
+Auth: activate + `X-ChorusFace-Client-Id` — see [`secrets/README.md`](../secrets/README.md).
 
-### Smoke
+Also available: `GET /status`, `/probe`, `/cells`, `/preview`, `/preview.jpg`,
+`/stream.mjpg`, `POST /cells/drive`, `POST /calibrate`.
 
-```powershell
-python -m chorusface.host_client "Hello there"
-# or: chorusface-host "Hello there"
-```
+---
 
-### Python API
-
-```python
-from chorusface.host_client import speak, speak_async
-
-speak_async(assistant_text)          # fire-and-forget
-result = speak(assistant_text)       # never raises by default
-```
-
-### Browser (local/http demos only)
+## Host connectors
 
 **HTTPS pages cannot call `http://127.0.0.1`** (mixed content). Prefer
-server-side speak for production hosts.
+server-side voice/speak for production hosts.
 
 ```html
 <script src="/path/to/connectors/web/chorusface-bridge.js"></script>
 <script>
   window.CHORUSFACE_BRIDGE = { url: 'http://127.0.0.1:8766', token: 'chorusface-beta' };
+  // Mouth cue only — host still plays its own TTS:
   ChorusFaceBridge.speakFireAndForget(assistantText);
 </script>
 ```
@@ -154,41 +155,42 @@ server-side speak for production hosts.
 
 Server-side hook (recommended for HTTPS):
 
-1. On Flask: `CHORUSFACE_BRIDGE_ENABLED=1`, `CHORUSFACE_BRIDGE_URL=http://127.0.0.1:8766`, `CHORUSFACE_BRIDGE_TOKEN=chorusface-beta`
-2. After a full assistant reply in `handle_website_agent_chat`, fire-and-forget `POST /speak` via `services/chorusface_bridge.py`
-3. Response may include `chorusfaceSpeakQueued: true` so the browser skips Web Speech TTS (avoid double audio)
+1. On Flask: `CHORUSFACE_BRIDGE_ENABLED=1`, `CHORUSFACE_BRIDGE_URL=http://127.0.0.1:8766`, `CHORUSFACE_BRIDGE_TOKEN=…`
+2. After a full assistant reply, fire-and-forget face drive via `services/chorusface_bridge.py`
+3. **Host TTS stays on** (browser Web Speech or server TTS). Do **not** mute host
+   audio because the face queued — ChorusFace is not the speaker.
+4. Preferred upgrade: host server TTS PCM → `drive_host_voice` / `/voice/*`
+5. Until PCM is available: `/prism/speak` cues the mouth on text timing while the
+   host voice plays independently
 
-See `.env.local.example` in the Insightits repo.
-
-Upgrade path (later): host server TTS → `POST /voice/timeline` or `/voice/pcm` for
-lip-lock to the host voice clock ([`VoiceSync.md`](VoiceSync.md)).
+See `.env.local.example` in the Insightits repo and [`VoiceSync.md`](VoiceSync.md).
 
 ---
 
 ## Operator checklist
 
 1. World exists at `output/worlds/tickfeed` (plates, timeline, ML joblibs).
-2. `python scripts/run_chorusface_beta.py` — window opens, ratio locked, bridge printed.
+2. `python scripts/run_chorusface_beta.py` — window opens, ratio locked, bridge printed, **local TTS OFF**.
 3. Resize the window — sides stay proportional; face stays square in the portrait frame.
-4. `python -m chorusface.host_client "Hello there"` — TTS + mouth motion.
-5. Enable Insightits bridge env; website chat reply moves the face.
-6. Stop the face process — website chat still works (speak is best-effort).
+4. Host voice smoke: `python -m chorusface.host_client --voice --pcm-file reply.pcm "Hello there"`
+5. Text mouth-cue smoke: `python -m chorusface.host_client "Hello there"` (no face audio).
+6. Enable Insightits bridge env; website chat reply moves the face while host TTS still speaks.
+7. Stop the face process — website chat + host TTS still work (face drive is best-effort).
 
 ---
 
 ## Acceptance
 
-1. `python scripts/run_chorusface_beta.py` opens the face + bridge
+1. `python scripts/run_chorusface_beta.py` opens the face + bridge with local TTS off
 2. Window resize keeps aspect; face does not stretch
-3. `python -m chorusface.host_client "Hello there"` moves the mouth with TTS
-4. Website chat reply triggers `/speak`; chat still works if the face is down
-5. Avatar identity is the fixed TickFeed world for this beta
+3. Host PCM via `/voice/*` moves the mouth on the host audio clock
+4. `/prism/speak` moves the mouth without ChorusFace playing audio
+5. Website chat reply can drive the face; chat still works if the face is down
+6. Avatar identity is the fixed TickFeed world for this beta
 
 ## Related docs
 
+- [`VoiceSync.md`](VoiceSync.md) — host PCM / timeline channel
+- [`FaceServiceEmbed.md`](FaceServiceEmbed.md) — container + MJPEG
 - [`AvatarChat.md`](AvatarChat.md) — chat / biomechanics pipeline
-- [`Architecture.md`](Architecture.md) — FaceBridge control surface
-- [`TickFeedDesign.md`](TickFeedDesign.md) — LOOK/FIELD packages
-- [`RenderFidelityLadder.md`](RenderFidelityLadder.md) — fidelity steps kept in beta
-- [`RenderQualityParked.md`](RenderQualityParked.md) — parked tracks
-- [`AvatarCalibrationPrompt.md`](AvatarCalibrationPrompt.md) — how the fixed take was directed
+- [`RenderQualityParked.md`](RenderQualityParked.md) — parked fidelity tracks

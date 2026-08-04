@@ -1,5 +1,9 @@
 # Voice Sync
 
+**Product default:** the host LLM / voice stack owns TTS. ChorusFace does not
+synthesize speech unless you opt into lab `--tts`. This document is the
+**primary** integration channel for production hosts.
+
 Every realtime language model already has a voice. What none of them ship is a
 face that moves with the audio they are streaming out. This document describes
 the channel that closes that gap, and — more importantly — the number that says

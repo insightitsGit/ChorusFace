@@ -3227,10 +3227,13 @@ class AvatarFaceApp(FieldRuntime):
         )
         self._bridge.start()
         if bool(getattr(self.argv, "product_beta", False)):
-            print("ChorusFace product beta — host owns the LLM; this process is the face.")
+            print(
+                "ChorusFace product beta — host owns the LLM and TTS; "
+                "this process is the face only."
+            )
             print(
                 "  Container/service: see docs/FaceServiceEmbed.md "
-                "(PrismAPI + /stream.mjpg embed)"
+                "(host /voice/* + /stream.mjpg embed)"
             )
             print(
                 "  LAN kiosk: set CHORUSFACE_BRIDGE_HOST=0.0.0.0 and --allow-remote-bind "
@@ -3246,13 +3249,24 @@ class AvatarFaceApp(FieldRuntime):
         print("  Handoff keys: secrets/api_keys.handoff.local.txt (gitignored)")
         print(
             f"  CORS: {getattr(self.argv, 'bridge_cors', '*')}  "
-            f"direct_speak={bool(getattr(self.argv, 'bridge_direct_speak', False))}"
+            f"direct_speak={bool(getattr(self.argv, 'bridge_direct_speak', False))}  "
+            f"local_tts={'ON' if bool(getattr(self.argv, 'tts', False)) else 'OFF'}"
         )
         print("  GET /health /status /probe /cells /preview /preview.jpg /screenshot")
         print(
             f"  GET /stream.mjpg?token=…&client_id=…  (MJPEG embed @ {stream_fps:.0f} fps)"
         )
-        print('  POST /speak|/prism/speak  {"text"|"speech"|"message"|"response":"..."}')
+        print(
+            "  Voice DEFAULT (host TTS): POST /voice/expect → /voice/pcm → /voice/end"
+        )
+        print(
+            '  Voice alt: POST /voice/timeline {"spans":[...],"caption":"..."}  '
+            "# host-timed phonemes"
+        )
+        print(
+            '  Mouth cue only: POST /speak|/prism/speak  '
+            '{"text"|"speech"|"message"|"response":"..."}  # no ChorusFace audio'
+        )
         print(
             '  POST /cells/drive  {"mode":"cell","x":128,"y":80,"dx":0,"dy":-1}'
             '  # or mode=cluster|neighbor|batch'
@@ -3263,11 +3277,11 @@ class AvatarFaceApp(FieldRuntime):
             ' "zero_mood":"neutral|smile|waiting"}'
         )
         print("  Keys: Z cycles 0-state mood (neutral / smile / waiting)")
-        print('  POST /voice/expect  {"text":"..."}   then /voice/pcm, /voice/end')
-        print(
-            '  POST /voice/timeline {"spans":[{"phoneme":"OU","start":0,"end":0.12}],'
-            ' "caption":"..."}   # host-timed, no PCM'
-        )
+        if not bool(getattr(self.argv, "tts", False)):
+            print(
+                "  Local TTS off (product default). Lab only: launch with --tts "
+                "or CHORUSFACE_TTS=1"
+            )
 
     def _bridge_status(self) -> dict[str, object]:
         state = self._render_state

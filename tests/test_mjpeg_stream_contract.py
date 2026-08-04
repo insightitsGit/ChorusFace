@@ -21,6 +21,11 @@ def test_bridge_source_has_stream_and_prism_routes() -> None:
     assert "/stream.mjpg" in text
     assert "preview_jpeg" in text
     assert "/prism/speak" in text
+    assert "/voice/expect" in text
+    assert "/voice/pcm" in text
+    assert "/voice/end" in text
+    assert "/voice/timeline" in text
+    assert '"local_tts_default": False' in text
     assert 'query_token' in text or 'get("token"' in text
 
 

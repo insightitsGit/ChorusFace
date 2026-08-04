@@ -2,10 +2,13 @@
 """Launch ChorusFace as a headless container/service face (web embed + PrismAPI).
 
 Runs TickFeed world without a desktop window when the headless backend is
-available (``MODERNGL_WINDOW=headless``). FaceBridge exposes ``/speak``,
-``/prism/speak``, and ``/stream.mjpg`` for website embed.
+available (``MODERNGL_WINDOW=headless``). FaceBridge exposes host-voice
+``/voice/*``, mouth-cue ``/prism/speak``, and ``/stream.mjpg`` for embed.
 
-See docs/FaceServiceEmbed.md.
+**Product default:** the host LLM owns TTS. ChorusFace does not synthesize
+audio unless ``--tts`` / ``CHORUSFACE_TTS=1`` (lab only).
+
+See docs/FaceServiceEmbed.md and docs/VoiceSync.md.
 """
 
 from __future__ import annotations
@@ -74,7 +77,11 @@ def main() -> int:
         action="store_true",
         help="Use a visible window instead of headless (local debug)",
     )
-    parser.add_argument("--no-tts", action="store_true")
+    parser.add_argument(
+        "--tts",
+        action="store_true",
+        help="Lab only: local ChorusFace TTS (default OFF — host owns voice)",
+    )
     parser.add_argument("--fidelity-hud", action="store_true")
     args = parser.parse_args()
 
@@ -93,6 +100,9 @@ def main() -> int:
     token = os.environ.get("CHORUSFACE_BRIDGE_TOKEN", "chorusface-beta")
     cors = os.environ.get("CHORUSFACE_BRIDGE_CORS", "*")
     stream_fps = os.environ.get("CHORUSFACE_STREAM_FPS", "12")
+    use_local_tts = bool(args.tts) or os.environ.get(
+        "CHORUSFACE_TTS", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
@@ -136,7 +146,7 @@ def main() -> int:
         str(face),
         "--no-wire-loop",
     ]
-    if not args.no_tts:
+    if use_local_tts:
         cmd.append("--tts")
     if args.fidelity_hud:
         cmd.append("--fidelity-hud")
@@ -146,8 +156,12 @@ def main() -> int:
     print(f"  FaceBridge: {url}")
     print(f"  Authorization: Bearer {token}")
     print(f"  Embed: {url}/stream.mjpg?token={token}")
-    print(f"  Prism speak: POST {url}/prism/speak")
-    print("  Docs: docs/FaceServiceEmbed.md")
+    print("  Voice (default): host TTS → /voice/expect|/pcm|/end or /voice/timeline")
+    print(f"  Mouth cue: POST {url}/prism/speak  (no ChorusFace audio)")
+    print(
+        f"  Local TTS: {'ON (lab)' if use_local_tts else 'OFF (product default)'}"
+    )
+    print("  Docs: docs/FaceServiceEmbed.md + docs/VoiceSync.md")
     return subprocess.call(cmd, cwd=str(ROOT), env=env)
 
 

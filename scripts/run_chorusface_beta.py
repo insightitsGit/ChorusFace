@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Launch the ChorusFace product beta (host-driven chat face).
 
-Owns the TickFeed calibrated world + FaceBridge + TTS. The LLM stays outside
-ChorusFace — hosts POST assistant text to ``/speak`` (see docs/ProductBeta.md).
+Owns the TickFeed calibrated world + FaceBridge. The host owns the LLM **and**
+TTS by default — push audio via ``/voice/*`` (see docs/ProductBeta.md,
+docs/VoiceSync.md). Local ``--tts`` is lab-only when no host voice is available.
 """
 
 from __future__ import annotations
@@ -24,6 +25,10 @@ DEFAULT_WORLD = ROOT / "output" / "worlds" / "tickfeed"
 def _world_paths(world: Path) -> tuple[Path, Path, Path]:
     world = world.resolve()
     return world, world / "avatar_face.bds", world / "source_face.png"
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _preflight(world: Path) -> list[str]:
@@ -85,9 +90,12 @@ def main() -> int:
         help="Bind FaceBridge off loopback (LAN kiosk; pair with CHORUSFACE_BRIDGE_HOST)",
     )
     parser.add_argument(
-        "--no-tts",
+        "--tts",
         action="store_true",
-        help="Skip local TTS (text-only visemes — not recommended for product QA)",
+        help=(
+            "Lab only: enable local ChorusFace TTS. Product default is host-owned "
+            "voice via /voice/* (also CHORUSFACE_TTS=1)."
+        ),
     )
     args = parser.parse_args()
 
@@ -109,6 +117,7 @@ def main() -> int:
     port = os.environ.get("CHORUSFACE_BRIDGE_PORT", "8766")
     token = os.environ.get("CHORUSFACE_BRIDGE_TOKEN", "chorusface-beta")
     cors = os.environ.get("CHORUSFACE_BRIDGE_CORS", "*")
+    use_local_tts = bool(args.tts) or _env_flag("CHORUSFACE_TTS")
 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
@@ -140,7 +149,7 @@ def main() -> int:
         str(face),
         "--no-wire-loop",
     ]
-    if not args.no_tts:
+    if use_local_tts:
         cmd.append("--tts")
     if args.allow_remote_bind or host not in {"127.0.0.1", "localhost", "::1"}:
         cmd.append("--allow-remote-bind")
@@ -150,10 +159,15 @@ def main() -> int:
     url = f"http://{host}:{port}"
     print(f"  FaceBridge: {url}")
     print(f"  Authorization: Bearer {token}")
-    print(f'  Host speak: POST {url}/speak  {{"text":"..."}}')
+    print("  Voice (default): host TTS → POST /voice/expect|/pcm|/end  or /voice/timeline")
+    print(f'  Mouth cue only: POST {url}/speak  {{"text":"..."}}  (no ChorusFace audio)')
+    if use_local_tts:
+        print("  Local TTS: ON (lab) — ChorusFace will synthesize audio")
+    else:
+        print("  Local TTS: OFF (product default — host owns the voice)")
     print("  Avatar: fixed TickFeed world (not changeable in this beta)")
     print("  Window: resizable, aspect locked — see docs/ProductBeta.md")
-    print("  Smoke: python -m chorusface.host_client \"Hello there\"")
+    print("  Smoke (host voice): python -m chorusface.host_client --voice \"Hello there\"")
     return subprocess.call(cmd, cwd=str(ROOT), env=env)
 
 

@@ -464,7 +464,11 @@ class FaceBridge:
                                 "service": "chorusface",
                                 "product": "beta",
                                 "embed": "/stream.mjpg",
+                                # Host owns TTS — these are the product-default drive paths.
+                                "host_voice": "/voice/expect|/voice/pcm|/voice/end",
+                                "voice_timeline": "/voice/timeline",
                                 "prism_speak": "/prism/speak",
+                                "local_tts_default": False,
                                 "auth": {
                                     "activate": "/auth/activate",
                                     "heartbeat": "/auth/heartbeat",

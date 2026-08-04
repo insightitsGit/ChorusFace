@@ -80,6 +80,9 @@ def test_bridge_cors_options_and_speak_alias() -> None:
         assert body["product"] == "beta"
         assert body["embed"] == "/stream.mjpg"
         assert body["prism_speak"] == "/prism/speak"
+        assert body["host_voice"] == "/voice/expect|/voice/pcm|/voice/end"
+        assert body["voice_timeline"] == "/voice/timeline"
+        assert body["local_tts_default"] is False
 
         payload = json.dumps({"message": "Hello from host"}).encode("utf-8")
         conn.request(
