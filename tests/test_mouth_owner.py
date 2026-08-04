@@ -43,6 +43,37 @@ def test_openness_enables_plates() -> None:
     assert own.plate_amount == 1.0
 
 
+def test_ownership_hard_snap_matches_gpu_commit() -> None:
+    """Step 3: ownership plate_amount uses commit_plate_amount, not soft ramp."""
+    soft = resolve_mouth_ownership(
+        openness=0.25,
+        emotion="NEUTRAL",
+        phoneme="AH",
+        speaking=True,
+        hard_snap=False,
+    )
+    hard = resolve_mouth_ownership(
+        openness=0.25,
+        emotion="NEUTRAL",
+        phoneme="AH",
+        speaking=True,
+        mouth_state="OPEN",
+        hard_snap=True,
+    )
+    assert 0.0 < soft.plate_amount < 1.0
+    assert hard.plate_amount == commit_plate_amount(0.25, "OPEN")
+    assert hard.plate_amount == 0.0  # mid-band below split → closed
+    opening = resolve_mouth_ownership(
+        openness=0.25,
+        emotion="NEUTRAL",
+        phoneme="AH",
+        speaking=True,
+        mouth_state="OPENING",
+        hard_snap=True,
+    )
+    assert opening.plate_amount == 1.0
+
+
 def test_happy_enables_smile_plate() -> None:
     own = resolve_mouth_ownership(
         openness=0.1, emotion="HAPPY", phoneme="EH", speaking=True

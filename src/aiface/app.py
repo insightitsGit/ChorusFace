@@ -2188,15 +2188,31 @@ class AvatarFaceApp(FieldRuntime):
         program["avatar_smile_plate"].value = 5
         self._sync_plate_blend_from_phoneme()
         ia, ib = self._plate_pair
-        plate_a = self._atlas_textures[ia] if self._atlas_textures else self._avatar_open_plate_texture
-        plate_b = self._atlas_textures[ib] if self._atlas_textures else self._avatar_smile_plate_texture
+        plate_a = (
+            self._atlas_textures[ia]
+            if self._atlas_textures
+            else self._avatar_open_plate_texture
+        )
+        blend = self._plate_blend_current
+        mix_ab = float(blend[0])
+        # When mix is already 0 (hard snap / single plate), bind B=A so the
+        # shader cannot sample a neighbor plate through tiny float noise.
+        if mix_ab <= 1e-6:
+            plate_b = plate_a
+            ib = ia
+            self._plate_pair = (ia, ib)
+        else:
+            plate_b = (
+                self._atlas_textures[ib]
+                if self._atlas_textures
+                else self._avatar_smile_plate_texture
+            )
         plate_a.use(location=6)
         program["avatar_plate_a"].value = 6
         plate_b.use(location=7)
         program["avatar_plate_b"].value = 7
-        blend = self._plate_blend_current
         program["avatar_plate_blend"].value = (
-            float(blend[0]),
+            mix_ab,
             float(blend[1]),
             0.0,
             0.0,
@@ -3381,15 +3397,22 @@ class AvatarFaceApp(FieldRuntime):
 
     def _refresh_mouth_ownership(self) -> MouthOwnership:
         """Resolve Path-A ownership from eased openness + emotion + phoneme."""
+        from aiface.plates import HARD_SNAP_THRESHOLD
+
         mood = self._active_emotion()
         phoneme = self._render_state.last_phoneme or "REST"
         speaking = bool(self._render_state.speaking) or bool(self._visemes)
+        hard = bool(self._tickfeed_look_authority) or (
+            float(self._display_recipe.plate_sharpness) >= HARD_SNAP_THRESHOLD
+        )
         ownership = resolve_mouth_ownership(
             openness=float(self._plate_openness_current),
             emotion=mood,
             phoneme=phoneme,
             speaking=speaking,
             surprise_blend=float(self._expr_plate_blend),
+            mouth_state=str(getattr(self, "_mouth_transition", "REST")),
+            hard_snap=hard,
         )
         self._mouth_ownership = ownership
         return ownership

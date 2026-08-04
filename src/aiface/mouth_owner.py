@@ -120,12 +120,20 @@ def resolve_mouth_ownership(
     phoneme: str = "REST",
     speaking: bool = False,
     surprise_blend: float = 0.0,
+    mouth_state: str = "REST",
+    hard_snap: bool = True,
 ) -> MouthOwnership:
+    """Resolve LOOK owners. Default hard_snap matches GPU plate commit."""
     del speaking
     mood = (emotion or "NEUTRAL").strip().upper()
     key = canonical_viseme(phoneme or "REST")
     open_n = max(0.0, min(1.0, float(openness)))
-    amount = plate_amount_for_openness(open_n)
+    # Same commit as _sync_plate_blend_from_phoneme / TickFeed LOOK upload.
+    amount = (
+        commit_plate_amount(open_n, mouth_state)
+        if hard_snap
+        else plate_amount_for_openness(open_n)
+    )
     plate_on = amount > 1e-4
     smile_on = mood == "HAPPY"
     upper_on = mood in {"SURPRISED", "SURPRISE"} or float(surprise_blend) > 0.05

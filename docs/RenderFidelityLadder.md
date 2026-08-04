@@ -21,7 +21,7 @@ Baseline (good): commit `2ea6fa3` + prior §14 mouth path
 | --- | --- | --- | --- |
 | **1** | L5 never α-blends into `SOURCE_MEASURED` FIELD | `tests/test_render_ladder.py` | Measured pass looks same or cleaner (no ML mush) |
 | **2** | Fidelity HUD only (`--fidelity-hud` / **F**) — no shader change | `tests/test_render_ladder.py` Step 2 | HUD toggles; mouth unchanged |
-| **3** | `resolve_mouth_ownership(..., hard_snap=True)` matches GPU commit | `test_mouth_owner` | No mid-band veil change vs baseline |
+| **3** | `resolve_mouth_ownership(..., hard_snap=True)` matches GPU commit | `test_mouth_owner` + ladder Step 3 | No mid-band veil change vs baseline |
 | **4** | *(optional)* Bind `plate_b = plate_a` when mix already 0 | unit | No change expected |
 | **stop** | New capture take before atlas-only / geometry-only experiments | — | `AvatarCalibrationPrompt.md` dense kit |
 

@@ -44,6 +44,34 @@ def test_step2_fidelity_hud_flag_and_snapshot_wired() -> None:
     assert "tongue_mask" not in frag
 
 
+def test_step4_plate_b_mirrors_a_when_mix_zero() -> None:
+    """Step 4: upload binds plate_b=plate_a only when mix is already ~0."""
+    text = Path("src/aiface/app.py").read_text(encoding="utf-8")
+    assert "if mix_ab <= 1e-6:" in text
+    assert "plate_b = plate_a" in text
+    # Must not force mix=0 / always-nearest (failed fidelity bundle).
+    assert "Nearest measured plate only" not in text
+    assert "mix_upload = 0.0" not in text
+
+
+def test_step3_ownership_hard_snap_wired() -> None:
+    """Step 3: refresh path passes hard_snap; resolver matches GPU commit."""
+    app_text = Path("src/aiface/app.py").read_text(encoding="utf-8")
+    owner_text = Path("src/aiface/mouth_owner.py").read_text(encoding="utf-8")
+    assert "hard_snap=hard," in app_text
+    assert "mouth_state=str(getattr(self, \"_mouth_transition\", \"REST\"))" in app_text
+    assert "commit_plate_amount(open_n, mouth_state)" in owner_text
+    from aiface.mouth_owner import commit_plate_amount, resolve_mouth_ownership
+
+    own = resolve_mouth_ownership(
+        openness=0.40,
+        phoneme="AH",
+        mouth_state="OPEN",
+        hard_snap=True,
+    )
+    assert own.plate_amount == commit_plate_amount(0.40, "OPEN")
+
+
 def test_step2_fidelity_snapshot_keys() -> None:
     """Snapshot shape is stable for status/HUD consumers."""
     from aiface.app import AvatarFaceApp
