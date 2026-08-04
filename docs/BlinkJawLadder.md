@@ -18,8 +18,8 @@ render-fidelity Steps 1–4 kept. Blink plate `eyes_closed.png` baked.
 | Step | Change | Auto QA | Visual QA |
 | --- | --- | --- | --- |
 | **BJ1** | Latch lid teacher + open deadzone + ease from tick 0 | unit + source guard | Rest lashes clean; blink follows take |
-| **BJ2** | Pack EyeSystem → `lid_amt` on live/zero/hearing | unit | Chat/idle blinks match measured style |
-| **BJ3** | Hard-zero `avatar_jaw` under TickFeed LOOK | unit | Jaw does not bias plates vs FIELD |
+| **BJ2** | Pack EyeSystem → `lid_amt` on live/zero/hearing | unit | *skipped — blink park* |
+| **BJ3** | Hard-zero `avatar_jaw` under TickFeed LOOK | blink_jaw ladder + HUD `jaw=` | Mouth from FIELD/plates only; no chin slide |
 
 Demo:
 

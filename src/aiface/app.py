@@ -1692,16 +1692,12 @@ class AvatarFaceApp(FieldRuntime):
             self._plate_openness_current = float(cmd.plate_openness)
             self._held_speech_viseme = cmd.atlas_viseme
             self._open_close_source = cmd.source
-            self._ml_jaw = float(cmd.jaw_target)
-            self._biomech.jaw.set_speech_target(float(cmd.jaw_target))
+            self._ml_jaw = 0.0
+            # BJ3: keep biomech jaw spring at rest so HUD/state match GPU zero.
+            self._biomech.jaw.set_speech_target(0.0)
             phoneme = cmd.phoneme
-            phoneme_jaw = float(
-                self._condition_jaw.get(
-                    phoneme, PHONEME_JAW_TARGET.get(phoneme, 0.1)
-                )
-            )
             controls = self._live_vector.resolve(
-                phoneme=phoneme, phoneme_jaw=phoneme_jaw
+                phoneme=phoneme, phoneme_jaw=0.0
             )
             self._ml_width = float(controls.width_n)
             self._ml_plate_gate = float(controls.plate_gate)
@@ -2277,7 +2273,14 @@ class AvatarFaceApp(FieldRuntime):
         self._active_muscle_count = uniforms.count
 
         program["avatar_mouth_line"].value = self._mouth_line
-        jaw = replace(self._jaw, angle=float(state.jaw_angle))
+        # BJ3: TickFeed LOOK owns mouth via FIELD + plates. Residual jaw angle
+        # (phoneme springs / open_from_jaw) biases openness and slides the chin.
+        jaw_angle = (
+            0.0
+            if bool(getattr(self, "_tickfeed_look_authority", False))
+            else float(state.jaw_angle)
+        )
+        jaw = replace(self._jaw, angle=jaw_angle)
         program["avatar_jaw"].value = jaw.uniform
         program["avatar_jaw_span"].value = jaw.span_uniform
         program["avatar_eye_shape"].value = self._eye_shape
@@ -3999,6 +4002,11 @@ class AvatarFaceApp(FieldRuntime):
             "field_gain_eff": float(getattr(self, "_field_gain_eff", 0.0) or 0.0),
             "look_authority": look_auth,
             "provenance": "measured" if look_auth else "biomech",
+            "jaw_gpu": (
+                0.0
+                if look_auth
+                else float(getattr(self._render_state, "jaw_angle", 0.0) or 0.0)
+            ),
         }
 
     def _emit_side_a_debug(self) -> None:
@@ -4156,6 +4164,7 @@ class AvatarFaceApp(FieldRuntime):
                 f"mix={float(snap['blend_mix']):.2f} "
                 f"open={float(snap['plate_open']):.2f} "
                 f"gain={float(snap['field_gain_eff']):.2f} "
+                f"jaw={float(snap['jaw_gpu']):.3f} "
                 f"src={snap['provenance']}"
             )
         return lines
