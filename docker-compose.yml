@@ -24,16 +24,8 @@ services:
       CHORUSFACE_STREAM_FPS: "${CHORUSFACE_STREAM_FPS:-12}"
       CHORUSFACE_WORLD: /app/output/worlds/tickfeed
       CHORUSFACE_SECRETS_DIR: /app/secrets
-      # Docker Desktop (Windows/macOS): no real EGL — Xvfb + pyglet + llvmpipe.
-      # Linux GPU hosts: set CHORUSFACE_USE_XVFB=0 and MODERNGL_WINDOW=headless.
-      CHORUSFACE_USE_XVFB: "${CHORUSFACE_USE_XVFB:-1}"
-      MODERNGL_WINDOW: "${MODERNGL_WINDOW:-pyglet}"
-      # Empty — do not default to egl (breaks Xvfb/pyglet on Docker Desktop).
-      MODERNGL_BACKEND: "${MODERNGL_BACKEND:-}"
-      LIBGL_ALWAYS_SOFTWARE: "${LIBGL_ALWAYS_SOFTWARE:-1}"
-      GALLIUM_DRIVER: "${GALLIUM_DRIVER:-llvmpipe}"
-      MESA_GL_VERSION_OVERRIDE: "${MESA_GL_VERSION_OVERRIDE:-4.5}"
-    command: ["python", "scripts/run_chorusface_service.py", "--window", "pyglet"]
+      MODERNGL_WINDOW: headless
+      MODERNGL_BACKEND: "${MODERNGL_BACKEND:-egl}"
     volumes:
       - ./output/worlds/tickfeed:/app/output/worlds/tickfeed:ro
       # Mount local encrypted API key vault (never bake keys into the image).
@@ -49,5 +41,5 @@ services:
         ]
       interval: 30s
       timeout: 5s
-      retries: 5
-      start_period: 180s
+      retries: 3
+      start_period: 45s

@@ -209,30 +209,6 @@ def _environment_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-class _MissingUniform:
-    """No-op stand-in when software GL DCE's a shader uniform."""
-
-    value = None
-
-    def write(self, _data: object) -> None:
-        return None
-
-
-class _SafeShaderProgram:
-    """Program wrapper: missing uniforms become no-ops (Docker llvmpipe)."""
-
-    __slots__ = ("_prog",)
-
-    def __init__(self, prog: object) -> None:
-        self._prog = prog
-
-    def __getitem__(self, key: str) -> object:
-        try:
-            return self._prog[key]  # type: ignore[index]
-        except KeyError:
-            return _MissingUniform()
-
-
 # Demo face presence — "0 state" is idle closed lips + natural blink.
 PRESENCE_ZERO: Final = "zero"
 PRESENCE_HEARING: Final = "hearing"
@@ -2261,8 +2237,7 @@ class AvatarFaceApp(FieldRuntime):
     def _update_avatar_uniforms(self) -> None:
         pose = self._mouth_pose
         state = self._render_state
-        # Mesa llvmpipe DCE's unused uniforms — never crash the face service.
-        program = _SafeShaderProgram(self.render_program)
+        program = self.render_program
 
         self._avatar_base_texture.use(location=2)
         program["avatar_base_color"].value = 2
@@ -3016,19 +2991,6 @@ class AvatarFaceApp(FieldRuntime):
                 if caption:
                     self._voice_caption = strip_tags(caption)
                 spans = parse_timeline_spans(list(payload.get("spans") or []))
-                # Hosts that send one complete utterance per POST (e.g. browser
-                # TTS) must reset the epoch; otherwise spans land in the past
-                # and the mouth freezes on the last open shape.
-                replace = bool(
-                    payload.get("replace")
-                    or payload.get("reset")
-                    or payload.get("new_utterance")
-                )
-                if replace:
-                    self._voice_epoch = None
-                    self._voice_inbox.clear()
-                    self._visemes.clear()
-                    self._mouth_timeline.clear()
                 if self._voice_epoch is None:
                     self._voice_epoch = (
                         time.perf_counter() - self._clock0 + self._voice_trim
@@ -3042,7 +3004,6 @@ class AvatarFaceApp(FieldRuntime):
                     "scheduled": len(events),
                     "pending": 0,
                     "mode": "timeline",
-                    "replaced": replace,
                 }
 
             if kind == "pcm":
@@ -3077,18 +3038,13 @@ class AvatarFaceApp(FieldRuntime):
                 return self._voice_reply(stream, spans)
 
             if kind == "end":
-                # Always drop the utterance clock so the next /voice/timeline
-                # (or PCM) starts at "now" — even when no PCM stream was opened.
-                self._voice_inbox.clear()
-                self._voice_epoch = None
                 stream = self._voice
                 if stream is None:
-                    return {"scheduled": 0, "pending": 0, "reset": True}
+                    return {"scheduled": 0, "pending": 0}
                 spans = stream.finish()
                 reply = self._voice_reply(stream, spans)
                 stream.reset()
                 self._voice_epoch = None
-                reply["reset"] = True
                 return reply
 
         raise ValueError(f"unknown voice request {kind!r}")

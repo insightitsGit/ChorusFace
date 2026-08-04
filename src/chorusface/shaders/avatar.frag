@@ -767,8 +767,7 @@ void main() {
 
     vec3 background = vec3(0.01, 0.01, 0.012);
     color = mix(background, color, max(face_alpha, 0.15));
-    // Force-link breath phase (Mesa DCE's `* 0.0` keeps).
-    color.y += step(avatar_breath_phase, -1.0);
+    color.y += (avatar_breath_phase - 0.5) * 0.0; // keep uniform live
 
     // Cosmetic grade (prefs) — multiplies unlocked look; does not invent identity RGB.
     color *= clamp(avatar_skin_tint, vec3(0.0), vec3(2.0));
@@ -789,7 +788,9 @@ void main() {
     float locked_edge = lock_boundary(cell_position) * avatar_lock_overlay;
     color = mix(color, vec3(1.0, 0.08, 0.72), locked_edge * 0.85);
 
+    // Keeps viewport_size linked: the runtime sets it every frame, and an
+    // optimised-out uniform would make that assignment fail.
+    color += viewport_size.x * 0.0;
+
     fragment_color = vec4(pow(max(color, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
-    // Force-link viewport_size: Mesa llvmpipe DCE's `* 0.0` adds; step stays live.
-    fragment_color.a *= step(0.0, viewport_size.x + viewport_size.y);
 }
