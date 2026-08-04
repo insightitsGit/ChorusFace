@@ -23,11 +23,15 @@ Baseline (good): commit `2ea6fa3` + prior §14 mouth path
 | **2** | Fidelity HUD only (`--fidelity-hud` / **F**) — no shader change | `tests/test_render_ladder.py` Step 2 | ✅ kept |
 | **3** | `resolve_mouth_ownership(..., hard_snap=True)` matches GPU commit | `test_mouth_owner` + ladder Step 3 | ✅ kept |
 | **4** | Bind `plate_b = plate_a` when mix already 0 | ladder Step 4 | ✅ kept (no visible change) |
-| **5** | Atlas plate `openness` from viseme ladder (AA/OH not snap→0) | rebuild plates + unit | Open vowels use open atlas rungs; `open.png` kept |
-| **stop** | Atlas-only / kill `open.png` | — | Still blocked: atlas oral α ≪ `open.png` |
+| **5** | Atlas plate `openness` from viseme ladder (AA/OH not snap→0) | rebuild plates + unit | ✅ kept |
+| **6** | AA time-hint + thicker vowel oral matte (keep `open.png`) | rebuild plates + unit | together-wave |
+| **P3** | `MouthMotionState` phases → legacy transition only | `tests/test_mouth_motion.py` | together-wave |
+| **P12** | HUD: phase / provenance / open.png / occlusion stubs | ladder Step 2 keys | together-wave |
+| **stop** | Atlas-only / kill `open.png` (parked **P-A**) | — | Parked — see `RenderQualityParked.md` |
 
 Dense take v3 is in the world. Do **not** kill `open.png` until atlas oral α
-is competitive. Occlusion / jaw-residual still blocked.
+is competitive. Occlusion / jaw-residual / blink BJ2 parked — see
+`docs/RenderQualityParked.md`.
 
 ## Demo QA command
 

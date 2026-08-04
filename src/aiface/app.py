@@ -637,6 +637,9 @@ class AvatarFaceApp(FieldRuntime):
         self._plate_open_prev = 0.0
         self._plate_open_vel = 0.0
         self._mouth_transition = "REST"
+        from aiface.mouth_motion import MouthMotionState
+
+        self._mouth_motion = MouthMotionState()
         self._fidelity_hud = bool(getattr(self.argv, "fidelity_hud", False))
         from aiface.tickfeed.side_a_debug import SideADebugLog
 
@@ -3649,30 +3652,23 @@ class AvatarFaceApp(FieldRuntime):
         return float(self._plate_open_hyst)
 
     def _update_mouth_transition(self, plate_amt: float) -> str:
-        """REST / OPENING / OPEN / CLOSING from openness velocity (single-owner)."""
-        # Wall-clock dt — fixed 1/60 drifts under FPS jitter (Task 2).
+        """Phase-aware transition (P3) → legacy REST/OPENING/OPEN/CLOSING."""
         now = time.perf_counter()
-        prev_t = float(getattr(self, "_plate_open_wall_t", now) or now)
-        dt = max(1e-4, min(0.10, now - prev_t))
-        self._plate_open_wall_t = now
-        prev = float(getattr(self, "_plate_open_prev", 0.0) or 0.0)
-        raw_vel = (float(plate_amt) - prev) / max(dt, 1e-4)
-        self._plate_open_vel = (
-            0.65 * float(getattr(self, "_plate_open_vel", 0.0) or 0.0)
-            + 0.35 * raw_vel
+        motion = getattr(self, "_mouth_motion", None)
+        if motion is None:
+            from aiface.mouth_motion import MouthMotionState
+
+            motion = MouthMotionState()
+            self._mouth_motion = motion
+        motion.step(
+            target_open=float(plate_amt),
+            now=now,
+            plate_committed=float(plate_amt),
         )
+        self._plate_open_vel = float(motion.velocity)
         self._plate_open_prev = float(plate_amt)
-        vel = float(self._plate_open_vel)
-        if plate_amt < 0.08 and abs(vel) < 0.8:
-            state = "REST"
-        elif vel > 1.0 or (0.08 <= plate_amt < 0.55 and vel > 0.25):
-            state = "OPENING"
-        elif vel < -1.0 or (plate_amt > 0.12 and vel < -0.25):
-            state = "CLOSING"
-        elif plate_amt >= 0.45:
-            state = "OPEN"
-        else:
-            state = "OPENING" if plate_amt >= 0.08 else "REST"
+        self._plate_open_wall_t = now
+        state = motion.transition_state()
         self._mouth_transition = state
         return state
 
@@ -3991,8 +3987,12 @@ class AvatarFaceApp(FieldRuntime):
         ia, ib = self._plate_pair
         mix, amount = self._plate_blend_current
         look_auth = bool(getattr(self, "_tickfeed_look_authority", False))
+        motion = getattr(self, "_mouth_motion", None)
+        phase = str(getattr(motion, "phase", "REST") if motion else "REST")
+        # Parked P-A: no fake teeth/tongue occlusion — report stubs only.
         return {
             "viseme": str(self._held_speech_viseme or "REST"),
+            "phase": phase,
             "transition": str(getattr(self, "_mouth_transition", "REST")),
             "plate_index": int(ia),
             "plate_pair": [int(ia), int(ib)],
@@ -4007,6 +4007,9 @@ class AvatarFaceApp(FieldRuntime):
                 if look_auth
                 else float(getattr(self._render_state, "jaw_angle", 0.0) or 0.0)
             ),
+            "muscles": {},
+            "occlusion": {"teeth_visible": False, "tongue_visible": False},
+            "open_png": True,
         }
 
     def _emit_side_a_debug(self) -> None:
@@ -4158,6 +4161,7 @@ class AvatarFaceApp(FieldRuntime):
             snap = self._fidelity_snapshot()
             lines.append(
                 f"FIDELITY viseme={snap['viseme']} "
+                f"phase={snap['phase']} "
                 f"trans={snap['transition']} "
                 f"plate={snap['plate_index']} "
                 f"amt={float(snap['blend_amount']):.2f} "
@@ -4165,7 +4169,8 @@ class AvatarFaceApp(FieldRuntime):
                 f"open={float(snap['plate_open']):.2f} "
                 f"gain={float(snap['field_gain_eff']):.2f} "
                 f"jaw={float(snap['jaw_gpu']):.3f} "
-                f"src={snap['provenance']}"
+                f"src={snap['provenance']} "
+                f"open.png={'on' if snap.get('open_png') else 'off'}"
             )
         return lines
 

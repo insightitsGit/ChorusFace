@@ -191,6 +191,16 @@ def _normalized_metrics(frames: Sequence[Any]) -> tuple[float, float, float, flo
     )
 
 
+# Dense-kit v3 beat centers (seconds) — bias frame pick when timestamps exist.
+_VISEME_TIME_HINTS: Final[dict[str, tuple[float, float]]] = {
+    "AA": (1.4, 2.3),  # OPEN “ah”
+    "AH": (1.4, 2.3),
+    "TH": (3.0, 3.7),  # TONGUE_TH “think”
+    "EE": (2.3, 3.0),  # SAY_HI “hi”
+    "OH": (3.7, 4.4),  # SURPRISE “oh”
+}
+
+
 def score_frame_for_viseme(
     frame: Any,
     viseme: str,
@@ -215,6 +225,8 @@ def score_frame_for_viseme(
     teeth_bonus = 0.0
     if key in OPEN_TOOTH_VISEMES:
         teeth_bonus = -0.10 * teeth
+        # Prefer the most open available frames for vowels.
+        teeth_bonus -= 0.15 * open_n
     elif key == "TH":
         # Prefer a slight aperture + teeth hint (tongue/teeth edge) over DD.
         teeth_bonus = -0.12 * teeth
@@ -229,11 +241,23 @@ def score_frame_for_viseme(
         smile_penalty = 0.55 * max(0.0, smile_n - 0.35)
         # Strongly prefer the flattest closed aperture available.
         smile_penalty += 0.40 * open_n
+    time_penalty = 0.0
+    hint = _VISEME_TIME_HINTS.get(key)
+    t = float(getattr(frame, "time_seconds", -1.0) or -1.0)
+    if hint is not None and t >= 0.0:
+        t0, t1 = hint
+        if t0 <= t < t1:
+            time_penalty = -0.35
+        else:
+            # Soft distance from beat window.
+            mid = 0.5 * (t0 + t1)
+            time_penalty = 0.08 * abs(t - mid)
     return (
         abs(open_n - target_o) * 1.45
         + abs(smile_n - target_s) * 0.95
         + smile_penalty
         + teeth_bonus
+        + time_penalty
         - 0.0006 * sharp
     )
 

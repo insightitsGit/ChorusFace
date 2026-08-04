@@ -370,8 +370,10 @@ def build_mouth_interior_matte(
     mouth = landmarks_meta.get("mouth_center_image") or {}
     mx = float(mouth.get("x", face.x + face.width * 0.5))
     my = float(mouth.get("y", face.y + face.height * 0.78))
-    half_w = max(float(face.width) * 0.13, 5.0)
-    half_h = max(float(face.height) * (0.035 + 0.10 * float(np.clip(openness, 0.0, 0.4))), 2.5)
+    open_n = float(np.clip(openness, 0.0, 0.5))
+    # RF6: vowels need a taller oral disk — prior 0.10*open left atlas α ~5%.
+    half_w = max(float(face.width) * (0.13 + 0.04 * open_n), 5.0)
+    half_h = max(float(face.height) * (0.035 + 0.16 * open_n), 2.5)
     yy, xx = np.mgrid[0:height, 0:width].astype(np.float32)
     u = (xx - mx) / half_w
     v = (yy - my) / half_h
@@ -1307,7 +1309,7 @@ def _write_plate_atlas(
         tag = plate_visemes.get(index, "")
         matte_open = max(float(frame.metrics.mouth_open), 0.04)
         if tag in OPEN_TOOTH_VISEMES:
-            matte_open = max(matte_open, 0.28)
+            matte_open = max(matte_open, 0.38)
         elif tag:
             matte_open = max(matte_open, float(VISEME_OPENNESS.get(tag, 0.0)) * 0.35)
         alpha = build_mouth_interior_matte(

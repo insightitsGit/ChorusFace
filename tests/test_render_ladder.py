@@ -27,17 +27,18 @@ def test_step1_driver_source_matches_policy() -> None:
 
 
 def test_step2_fidelity_hud_flag_and_snapshot_wired() -> None:
-    """Step 2: HUD is opt-in overlay only — no mouth/shader fidelity knobs."""
+    """HUD is opt-in overlay; parked P-A knobs must stay out of app/shader."""
     app_text = Path("src/aiface/app.py").read_text(encoding="utf-8")
     demo_text = Path("scripts/run_tickfeed_demo.py").read_text(encoding="utf-8")
     assert '"--fidelity-hud"' in app_text
     assert '"--fidelity-hud"' in demo_text
     assert "def _fidelity_snapshot(self)" in app_text
     assert 'f"FIDELITY viseme=' in app_text
+    assert "phase={snap['phase']}" in app_text
     assert "self._fidelity_hud = not bool" in app_text
-    # Must not re-land failed render knobs with the HUD step.
+    # P3 MouthMotionState is allowed; parked P-A must stay out.
+    assert "MouthMotionState" in app_text
     assert "mouth_muscles" not in app_text
-    assert "mouth_motion" not in app_text
     assert "_tickfeed_jaw_residual" not in app_text
     frag = Path("src/aiface/shaders/avatar.frag").read_text(encoding="utf-8")
     assert "teeth_mask" not in frag
@@ -105,7 +106,12 @@ def test_step2_fidelity_snapshot_keys() -> None:
     snap = _HudHost()._fidelity_snapshot()
     assert snap["viseme"] == "AA"
     assert snap["transition"] == "OPEN"
+    assert snap["phase"] == "REST"  # no MouthMotionState on host → default
     assert snap["plate_index"] == 3
     assert snap["plate_pair"] == [3, 4]
     assert snap["provenance"] == "measured"
+    assert snap["open_png"] is True
+    assert snap["occlusion"] == {"teeth_visible": False, "tongue_visible": False}
+    assert snap["muscles"] == {}
+    assert float(snap["jaw_gpu"]) == 0.0  # look authority → hard-zero
     assert "fidelity_hud" not in snap  # toggle lives on app, not snapshot
