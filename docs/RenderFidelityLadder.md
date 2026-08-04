@@ -23,10 +23,11 @@ Baseline (good): commit `2ea6fa3` + prior §14 mouth path
 | **2** | Fidelity HUD only (`--fidelity-hud` / **F**) — no shader change | `tests/test_render_ladder.py` Step 2 | ✅ kept |
 | **3** | `resolve_mouth_ownership(..., hard_snap=True)` matches GPU commit | `test_mouth_owner` + ladder Step 3 | ✅ kept |
 | **4** | Bind `plate_b = plate_a` when mix already 0 | ladder Step 4 | ✅ kept (no visible change) |
-| **stop** | New capture take before atlas-only / geometry-only experiments | — | `AvatarCalibrationPrompt.md` dense kit |
+| **stop** | Dense-kit MP4 (script v2 in code) before atlas-only / geometry experiments | validate + rebuild | Drop into `assets/.../calibration_takes/` |
 
-After a denser take (strong atlas α + true AA open), revisit atlas-primary and
-geometry-led motion as **new** steps — not before.
+Script/prompt for the denser take are ready (`BeatId.TONGUE_TH`, true REST,
+wide OPEN). After the MP4 lands and `build_tickfeed_demo --clean` succeeds,
+revisit atlas-primary / occlusion / jaw-residual as **new** ladder steps.
 
 ## Demo QA command
 

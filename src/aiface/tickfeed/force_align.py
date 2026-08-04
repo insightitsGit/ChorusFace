@@ -137,7 +137,13 @@ def _apply_whisper_words(
         bid = str(beat.get("id") or "")
         speech = str(beat.get("speech") or "")
         words = _words_in_speech(speech)
-        if not words or bid not in {"SAY_HI", "TALK", "OPEN", "SURPRISE"}:
+        if not words or bid not in {
+            "SAY_HI",
+            "TALK",
+            "OPEN",
+            "SURPRISE",
+            "TONGUE_TH",
+        }:
             continue
         t0 = float(beat["t0"])
         t1 = float(beat["t1"])
@@ -221,7 +227,13 @@ def _apply_energy_words(
         bid = str(beat.get("id") or "")
         speech = str(beat.get("speech") or "")
         words = _words_in_speech(speech)
-        if not words or bid not in {"SAY_HI", "TALK", "OPEN", "SURPRISE"}:
+        if not words or bid not in {
+            "SAY_HI",
+            "TALK",
+            "OPEN",
+            "SURPRISE",
+            "TONGUE_TH",
+        }:
             continue
         t0 = float(beat["t0"])
         t1 = float(beat["t1"])

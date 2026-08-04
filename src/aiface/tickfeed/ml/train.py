@@ -241,6 +241,8 @@ def _viseme_from_open(open_amt: float, beat_id: str) -> int:
         return VISEME_TABLE.index("EE")
     if beat_id == "OPEN":
         return VISEME_TABLE.index("AA")
+    if beat_id == "TONGUE_TH":
+        return VISEME_TABLE.index("TH")
     if open_amt < 0.05:
         return VISEME_TABLE.index("REST")
     if open_amt < 0.25:

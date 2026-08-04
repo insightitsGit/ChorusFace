@@ -27,6 +27,7 @@ _WORD_VISEMES: dict[str, tuple[str, ...]] = {
     "today": ("TT", "OH", "DD", "EE"),
     "ah": ("AA",),
     "oh": ("OH",),
+    "think": ("TH", "IH", "NN", "KK"),
 }
 
 # Map informal → VISEME_TABLE names
@@ -82,7 +83,7 @@ def build_speech_align(
         words = _words_in_speech(speech)
         viseme = "REST"
         word = ""
-        if words and bid in {"SAY_HI", "TALK", "OPEN", "SURPRISE"}:
+        if words and bid in {"SAY_HI", "TALK", "OPEN", "SURPRISE", "TONGUE_TH"}:
             span = max(float(beat["t1"]) - float(beat["t0"]), 1e-6)
             u = (t_sec - float(beat["t0"])) / span
             # Expand words into viseme chain
@@ -166,17 +167,29 @@ def build_look_drive(
         elif beat_id == "SAY_HI":
             open_ = max(0.22, min(curve_o, 0.55))
             smile = min(max(curve_s, 0.15), 0.45)
+        elif beat_id == "TONGUE_TH":
+            # Mild open, no smile — tongue tip owns the oral disk.
+            open_ = max(0.18, min(curve_o if curve_o > 0.05 else 0.28, 0.40))
+            smile = 0.0
         elif beat_id == "SURPRISE":
             open_ = max(0.2, min(curve_o, 0.45))
             surprise = 0.8
             brow = 0.7
             emotion = int(EmotionId.SURPRISED)
-            lid = max(lid, 0.95)
+            # Keep measured EAR blinks — do not force lids open.
+            lid = max(lid, 0.85) if lid > 0.5 else lid
         elif beat_id == "ANGRY":
             open_ = 0.0
             smile = 0.0
             brow = 0.7
             emotion = int(EmotionId.ANGRY)
+        elif beat_id == "BLINK":
+            # Deliberate full close for lid teacher + eyes_closed plate bake.
+            open_ = 0.0
+            smile = 0.0
+            surprise = 0.0
+            brow = 0.0
+            lid = min(lid, 0.08)
         elif beat_id == "TALK":
             open_ = max(0.35, min(curve_o if curve_o > 0.05 else 0.45, 0.75))
             smile = min(curve_s, 0.3)

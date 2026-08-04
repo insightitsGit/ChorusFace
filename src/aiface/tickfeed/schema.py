@@ -55,6 +55,8 @@ class BeatId(IntEnum):
     SURPRISE = 4
     ANGRY = 5
     TALK = 6
+    TONGUE_TH = 7
+    BLINK = 8
     UNKNOWN = 255
 
 

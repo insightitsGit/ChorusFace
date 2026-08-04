@@ -80,15 +80,18 @@ def labels_from_drives(
         "THINKING": EmotionId.THINKING,
     }.get(emo, EmotionId.NEUTRAL)
     beat = BeatId.REST
+    phone = (phoneme or "REST").upper()
     if smile_amt > 0.45 and open_amt < 0.2:
         beat = BeatId.SMILE
     elif open_amt > 0.55:
         beat = BeatId.OPEN
+    elif phone == "TH":
+        beat = BeatId.TONGUE_TH
     elif surprise_amt > 0.4:
         beat = BeatId.SURPRISE
     elif emo == "ANGRY":
         beat = BeatId.ANGRY
-    elif (phoneme or "REST").upper() not in {"REST", "CLOSED", "SIL"}:
+    elif phone not in {"REST", "CLOSED", "SIL"}:
         beat = BeatId.TALK
     return TickLabels(
         beat_id=int(beat),

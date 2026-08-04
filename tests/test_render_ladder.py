@@ -44,6 +44,22 @@ def test_step2_fidelity_hud_flag_and_snapshot_wired() -> None:
     assert "tongue_mask" not in frag
 
 
+def test_dense_kit_script_has_tongue_th_and_blink() -> None:
+    """Dense calibration contract: tongue TH + deliberate BLINK lid window."""
+    from aiface.tickfeed.calibration import calibration_script_payload
+    from aiface.tickfeed.schema import BeatId
+
+    script = calibration_script_payload()
+    assert int(BeatId.TONGUE_TH) == 7
+    assert int(BeatId.BLINK) == 8
+    assert any(b["id"] == "TONGUE_TH" for b in script["beats"])
+    assert any(b["id"] == "BLINK" for b in script["beats"])
+    prompt = Path("docs/AvatarCalibrationPrompt.md").read_text(encoding="utf-8")
+    assert "TONGUE_TH" in prompt
+    assert "BLINK" in prompt
+    assert "think" in prompt.lower()
+
+
 def test_step4_plate_b_mirrors_a_when_mix_zero() -> None:
     """Step 4: upload binds plate_b=plate_a only when mix is already ~0."""
     text = Path("src/aiface/app.py").read_text(encoding="utf-8")

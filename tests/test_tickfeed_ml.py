@@ -22,8 +22,18 @@ from aiface.tickfeed.schema import PackageKind, BeatId
 def test_calibration_script_beats() -> None:
     script = calibration_script_payload()
     assert script["duration_s"] == 8.0
-    assert beat_at_time(script, 1.5)["id"] == "SMILE"
-    assert beat_at_time(script, 3.2)["beat_id"] == int(BeatId.SAY_HI)
+    assert script["schema"] == "aiface.calibration_script.v3"
+    assert script["dense_kit"] is True
+    assert script["blink_kit"] is True
+    assert beat_at_time(script, 1.0)["id"] == "SMILE"
+    assert beat_at_time(script, 2.6)["beat_id"] == int(BeatId.SAY_HI)
+    assert beat_at_time(script, 3.3)["id"] == "TONGUE_TH"
+    assert beat_at_time(script, 3.3)["speech"] == "think"
+    assert beat_at_time(script, 5.3)["id"] == "BLINK"
+    assert beat_at_time(script, 5.3)["beat_id"] == int(BeatId.BLINK)
+    ids = [b["id"] for b in script["beats"]]
+    assert "TONGUE_TH" in ids
+    assert "BLINK" in ids
 
 
 def test_cosmetics_roundtrip(tmp_path: Path) -> None:

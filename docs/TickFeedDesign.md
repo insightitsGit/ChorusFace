@@ -640,7 +640,7 @@ CHORUS master recv spool, L4 AE upgrade path.
 
 **Still useful next (in order):**
 
-1. New calibration take (neutral rest + TH tongue) → `build_tickfeed_demo --clean`  
+1. Drop dense-kit MP4 v3 (REST/OPEN/`TONGUE_TH`/`BLINK`) → `build_tickfeed_demo --clean`  
 2. Full Montreal MFA if Whisper words are not enough  
 3. Per-avatar L3 size vs quality on more takes  
 4. Multi-host HELLO_ACK ceremony polish (optional ops)  

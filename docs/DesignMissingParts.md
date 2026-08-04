@@ -12,7 +12,8 @@ audio-clock spans; local lane-B CHUNK reassemble is runtime-wired; multi-host
 recv spool + master target landed; Whisper-words teacher when keyed; DIS dense
 tracker default; L4 AE upgrades when PCA holdout MAE is insufficient.
 
-Operator-owned remaining: **new calibration take** (neutral rest + tongue TH).
+Operator-owned remaining: **drop dense-kit MP4 v3** (script already in code:
+true neutral REST + wide OPEN + `TONGUE_TH` “think” + deliberate `BLINK`).
 
 ---
 
@@ -20,7 +21,7 @@ Operator-owned remaining: **new calibration take** (neutral rest + tongue TH).
 
 | # | Severity | Item | Why |
 | --- | --- | --- | --- |
-| 1 | **P2** | New calibration take | True neutral rest + tongue TH — capture, not code |
+| 1 | **P2** | Drop dense+blink calibration MP4 | Script/prompt v3 ready — regenerate with BLINK then `--clean` rebuild |
 
 ---
 

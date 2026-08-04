@@ -9,44 +9,76 @@ from typing import Any, Final
 from aiface.tickfeed.schema import BeatId, TICK_RATE_HZ
 
 SCRIPT_NAME: Final = "calibration_script.json"
-SCRIPT_VERSION: Final = "aiface.calibration_script.v1"
+SCRIPT_VERSION: Final = "aiface.calibration_script.v3"
 DURATION_S: Final = 8.0
 
+# Dense teacher kit packed into 8.0s — REST/OPEN/TH + deliberate BLINK for lids.
 DEFAULT_BEATS: Final[tuple[dict[str, Any], ...]] = (
-    {"id": "REST", "beat_id": int(BeatId.REST), "t0": 0.0, "t1": 1.0, "speech": ""},
-    {"id": "SMILE", "beat_id": int(BeatId.SMILE), "t0": 1.0, "t1": 2.0, "speech": ""},
+    {
+        "id": "REST",
+        "beat_id": int(BeatId.REST),
+        "t0": 0.0,
+        "t1": 0.7,
+        "speech": "",
+        "notes": "true_neutral_flat_lips",
+    },
+    {
+        "id": "SMILE",
+        "beat_id": int(BeatId.SMILE),
+        "t0": 0.7,
+        "t1": 1.4,
+        "speech": "",
+        "notes": "closed_lip_max_corners",
+    },
     {
         "id": "OPEN",
         "beat_id": int(BeatId.OPEN),
-        "t0": 2.0,
-        "t1": 3.0,
+        "t0": 1.4,
+        "t1": 2.3,
         "speech": "ah",
+        "notes": "wide_ah_upper_and_lower_teeth",
     },
     {
         "id": "SAY_HI",
         "beat_id": int(BeatId.SAY_HI),
-        "t0": 3.0,
-        "t1": 4.0,
+        "t0": 2.3,
+        "t1": 3.0,
         "speech": "hi",
+    },
+    {
+        "id": "TONGUE_TH",
+        "beat_id": int(BeatId.TONGUE_TH),
+        "t0": 3.0,
+        "t1": 3.7,
+        "speech": "think",
+        "notes": "tongue_tip_between_teeth",
     },
     {
         "id": "SURPRISE",
         "beat_id": int(BeatId.SURPRISE),
-        "t0": 4.0,
-        "t1": 5.0,
+        "t0": 3.7,
+        "t1": 4.4,
         "speech": "oh",
     },
     {
         "id": "ANGRY",
         "beat_id": int(BeatId.ANGRY),
-        "t0": 5.0,
-        "t1": 6.0,
+        "t0": 4.4,
+        "t1": 5.1,
         "speech": "",
+    },
+    {
+        "id": "BLINK",
+        "beat_id": int(BeatId.BLINK),
+        "t0": 5.1,
+        "t1": 5.7,
+        "speech": "",
+        "notes": "full_bilateral_lid_close_hold",
     },
     {
         "id": "TALK",
         "beat_id": int(BeatId.TALK),
-        "t0": 6.0,
+        "t0": 5.7,
         "t1": 7.5,
         "speech": "Hello there. How are you today?",
     },
@@ -56,6 +88,7 @@ DEFAULT_BEATS: Final[tuple[dict[str, Any], ...]] = (
         "t0": 7.5,
         "t1": 8.0,
         "speech": "",
+        "notes": "true_neutral_flat_lips",
     },
 )
 
@@ -66,6 +99,8 @@ def calibration_script_payload() -> dict[str, Any]:
         "duration_s": DURATION_S,
         "tick_rate": TICK_RATE_HZ,
         "talk_line": "Hello there. How are you today?",
+        "dense_kit": True,
+        "blink_kit": True,
         "beats": [dict(b) for b in DEFAULT_BEATS],
         "prompt_doc": "docs/AvatarCalibrationPrompt.md",
     }
@@ -122,10 +157,16 @@ def validate_calibration_take(
                 "Generate_a_single_continuous_.mp4",
                 "source.mp4",
                 "avatar.mp4",
+                "blonde_woman_8s.mp4",
+                "male_8s.mp4",
             ):
                 cand = base / name
                 if cand.is_file():
                     vid = cand
+                    break
+                nested = base / "calibration_takes" / name
+                if nested.is_file():
+                    vid = nested
                     break
             if vid is not None:
                 break
@@ -159,6 +200,13 @@ def validate_calibration_take(
         report["reason"] = str(exc)
         return report
     report["checks"]["script_present"] = (root / SCRIPT_NAME).is_file()
+    beats = script.get("beats") or []
+    report["checks"]["has_tongue_th_beat"] = any(
+        str(b.get("id") or "") == "TONGUE_TH" for b in beats
+    )
+    report["checks"]["has_blink_beat"] = any(
+        str(b.get("id") or "") == "BLINK" for b in beats
+    )
     report["ok"] = all(bool(v) for v in report["checks"].values())
     if not report["ok"]:
         report["reason"] = "failed scaffolding lock checks"
@@ -168,6 +216,7 @@ def validate_calibration_take(
 __all__ = [
     "DURATION_S",
     "SCRIPT_NAME",
+    "SCRIPT_VERSION",
     "beat_at_time",
     "calibration_script_payload",
     "load_calibration_script",
