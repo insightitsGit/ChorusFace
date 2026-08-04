@@ -643,15 +643,22 @@ class FaceBridge:
                             raise BridgeError(
                                 HTTPStatus.BAD_REQUEST, "spans required"
                             )
+                        voice_payload: dict[str, Any] = {
+                            "spans": spans,
+                            "emotion": str(payload.get("emotion", "")).strip(),
+                            "caption": str(
+                                payload.get("caption") or payload.get("text") or ""
+                            ).strip(),
+                        }
+                        # One complete host-TTS utterance per POST must reset the
+                        # voice epoch; otherwise spans schedule in the past and
+                        # the mouth freezes open on the last shape.
+                        for key in ("replace", "reset", "new_utterance"):
+                            if key in payload:
+                                voice_payload[key] = payload[key]
                         self._voice(
                             "timeline",
-                            {
-                                "spans": spans,
-                                "emotion": str(payload.get("emotion", "")).strip(),
-                                "caption": str(
-                                    payload.get("caption") or payload.get("text") or ""
-                                ).strip(),
-                            },
+                            voice_payload,
                         )
                         return
                     if path == "/voice/pcm":

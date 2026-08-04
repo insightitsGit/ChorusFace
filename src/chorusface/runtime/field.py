@@ -541,7 +541,11 @@ class FieldRuntime(mglw.WindowConfig):
 
     def _update_viewport_uniform(self) -> None:
         width, height = self._scene_size()
-        self.render_program["viewport_size"].value = (float(width), float(height))
+        # Some software GL drivers DCE unused uniforms; never crash the face service.
+        try:
+            self.render_program["viewport_size"].value = (float(width), float(height))
+        except KeyError:
+            return
 
     def _update_frame_uniform(self) -> None:
         self.render_program["avatar_frame"].value = tuple(
