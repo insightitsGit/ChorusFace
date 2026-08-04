@@ -1,6 +1,8 @@
-# ChorusFace / AminIntheLoop — documentation index
+# ChorusFace — documentation index
 
-**Start here for the walkthrough:** [`AMIN_DESIGN.md`](AMIN_DESIGN.md)
+**Installers / LLMs first:** [`ai-overview.md`](ai-overview.md) · [`llm-context.md`](llm-context.md) · [`LIMITS.md`](LIMITS.md) · [`ProductBeta.md`](ProductBeta.md)
+
+**Amin walkthrough:** [`AMIN_DESIGN.md`](AMIN_DESIGN.md)
 
 ## Design (what we agreed)
 
