@@ -1,7 +1,7 @@
 # VowelDesign — Final handoff answers (MERGED · ARCHITECTURE CLOSED)
 
 **Status:** Phase-1 **architecture CLOSED** (GPT · Gemini · Claude three-way merge).  
-**Do not implement** until Amin asks. Next gate = **D35 experiment** (validation, not redesign).  
+**Output retarget (post-close):** cell-group \(W\) is **not** the NWR delivery path — see [`VowelDesignNWRReconciliation.md`](VowelDesignNWRReconciliation.md). Host API / GA-16 / teacher / A·B *concept* stay; playback = biomech muscle impulses.  
 **Questions:** [`VowelDesignFinalHandoff.md`](VowelDesignFinalHandoff.md)  
 **Parent:** [`VowelDesign.md`](VowelDesign.md) · Round-2: [`VowelDesignDetailAnswers.md`](VowelDesignDetailAnswers.md)
 

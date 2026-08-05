@@ -3007,7 +3007,8 @@ class AvatarFaceApp(FieldRuntime):
                 }
 
             if kind == "vowel":
-                # VowelDesign: GA-16 PulseChunk → existing viseme schedule path.
+                # VowelDesign: GA-16 compose → schedule → BiomechanicalFace
+                # (submit_phoneme). Do not collapse tags to the coarse 7-vowel set.
                 from chorusface.speech import schedule_spans
                 from chorusface.vowel.pipeline import compose_utterance
 
@@ -3017,28 +3018,8 @@ class AvatarFaceApp(FieldRuntime):
                 if emotion in EMOTION_IMPULSES:
                     self._voice_emotion = emotion
                 self._voice_caption = strip_tags(result.payload.text)
-                # Map GA-16 → visemes understood by canonical_viseme / plates.
-                _map = {
-                    "EE": "EE",
-                    "IH": "IH",
-                    "EY": "EE",
-                    "EH": "EH",
-                    "AE": "AH",
-                    "AA": "AA",
-                    "AO": "AA",
-                    "OH": "OH",
-                    "UH": "OU",
-                    "OU": "OU",
-                    "AH": "AH",
-                    "AX": "AH",
-                    "ER": "EH",
-                    "AY": "AA",
-                    "AW": "AA",
-                    "OY": "OH",
-                }
                 spans = [
-                    (_map.get(s.tag, "AH"), s.start_s, s.end_s)
-                    for s in result.payload.spans
+                    (s.tag, s.start_s, s.end_s) for s in result.payload.spans
                 ]
                 if self._voice_epoch is None:
                     self._voice_epoch = (
@@ -3055,6 +3036,7 @@ class AvatarFaceApp(FieldRuntime):
                     "scheduled": len(events),
                     "pending": 0,
                     "mode": "vowel",
+                    "drive": "biomech",
                     "n_ticks": result.chunk.n_ticks,
                 }
 

@@ -42,6 +42,15 @@ VISEME_OPENNESS: Final[dict[str, float]] = {
     "OU": 1.00,
     "AA": 1.00,
     "AH": 1.00,
+    "AE": 1.00,
+    "AO": 1.00,
+    "UH": 0.85,
+    "AX": 0.55,
+    "ER": 0.70,
+    "EY": 0.95,
+    "AY": 1.00,
+    "AW": 1.00,
+    "OY": 0.95,
 }
 
 # Relative smile width target in the capture's observed smile range [0,1].
@@ -64,10 +73,35 @@ VISEME_SMILE: Final[dict[str, float]] = {
     "OU": 0.30,
     "AA": 0.40,
     "AH": 0.40,
+    "AE": 0.60,
+    "AO": 0.32,
+    "UH": 0.28,
+    "AX": 0.30,
+    "ER": 0.35,
+    "EY": 0.70,
+    "AY": 0.45,
+    "AW": 0.32,
+    "OY": 0.30,
 }
 
 OPEN_TOOTH_VISEMES: Final[frozenset[str]] = frozenset(
-    {"AA", "AH", "OH", "OU", "EH", "EE", "IH"}
+    {
+        "AA",
+        "AH",
+        "OH",
+        "OU",
+        "EH",
+        "EE",
+        "IH",
+        "AE",
+        "AO",
+        "EY",
+        "AY",
+        "AW",
+        "OY",
+        "UH",
+        "ER",
+    }
 )
 
 

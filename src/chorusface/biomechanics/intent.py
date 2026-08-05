@@ -31,6 +31,16 @@ PHONEME_JAW_TARGET: dict[str, float] = {
     "EE": 0.20,
     "OH": 0.74,
     "OU": 0.40,
+    # GA-16 extensions (VowelDesign)
+    "AE": 0.78,
+    "AO": 0.88,
+    "UH": 0.28,
+    "AX": 0.16,
+    "ER": 0.32,
+    "EY": 0.42,
+    "AY": 0.82,
+    "AW": 0.90,
+    "OY": 0.72,
     # Legacy aliases still accepted if a host bypasses canonical_viseme.
     "MM": 0.0,
     "FV": 0.12,

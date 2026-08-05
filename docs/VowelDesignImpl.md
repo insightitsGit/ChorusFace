@@ -2,22 +2,25 @@
 
 **Branch:** `vowelBrnach`  
 **Freeze:** [`VowelDesignFinalAnswers.md`](VowelDesignFinalAnswers.md)  
+**NWR retarget:** [`VowelDesignNWRReconciliation.md`](VowelDesignNWRReconciliation.md)  
 **Package:** `src/chorusface/vowel/`
 
 ## What’s implemented
 
 | Piece | Module / surface |
 | --- | --- |
-| GA-16 + 9D F9 contract | `schema.py`, `priors.py` |
+| GA-16 + 9D F9 contract | `schema.py`, `priors.py` (9D = compose/debug; not primary cell writer) |
 | Host utterance JSON (F1) | `utterance.py` |
 | G2P → REST fallback (F3) | `g2p.py`, `data/ga16_dict.json` |
 | Model A MLP 22→64→64→9 | `model_a.py` |
 | Model B attack/hold/release + diphthong + bridges | `model_b.py` |
 | PulseChunk PLS1 + WordSlice | `pulsechunk.py` |
 | Compose pipeline | `pipeline.py` |
-| Expand matrix \(W\) | `expand.py` |
-| Plate lookup stub | `plates.py` |
-| TickPackage KEY/Δ emit | `tick_emit.py` |
+| **Biomech muscle drive** | `muscle_drive.py` + app `kind=="vowel"` → GA-16 tags → `_fire_impulse` |
+| Full GA-16 `phoneme_muscles` | `biomechanics/data/face_definition.json` + jaw/`MOUTH_POSES`/`plates` |
+| Expand matrix \(W\) | `expand.py` — **legacy/debug**, not product path for locked cells |
+| Plate lookup stub | `plates.py` (vowel) + `chorusface/plates.py` LOOK overlay |
+| TickPackage KEY/Δ emit | `tick_emit.py` — optional / mouth-only later |
 | D35 GO/NO-GO | `teacher.py` |
 | Acceptance F15 | `acceptance.py` |
 | Runtime helper | `runtime.py` |
@@ -60,8 +63,12 @@ POST /vowel/utterance
 }
 ```
 
-Returns `pulsechunk_b64`, schedules GA-16→viseme events on the existing mouth timeline when `play` is true.
+Returns `pulsechunk_b64`, schedules **first-class GA-16** spans on the mouth timeline when `play` is true. Each fire calls `BiomechanicalFace.submit_phoneme` (muscle impulses + jaw), not a coarse 7-vowel collapse.
 
-## Still gated by D35
+```powershell
+pytest tests/test_vowel_muscle_drive.py tests/test_vowel_pulsechunk.py -q
+```
 
-Full teacher shoot + Dataset A/B from video are **not** substituted. Until D35 passes, Model A trains from design priors (§5.2). Consonants remain on TickFeed §14.
+## Still gated by teacher videos
+
+Full SAD/ANGRY (and remaining emotion) teacher clips refine the muscle table / future Model A. Until then, GA-16 uses authored `phoneme_muscles` + priors. Consonants remain on TickFeed §14.

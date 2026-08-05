@@ -1,6 +1,6 @@
 # VowelDesign
 
-**Status:** Phase-1 **architecture CLOSED**; implementation on branch `vowelBrnach` — see [`VowelDesignImpl.md`](VowelDesignImpl.md).  
+**Status:** Phase-1 **architecture CLOSED**; **NWR output retarget locked** — see [`VowelDesignNWRReconciliation.md`](VowelDesignNWRReconciliation.md). Implementation on branch `vowelBrnach` — [`VowelDesignImpl.md`](VowelDesignImpl.md).  
 **Created:** 2026-08-05  
 **Owns:** General American vowel inventory (16), six face articulators, per-tick (60 Hz) targets.  
 **Does not replace:** older design docs below — they stay the source of truth until this doc is accepted and linked from [`docs/README.md`](README.md).
@@ -8,7 +8,8 @@
 **Help packet (7 questions + full copy for sharing):** [`VowelDesignHelp.md`](VowelDesignHelp.md) · teacher prompts: [`VowelTeacherPrompts.md`](VowelTeacherPrompts.md)  
 **Review merge (Gemini · GPT · Claude):** [`VowelDesignReviewMerge.md`](VowelDesignReviewMerge.md)  
 **Round-2 questions:** [`VowelDesignDetailQuestions.md`](VowelDesignDetailQuestions.md) · **answers (Gemini · Claude · GPT D36–D42):** [`VowelDesignDetailAnswers.md`](VowelDesignDetailAnswers.md)  
-**Final handoff:** [`VowelDesignFinalHandoff.md`](VowelDesignFinalHandoff.md) · **answers (ARCHITECTURE CLOSED):** [`VowelDesignFinalAnswers.md`](VowelDesignFinalAnswers.md)
+**Final handoff:** [`VowelDesignFinalHandoff.md`](VowelDesignFinalHandoff.md) · **answers (ARCHITECTURE CLOSED):** [`VowelDesignFinalAnswers.md`](VowelDesignFinalAnswers.md)  
+**NWR reconciliation (Step 0):** [`VowelDesignNWRReconciliation.md`](VowelDesignNWRReconciliation.md)
 
 ### Locked premises (Amin, 2026-08-05)
 
@@ -20,9 +21,10 @@
 | Time base | TickFeed **60 Hz** (≈ **16.67 ms**); cell/LOOK values may change every tick |
 | State-0 | At utterance / segment start, face articulator state is **0** (rest) |
 | Two datasets | **(A) targets** 16×6×6 = **576** end-states · **(B) transfer** tick path for whole set |
-| Wire unit | **PulseChunk** — one statement’s ordered 16.7 ms samples for all cells/articulators |
+| Wire unit | **PulseChunk** — utterance clock + GA-16/emotion schedule (debug 9D optional) |
 | Product focus | **No TTS ownership** — sync with **LLM/API**; payload is **vectors**; transport **CHORUS Fabric** |
-| Render substrate | **NWR** (cell grid / objects) — geometry+identity rigid; PulseChunk supplies **motion vectors only** |
+| Render substrate | **NWR** — geometry+identity rigid; **motion via biomechanics muscle impulses** (not cell KEY writes on Master-Locked regions) |
+| Delivery path | Host utterance → compose → `schedule_spans` → `_fire_impulse` → `BiomechanicalFace.submit_phoneme` |
 
 ## Relationship to existing docs (keep)
 

@@ -50,6 +50,16 @@ CANONICAL_VISEMES: Final[frozenset[str]] = frozenset(
         "EE",  # wide smile vowel (iy family)
         "OH",  # oh / toe
         "OU",  # ou / book / moon
+        # GA-16 vowel extensions (VowelDesign — first-class, not digraph collapses)
+        "AE",
+        "AO",
+        "UH",
+        "AX",
+        "ER",
+        "EY",
+        "AY",
+        "AW",
+        "OY",
         "CLOSED",  # full stop / bilabial seal
     }
 )
@@ -106,6 +116,15 @@ PHONEME_IMPULSES: Final[dict[str, tuple[float, float]]] = {
     "EE": (0.80, 0.12),
     "OH": (0.05, -0.65),
     "OU": (0.0, 0.35),
+    "AE": (0.55, -0.75),
+    "AO": (0.15, -0.85),
+    "UH": (0.05, 0.18),
+    "AX": (0.08, -0.12),
+    "ER": (0.12, 0.08),
+    "EY": (0.55, -0.35),
+    "AY": (0.35, -0.80),
+    "AW": (0.10, -0.88),
+    "OY": (0.20, -0.60),
 }
 
 EMOTION_IMPULSES: Final[dict[str, tuple[float, float]]] = {
@@ -137,13 +156,39 @@ PHONEME_DURATION_SCALE: Final[dict[str, float]] = {
     "EE": 1.10,
     "OH": 1.25,
     "OU": 1.20,
+    "AE": 1.30,
+    "AO": 1.30,
+    "UH": 1.05,
+    "AX": 0.85,
+    "ER": 1.10,
+    "EY": 1.15,
+    "AY": 1.35,
+    "AW": 1.35,
+    "OY": 1.25,
 }
 
 #: Visemes that carry a syllable. One of these is the loud, open centre of a
 #: syllable, which is what an energy peak in a recording actually marks — so this
 #: is the set the streaming aligner pins to measured peaks.
 VOWEL_VISEMES: Final[frozenset[str]] = frozenset(
-    {"AH", "AA", "EH", "IH", "EE", "OH", "OU"}
+    {
+        "AH",
+        "AA",
+        "EH",
+        "IH",
+        "EE",
+        "OH",
+        "OU",
+        "AE",
+        "AO",
+        "UH",
+        "AX",
+        "ER",
+        "EY",
+        "AY",
+        "AW",
+        "OY",
+    }
 )
 
 VOWEL_MAP: Final[dict[str, str]] = {
@@ -265,6 +310,16 @@ MOUTH_POSES: Final[dict[str, MouthPose]] = {
     "EE": MouthPose(22.0, 4.8, 0.00),
     "OH": MouthPose(10.0, 10.0, 0.90),
     "OU": MouthPose(7.0, 7.5, 1.00),
+    # GA-16 extensions (VowelDesign)
+    "AE": MouthPose(19.5, 11.0, 0.08),
+    "AO": MouthPose(12.5, 11.5, 0.55),
+    "UH": MouthPose(9.5, 5.5, 0.70),
+    "AX": MouthPose(15.0, 3.5, 0.15),
+    "ER": MouthPose(13.0, 5.0, 0.45),
+    "EY": MouthPose(20.0, 6.5, 0.05),
+    "AY": MouthPose(18.0, 11.5, 0.12),
+    "AW": MouthPose(12.0, 12.0, 0.50),
+    "OY": MouthPose(11.0, 9.5, 0.75),
 }
 
 
@@ -469,10 +524,14 @@ def canonical_viseme(name: str) -> str:
 
     Unknown names become ``REST`` rather than inventing a mouth shape — a closed
     mouth is merely early; a wrong shape is a lie a lip reader will catch.
+    GA-16 vowel tags are first-class when present in ``PHONEME_IMPULSES``.
     """
     key = str(name or "").strip().upper()
     if not key:
         return "REST"
+    # Prefer exact GA-16 / inventory hits before alias collapse.
+    if key in PHONEME_IMPULSES:
+        return key
     key = VISEME_ALIASES.get(key, key)
     if key in PHONEME_IMPULSES:
         return key

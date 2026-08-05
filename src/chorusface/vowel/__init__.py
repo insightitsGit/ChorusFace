@@ -1,5 +1,7 @@
-"""VowelDesign Phase-1 — GA-16 group controls → PulseChunk → TickFeed.
+"""VowelDesign Phase-1 — GA-16 compose → PulseChunk + biomech muscle drive.
 
+Primary face delivery: ``BiomechanicalFace.submit_phoneme`` (see
+``docs/VowelDesignNWRReconciliation.md``). Cell-group expand is debug/legacy.
 Architecture freeze: ``docs/VowelDesignFinalAnswers.md``.
 """
 
