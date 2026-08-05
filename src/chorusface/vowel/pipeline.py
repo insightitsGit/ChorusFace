@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 from numpy.typing import NDArray
 
+from chorusface.vowel.blinks import apply_blinks
 from chorusface.vowel.g2p import g2p_text, g2p_word
 from chorusface.vowel.model_a import ModelA
 from chorusface.vowel.model_b import ModelB, diphthong_end_tag
@@ -110,10 +111,16 @@ class VowelComposer:
         model_b: ModelB | None = None,
         *,
         versions: VersionBlock | None = None,
+        blinks: bool = True,
+        blink_interval_s: float = 3.2,
+        blink_seed: int | None = 0,
     ) -> None:
         self.model_a = model_a or ModelA()
         self.model_b = model_b or ModelB()
         self.versions = versions or VersionBlock()
+        self.blinks = bool(blinks)
+        self.blink_interval_s = float(blink_interval_s)
+        self.blink_seed = blink_seed
 
     @classmethod
     def from_dir(cls, model_dir: str | Path) -> VowelComposer:
@@ -214,6 +221,12 @@ class VowelComposer:
                     if 0 <= t < n_ticks:
                         controls[t] = xf[min(k, len(xf) - 1)]
 
+        controls = apply_blinks(
+            controls,
+            interval_s=self.blink_interval_s,
+            seed=self.blink_seed,
+            enabled=self.blinks,
+        )
         ctrl_f32 = np.asarray(controls, dtype=np.float32)
         chunk = PulseChunk(
             utterance_id=payload.utterance_id,
@@ -234,12 +247,22 @@ def compose_utterance(
     payload: UtterancePayload | dict,
     *,
     model_dir: str | Path | None = None,
+    blinks: bool | None = None,
 ) -> ComposeResult:
     composer = (
         VowelComposer.from_dir(model_dir) if model_dir else VowelComposer()
     )
     if model_dir is None and not composer.model_a.trained:
         composer.model_a.fit()
+    if isinstance(payload, dict):
+        if blinks is None and "blinks" in payload:
+            blinks = bool(payload.get("blinks"))
+        if "blink_interval_s" in payload:
+            composer.blink_interval_s = float(payload["blink_interval_s"])
+        if "blink_seed" in payload:
+            composer.blink_seed = int(payload["blink_seed"])
+    if blinks is not None:
+        composer.blinks = bool(blinks)
     return composer.compose(payload)
 
 

@@ -74,28 +74,35 @@ def evaluate_landmarks(
     jitter_px = float(np.std(corner[:rest_n], axis=0).mean())
     jitter_pct = 100.0 * jitter_px / fw
 
-    # hold stability: middle third
-    a, b = T // 3, 2 * T // 3
-    hold_std = float(np.std(width[a:b]) + np.std(aperture[a:b]))
-    hold_pct = 100.0 * hold_std / fw
-
     # EE vs OU: use provided peaks or max-width vs min-width frames
     if ee_peak_frame is None:
         ee_peak_frame = int(np.argmax(width))
     if ou_peak_frame is None:
-        ou_peak_frame = int(np.argmin(width))
+        # prefer a late-ish min so REST at start isn't mistaken for OU
+        search = width[T // 5 :]
+        ou_peak_frame = int(T // 5 + int(np.argmin(search)))
     ee_v = np.array([width[ee_peak_frame], aperture[ee_peak_frame]])
     ou_v = np.array([width[ou_peak_frame], aperture[ou_peak_frame]])
     sep_pct = 100.0 * float(np.linalg.norm(ee_v - ou_v)) / fw
 
+    # hold stability: local ±3-tick windows around EE/OU peaks (not whole clip)
+    def _local_hold_pct(idx: int) -> float:
+        lo = max(0, idx - 3)
+        hi = min(T, idx + 4)
+        if hi - lo < 2:
+            return 0.0
+        return 100.0 * float(np.std(width[lo:hi]) + np.std(aperture[lo:hi])) / fw
+
+    hold_pct = 0.5 * (_local_hold_pct(ee_peak_frame) + _local_hold_pct(ou_peak_frame))
+
     # velocity / accel continuity on width
-    vel = np.diff(width)
-    acc = np.diff(vel)
-    # during assumed holds (low vel regions), accel should be small
+    vel = np.diff(width)  # T-1
+    acc = np.diff(vel)  # T-2
+    # Align mask to accel length: use vel[1:] (also T-2)
     low = np.abs(vel[1:]) < np.median(np.abs(vel) + 1e-6)
     vel_ok = True
-    if np.any(low):
-        vel_ok = float(np.std(acc[1:][low])) < 3.0 * float(np.median(np.abs(acc) + 1e-6))
+    if np.any(low) and acc.size:
+        vel_ok = float(np.std(acc[low])) < 3.0 * float(np.median(np.abs(acc) + 1e-6))
 
     # L/R symmetry of lip corners y
     sym_err = float(np.mean(np.abs(left[:, 1] - right[:, 1])))

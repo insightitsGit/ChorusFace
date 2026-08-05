@@ -1,7 +1,9 @@
 # VowelDesign — teacher Veo prompts (5 emotions)
 
-**Status:** design prompts — generate videos when ready; do not wire code until asked.  
-**Parent:** [`VowelDesign.md`](VowelDesign.md) §6.1 · answers: [`VowelDesignDetailAnswers.md`](VowelDesignDetailAnswers.md) (D6 morphological split)
+**Status:** ready to shoot — paste clips into `output/teacher/teacher_package_v1/videos/`.  
+**Duration:** **8–10s OK** (Veo often lands ~10s). Prefer 30 fps (24 OK).  
+**Parent:** [`VowelDesign.md`](VowelDesign.md) §6.1 · answers: [`VowelDesignDetailAnswers.md`](VowelDesignDetailAnswers.md) (D6 morphological split)  
+**Ingest:** `python scripts/ingest_vowel_teachers.py --limit 3`
 
 ## Shoot plan (after review merge)
 

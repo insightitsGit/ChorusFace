@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         from chorusface.vowel.pipeline import compose_utterance
         from chorusface.vowel.pulsechunk import encode_pulsechunk
 
-        payload = json.loads(args.json.read_text(encoding="utf-8"))
+        payload = json.loads(args.json.read_text(encoding="utf-8-sig"))
         result = compose_utterance(payload, model_dir=args.models)
         raw = encode_pulsechunk(result.chunk)
         args.out.write_bytes(raw)
