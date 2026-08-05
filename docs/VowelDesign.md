@@ -1,6 +1,6 @@
 # VowelDesign
 
-**Status:** design in progress — **do not implement** until explicitly asked.  
+**Status:** Phase-1 **architecture CLOSED**; implementation on branch `vowelBrnach` — see [`VowelDesignImpl.md`](VowelDesignImpl.md).  
 **Created:** 2026-08-05  
 **Owns:** General American vowel inventory (16), six face articulators, per-tick (60 Hz) targets.  
 **Does not replace:** older design docs below — they stay the source of truth until this doc is accepted and linked from [`docs/README.md`](README.md).

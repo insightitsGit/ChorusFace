@@ -62,6 +62,7 @@ chorusface-prism = "chorusface.prism_adapter:main"
 chorusface-seed = "chorusface.cli:main_seed"
 chorusface-capture = "chorusface.cli:main_capture"
 chorusface-sync = "chorusface.cli:main_sync"
+chorusface-vowel = "chorusface.vowel.cli:main"
 amin-train = "amin_loop.cli:main"
 
 [project.urls]
@@ -78,6 +79,7 @@ chorusface = [
     "shaders/*.comp",
     "biomechanics/data/*.json",
     "data/*",
+    "vowel/data/*.json",
 ]
 
 [tool.pytest.ini_options]

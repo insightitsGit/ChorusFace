@@ -3006,6 +3006,58 @@ class AvatarFaceApp(FieldRuntime):
                     "mode": "timeline",
                 }
 
+            if kind == "vowel":
+                # VowelDesign: GA-16 PulseChunk → existing viseme schedule path.
+                from chorusface.speech import schedule_spans
+                from chorusface.vowel.pipeline import compose_utterance
+
+                utt = payload.get("utterance") or payload
+                result = compose_utterance(utt if isinstance(utt, dict) else {})
+                emotion = result.payload.primary_emotion
+                if emotion in EMOTION_IMPULSES:
+                    self._voice_emotion = emotion
+                self._voice_caption = strip_tags(result.payload.text)
+                # Map GA-16 → visemes understood by canonical_viseme / plates.
+                _map = {
+                    "EE": "EE",
+                    "IH": "IH",
+                    "EY": "EE",
+                    "EH": "EH",
+                    "AE": "AH",
+                    "AA": "AA",
+                    "AO": "AA",
+                    "OH": "OH",
+                    "UH": "OU",
+                    "OU": "OU",
+                    "AH": "AH",
+                    "AX": "AH",
+                    "ER": "EH",
+                    "AY": "AA",
+                    "AW": "AA",
+                    "OY": "OH",
+                }
+                spans = [
+                    (_map.get(s.tag, "AH"), s.start_s, s.end_s)
+                    for s in result.payload.spans
+                ]
+                if self._voice_epoch is None:
+                    self._voice_epoch = (
+                        time.perf_counter() - self._clock0 + self._voice_trim
+                    )
+                events = schedule_spans(
+                    spans, self._voice_emotion, start_at=self._voice_epoch
+                )
+                self._voice_inbox.extend(events)
+                self._voice_events += len(events)
+                # stash binary for debug / Fabric spool consumers
+                self._last_vowel_pulsechunk = result.chunk  # type: ignore[attr-defined]
+                return {
+                    "scheduled": len(events),
+                    "pending": 0,
+                    "mode": "vowel",
+                    "n_ticks": result.chunk.n_ticks,
+                }
+
             if kind == "pcm":
                 rate = int(payload.get("sample_rate") or 0) or default_rate
                 stream = self._ensure_voice(rate)
@@ -3261,6 +3313,7 @@ class AvatarFaceApp(FieldRuntime):
         )
         print(
             '  Voice alt: POST /voice/timeline {"spans":[...],"caption":"..."}  '
+            '  VowelDesign: POST /vowel/utterance {"utterance_id","text","emotion_track"}  '
             "# host-timed phonemes"
         )
         print(

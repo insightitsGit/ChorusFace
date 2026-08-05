@@ -467,6 +467,7 @@ class FaceBridge:
                                 # Host owns TTS — these are the product-default drive paths.
                                 "host_voice": "/voice/expect|/voice/pcm|/voice/end",
                                 "voice_timeline": "/voice/timeline",
+                                "vowel_utterance": "/vowel/utterance",
                                 "prism_speak": "/prism/speak",
                                 "local_tts_default": False,
                                 "auth": {
@@ -680,6 +681,69 @@ class FaceBridge:
                     if path == "/voice/end":
                         self._discard_body()
                         self._voice("end", {})
+                        return
+                    if path == "/vowel/utterance":
+                        # VowelDesign Phase-1: compose PulseChunk (+ optional play).
+                        import base64
+
+                        from chorusface.vowel.pipeline import compose_utterance
+                        from chorusface.vowel.pulsechunk import encode_pulsechunk
+
+                        payload = self._read_json()
+                        result = compose_utterance(payload)
+                        raw = encode_pulsechunk(result.chunk)
+                        play = bool(payload.get("play", True))
+                        scheduled = 0
+                        if play and bridge._voice_handler is not None:
+                            try:
+                                reply = bridge._voice_handler(
+                                    "vowel",
+                                    {
+                                        "utterance": {
+                                            "utterance_id": result.payload.utterance_id,
+                                            "text": result.payload.text,
+                                            "emotion_track": [
+                                                {
+                                                    "emotion": e.emotion,
+                                                    "start_s": e.start_s,
+                                                    "end_s": e.end_s,
+                                                }
+                                                for e in result.payload.emotion_track
+                                            ],
+                                            "spans": [
+                                                {
+                                                    "tag": s.tag,
+                                                    "start_s": s.start_s,
+                                                    "end_s": s.end_s,
+                                                }
+                                                for s in result.payload.spans
+                                            ],
+                                        },
+                                        "pulsechunk_b64": base64.b64encode(raw).decode(
+                                            "ascii"
+                                        ),
+                                    },
+                                )
+                                if isinstance(reply, dict):
+                                    scheduled = int(reply.get("scheduled", 0) or 0)
+                            except Exception as exc:  # noqa: BLE001 — surface to client
+                                raise BridgeError(
+                                    HTTPStatus.BAD_REQUEST, f"vowel play failed: {exc}"
+                                ) from exc
+                        step = max(1, result.chunk.n_ticks // 8)
+                        self._send_json(
+                            HTTPStatus.OK,
+                            {
+                                "ok": True,
+                                "utterance_id": result.payload.utterance_id,
+                                "n_ticks": result.chunk.n_ticks,
+                                "n_words": len(result.chunk.word_slices),
+                                "primary_emotion": result.payload.primary_emotion,
+                                "scheduled": scheduled,
+                                "pulsechunk_b64": base64.b64encode(raw).decode("ascii"),
+                                "controls_preview": result.controls[::step].tolist(),
+                            },
+                        )
                         return
                     raise BridgeError(HTTPStatus.NOT_FOUND, f"unknown path {path}")
                 except BridgeError as exc:
