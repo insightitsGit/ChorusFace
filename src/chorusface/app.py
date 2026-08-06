@@ -698,6 +698,8 @@ class AvatarFaceApp(FieldRuntime):
         # When True, F9 9D owns oral LOOK (skip phoneme_muscles).
         self._vowel_9d_owns_look = False
         self._vowel_9d_lid_amt = 1.0
+        # Sticky utterance emotion — Model A / zero-mood must not drift brows.
+        self._vowel_sticky_emotion = ""
         self._vowel_9d_mouth = {
             "width": 14.0,
             "openness": 1.0,
@@ -1437,6 +1439,9 @@ class AvatarFaceApp(FieldRuntime):
 
     def _active_emotion(self) -> str:
         """Prefer a non-NEUTRAL mood; telemetry defaults to NEUTRAL (truthy)."""
+        sticky = str(getattr(self, "_vowel_sticky_emotion", "") or "").strip().upper()
+        if sticky in EMOTION_IMPULSES and self._vowel_ctrl_sample is not None:
+            return sticky
         tel = (self._telemetry.last_emotion or "").strip().upper()
         conv = (self._conversation.last_emotion or "").strip().upper()
         if tel and tel != "NEUTRAL":
@@ -1456,6 +1461,28 @@ class AvatarFaceApp(FieldRuntime):
         self._vowel_controls_t0 = float(t0)
         self._vowel_ctrl_sample = arr[0]
 
+    def _pin_vowel_emotion(self, emotion: str) -> None:
+        """Lock utterance emotion for the full 9D tape (angry brows, no drift)."""
+        emo = str(emotion or "").strip().upper()
+        if emo not in EMOTION_IMPULSES:
+            return
+        self._vowel_sticky_emotion = emo
+        self._voice_emotion = emo
+        self._telemetry.last_emotion = emo
+        try:
+            self._biomech.emotion.from_label(emo)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _vowel_utterance_emotion(self) -> str:
+        sticky = str(getattr(self, "_vowel_sticky_emotion", "") or "").strip().upper()
+        if sticky in EMOTION_IMPULSES:
+            return sticky
+        voice = str(getattr(self, "_voice_emotion", "") or "").strip().upper()
+        if voice in EMOTION_IMPULSES:
+            return voice
+        return "NEUTRAL"
+
     def _sample_vowel_controls(self, now: float) -> object | None:
         """Return current 9D row for speech clock ``now``, or None if idle."""
         ctrl = self._vowel_controls
@@ -1474,9 +1501,15 @@ class AvatarFaceApp(FieldRuntime):
         if idx >= int(arr.shape[0]):
             self._vowel_controls = None
             self._vowel_ctrl_sample = None
+            self._vowel_sticky_emotion = ""
             return None
         row = arr[idx]
         self._vowel_ctrl_sample = row
+        # Keep sticky emotion pinned while the tape is live.
+        sticky = str(getattr(self, "_vowel_sticky_emotion", "") or "").strip().upper()
+        if sticky in EMOTION_IMPULSES:
+            self._voice_emotion = sticky
+            self._telemetry.last_emotion = sticky
         return row
 
     def _drive_vowel_blinks_from_9d(self, c: object) -> None:
@@ -1514,18 +1547,34 @@ class AvatarFaceApp(FieldRuntime):
         teeth = float(np.clip(row[7], 0.0, 1.0))
         jaw_n = float(np.clip(row[8], 0.0, 1.0))
         # Width in MouthPose units (~7..22). Spread +1 → wide EE, -1 → narrow OU.
-        width = 14.0 + spread * 7.5 - round_n * 3.5
-        width = float(np.clip(width, 7.0, 22.0))
-        # Openness units for shader (/14). Gap + jaw + teeth open the hole.
-        open_n = float(np.clip(max(gap, jaw_n * 0.95, teeth * 0.55), 0.0, 1.0))
+        width = 14.0 + spread * 9.5 - round_n * 5.0
+        width = float(np.clip(width, 6.5, 22.0))
+        # Openness units for shader (/14).
+        open_n = float(np.clip(max(gap, jaw_n * 0.95, teeth * 0.45), 0.0, 1.0))
         openness = 1.0 + open_n * 12.0
-        plate_open = float(np.clip(max(gap, jaw_n, teeth * 0.65), 0.0, 1.0))
-        # Smile plate only when spread is happy-wide and jaw is nearly shut.
-        emo = str(
-            getattr(self, "_voice_emotion", None)
-            or getattr(self._telemetry, "last_emotion", None)
-            or "NEUTRAL"
-        ).strip().upper()
+        # Atlas-first shaping: keep mid openness so EE/OU atlas plates win
+        # (open.png steals when amount ≥ ~0.55). AA stays atlas-band too.
+        raw_open = float(np.clip(max(gap, jaw_n, teeth * 0.55), 0.0, 1.0))
+        is_round = round_n >= 0.28 or spread <= -0.05
+        is_spread = spread >= 0.30 and round_n < 0.25
+        is_wide_open = jaw_n >= 0.62 or gap >= 0.75
+        if is_wide_open:
+            # Still atlas-band — open.png soft matte caused double-chin scars.
+            plate_open = float(np.clip(0.48 + raw_open * 0.18, 0.48, 0.72))
+        elif is_round:
+            # OU/OH — mid band for OH atlas plate, not open.png O.
+            plate_open = float(np.clip(0.40 + raw_open * 0.18, 0.38, 0.58))
+        elif is_spread:
+            # EE — EE atlas plate, modest open.
+            plate_open = float(np.clip(0.42 + raw_open * 0.16, 0.40, 0.58))
+        else:
+            plate_open = float(np.clip(0.36 + raw_open * 0.28, 0.34, 0.62))
+        # Exaggerate roundness contrast for OU vs EE pose uniforms.
+        if is_round:
+            round_n = max(round_n, 0.55)
+        elif is_spread:
+            round_n = min(round_n, 0.12)
+        emo = self._vowel_utterance_emotion()
         smile = 0.0
         if emo in {"HAPPY", "JOY"} and plate_open < 0.22 and spread > 0.25:
             smile = float(np.clip(spread * 0.55, 0.0, 0.65))
@@ -1533,6 +1582,18 @@ class AvatarFaceApp(FieldRuntime):
             smile = 0.0
         self._biomech.jaw.set_speech_target(jaw_n)
         self._vowel_9d_lid_amt = float(np.clip(1.0 - close, 0.0, 1.0))
+        # Oral disk half-width follows spread (EE wide / OU narrow).
+        rest_hw = float(getattr(self, "_mouth_line_rest_hw", 0.0) or 0.0)
+        if self._mouth_line is not None and rest_hw > 1e-3:
+            hw = rest_hw * (0.78 + 0.55 * ((spread + 1.0) * 0.5)) * (
+                1.0 - 0.32 * round_n
+            )
+            self._mouth_line = (
+                float(self._mouth_line[0]),
+                float(self._mouth_line[1]),
+                float(hw),
+                float(self._mouth_line[3]),
+            )
         self._vowel_9d_mouth = {
             "width": width,
             "openness": openness,
@@ -1540,6 +1601,8 @@ class AvatarFaceApp(FieldRuntime):
             "jaw_n": jaw_n,
             "plate_open": plate_open,
             "smile": smile,
+            "spread": spread,
+            "gap": gap,
         }
         return self._vowel_9d_mouth
 
@@ -1551,14 +1614,19 @@ class AvatarFaceApp(FieldRuntime):
             close = float(np.clip(row[0], 0.0, 1.0))
             brow_raise = float(np.clip(row[2], 0.0, 1.0))
             brow_knit = float(np.clip(row[3], 0.0, 1.0))
+            emo = self._vowel_utterance_emotion()
+            # Hold ANGRY/SAD knit for the whole utterance — Model A often dips.
+            if emo == "ANGRY":
+                brow_knit = max(brow_knit, 0.72)
+                brow_raise = min(brow_raise, 0.18)
+            elif emo == "SAD":
+                brow_knit = max(brow_knit, 0.45)
             # Shader brow.y lifts tissue — suppress lift for angry/sad knit.
             knit_owns = brow_knit >= 0.18 and brow_knit >= (brow_raise * 0.55)
             if knit_owns:
-                # Push knit into shader via negative expr_z (see uniforms).
-                self._expr_target_brow = float(np.clip(brow_raise * 0.08, 0.0, 0.10))
+                self._expr_target_brow = float(np.clip(brow_raise * 0.06, 0.0, 0.08))
                 self._expr_target_blend = 0.0
             else:
-                # Center raise against a mild open baseline so emotions separate.
                 self._expr_target_brow = float(
                     np.clip((brow_raise - 0.22) / 0.50, 0.0, 1.0)
                 )
@@ -1569,7 +1637,6 @@ class AvatarFaceApp(FieldRuntime):
                     1.0,
                 )
             )
-            # Soft upper plate only for strong raise (surprised).
             if not knit_owns:
                 self._expr_target_blend = (
                     float(np.clip((brow_raise - 0.40) * 0.9, 0.0, 0.55))
@@ -1729,6 +1796,23 @@ class AvatarFaceApp(FieldRuntime):
             self._held_speech_viseme = "REST"
             return
         from chorusface.plates import HARD_SNAP_THRESHOLD
+
+        # VowelDesign 9D: always hard-snap EE/OU/AA atlas plates (shape variety).
+        if self._vowel_design_mode() and bool(
+            getattr(self, "_vowel_9d_owns_look", False)
+        ):
+            cmd = self._layer_command
+            phoneme = str(cmd.atlas_viseme or cmd.phoneme or "REST")
+            self._held_speech_viseme = phoneme
+            ia, ib, mix = atlas.pair_for_viseme(phoneme, hard_snap=True)
+            ia = max(0, min(ia, len(self._atlas_textures) - 1))
+            ib = max(0, min(ib, len(self._atlas_textures) - 1))
+            amt = max(0.0, min(1.0, float(cmd.plate_openness)))
+            self._plate_pair = (ia, ib)
+            self._plate_openness_current = amt
+            self._plate_blend = (0.0, amt)
+            self._plate_blend_current = (0.0, amt)
+            return
 
         # Design B4: when TickFeed is live, package labels own LOOK amounts.
         # Plate identity = viseme (hard snap); intensity = openness weight.
@@ -2164,8 +2248,6 @@ class AvatarFaceApp(FieldRuntime):
             self._ml_smile = smile
             self._plate_openness_current = open_n
             self._plate_open_hyst = open_n
-            # Drive plate blend amount from 9D openness (atlas still off).
-            self._plate_blend_current = (0.0, open_n if self._use_plates else 0.0)
             self._held_speech_viseme = phoneme
             self._open_close_source = source
             self._target_mouth_pose = MouthPose(
@@ -2174,6 +2256,8 @@ class AvatarFaceApp(FieldRuntime):
                 roundness=float(m["roundness"]),
                 expression=smile,
             )
+            # Atlas pair from phoneme (EE/OU/AA); amount from capped plate_open.
+            self._sync_plate_blend_from_phoneme()
             self._refresh_frame_layers()
             return
 
@@ -2218,15 +2302,16 @@ class AvatarFaceApp(FieldRuntime):
         smile_amt = float(cmd.smile_amount)
         plate_amt = float(cmd.plate_openness)
         if self._vowel_design_mode():
-            # 9D owns oral LOOK — FIELD off; open.png on when plates loaded.
+            # 9D owns oral LOOK — FIELD off; atlas shapes for EE/OU/AA.
             field_gain = 0.0
-            atlas_strength = 0.0
             if bool(getattr(self, "_vowel_9d_owns_look", False)):
                 smile_amt = float(getattr(self, "_ml_smile", 0.0) or 0.0)
                 plate_amt = float(getattr(self, "_ml_openness", 0.0) or 0.0)
+                atlas_strength = 1.0 if self._atlas_textures else 0.0
             else:
                 smile_amt = 0.0
                 plate_amt = 0.0
+                atlas_strength = 0.0
             speaking_plate = plate_amt > 0.08 or bool(
                 getattr(self._render_state, "speaking", False)
             )
@@ -2674,11 +2759,9 @@ class AvatarFaceApp(FieldRuntime):
             0.0,
             0.0,
         )
-        # VowelDesign + 9D: allow open/smile capture plates (aperture from C4–C8).
-        plates_on = bool(self._use_plates) and (
-            (not self._vowel_design_mode())
-            or bool(getattr(self, "_vowel_9d_owns_look", False))
-        )
+        # VowelDesign + 9D: open.png/atlas circular mattes fight the rest smile
+        # (corner scars / double-chin). Prefer pose-ellipse cavity for aperture.
+        plates_on = bool(self._use_plates) and (not self._vowel_design_mode())
         program["avatar_plates_ready"].value = 1 if plates_on else 0
         self._avatar_expr_plate_texture.use(location=8)
         program["avatar_expr_plate"].value = 8
@@ -2706,9 +2789,15 @@ class AvatarFaceApp(FieldRuntime):
         # VowelDesign: encode brow_knit as negative z when surprise plate is idle
         # so avatar.frag can pull medial brows without a new uniform.
         expr_z = float(self._expr_plate_blend)
-        if self._vowel_design_mode() and expr_z < 0.12:
+        if self._vowel_design_mode():
             knit_u = float(getattr(self._render_state, "brow_knit", 0.0) or 0.0)
+            emo = self._vowel_utterance_emotion()
+            if emo == "ANGRY":
+                knit_u = max(knit_u, 0.78)
+            elif emo == "SAD":
+                knit_u = max(knit_u, 0.48)
             if knit_u > 0.05:
+                # Always prefer knit encoding over surprise-plate blend for vowel.
                 expr_z = -max(0.0, min(1.0, knit_u))
         program["avatar_expr_state"].value = (
             widen_upload,
@@ -2804,13 +2893,13 @@ class AvatarFaceApp(FieldRuntime):
             and float(self._display_recipe.plate_sharpness) >= HARD_SNAP_THRESHOLD
         )
         if self._vowel_design_mode():
-            # recipe: x=jaw-at-full-open, y=smile-suppress, z=atlas, w=cavity
-            knobs[2] = 0.0  # viseme atlas off — open/smile plates from 9D
+            # recipe.z signals vowel speech to the plates-off cavity path.
+            knobs[2] = 1.0
             held_ph = str(getattr(self, "_held_speech_viseme", "REST") or "REST")
-            emo = str(getattr(self, "_voice_emotion", "") or "").upper()
+            emo = self._vowel_utterance_emotion()
             if held_ph in {"OU", "OH", "UH", "AO", "OY"} or emo in {"ANGRY", "SAD"}:
-                knobs[1] = max(float(knobs[1]), 0.90)  # suppress smile scars
-            knobs[3] = max(float(knobs[3]), 0.55)
+                knobs[1] = max(float(knobs[1]), 0.92)
+            knobs[3] = max(float(knobs[3]), 0.85)
             speaking_plate = float(self._plate_blend_current[1]) > 0.08
         elif speaking_plate:
             # Atlas must fully own the mouth while a speech plate is active.
@@ -3490,11 +3579,12 @@ class AvatarFaceApp(FieldRuntime):
                     ]
                 emotion = parsed.primary_emotion
                 if emotion in EMOTION_IMPULSES:
-                    self._voice_emotion = emotion
-                try:
-                    self._biomech.emotion.from_label(emotion)
-                except Exception:  # noqa: BLE001
-                    pass
+                    self._pin_vowel_emotion(emotion)
+                else:
+                    try:
+                        self._biomech.emotion.from_label(emotion)
+                    except Exception:  # noqa: BLE001
+                        pass
                 self._voice_caption = strip_tags(parsed.text)
                 now_s = time.perf_counter() - self._clock0 + self._voice_trim
                 if not early or self._voice_epoch is None:
@@ -3742,11 +3832,7 @@ class AvatarFaceApp(FieldRuntime):
             (s.tag, s.start_s, s.end_s) for s in result.payload.spans if s.tag
         ]
         if emo in EMOTION_IMPULSES:
-            self._voice_emotion = emo
-        try:
-            self._biomech.emotion.from_label(emo)
-        except Exception:  # noqa: BLE001
-            pass
+            self._pin_vowel_emotion(emo)
         now_s = time.perf_counter() - self._clock0 + self._voice_trim
         self._voice_epoch = now_s
         end_s = max((float(b) for _t, _a, b in spans), default=0.4)
@@ -4065,6 +4151,13 @@ class AvatarFaceApp(FieldRuntime):
 
         now = self._speech_now()
         key = canonical_viseme(phoneme)
+        sticky = str(getattr(self, "_vowel_sticky_emotion", "") or "").strip().upper()
+        if (
+            self._vowel_design_mode()
+            and sticky in EMOTION_IMPULSES
+            and self._vowel_ctrl_sample is not None
+        ):
+            emotion = sticky
 
         if self._tickfeed_look_owns_speech():
             # TickFeed path: instant viseme openness (no mid-band ramp);

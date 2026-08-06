@@ -566,27 +566,39 @@ void main() {
             float smile_hard = mix(0.0, 1.0, step(0.50, smile_drive));
             smile_drive = mix(smile_drive, smile_hard, snap);
             smile_drive *= (1.0 - step(0.12, open_drive));
-            // Single LOOK owner: open.png OR atlas — step, not soft crossfade.
+            // Atlas-first when recipe.z is strong (VowelDesign 9D).
+            // Soft circular atlas plates are too small to cover the rest smile —
+            // open.png (larger oral matte) owns the aperture cover; atlas is
+            // interior detail only (see L07). Never soft-stack both as equals.
+            float atlas_pref = clamp(avatar_recipe.z, 0.0, 1.0);
             open_primary_g = mix(
                 smoothstep(0.42, 0.72, layer_open),
-                step(0.55, layer_open),
+                step(0.32, layer_open),
                 max(snap, 0.75)
             );
-            float atlas_want = (1.0 - open_primary_g) * mix(
-                0.0,
-                mix(smoothstep(0.20, 0.55, atlas_own), step(0.12, atlas_own), max(snap, 0.75)),
-                max(snap, 0.55)
-            );
-            atlas_primary_g = atlas_want * mix(
-                smoothstep(0.14, 0.42, atlas_a_ev),
-                step(0.14, atlas_a_ev),
-                max(snap, 0.75)
-            );
-            open_drive *= (1.0 - atlas_primary_g);
-            smile_drive *= (1.0 - max(atlas_primary_g, open_drive));
+            // VowelDesign: keep open.png as the smile-cover owner whenever speech
+            // is open — atlas circles alone left rest-smile corners visible.
+            if (atlas_pref > 0.50) {
+                open_primary_g = step(0.08, layer_open);
+                atlas_primary_g = 0.0;
+                smile_drive = 0.0;
+            } else {
+                float atlas_want = (1.0 - open_primary_g) * mix(
+                    0.0,
+                    mix(smoothstep(0.20, 0.55, atlas_own), step(0.12, atlas_own), max(snap, 0.75)),
+                    max(snap, 0.55)
+                );
+                atlas_primary_g = atlas_want * mix(
+                    smoothstep(0.14, 0.42, atlas_a_ev),
+                    step(0.14, atlas_a_ev),
+                    max(snap, 0.75)
+                );
+                open_drive *= (1.0 - atlas_primary_g);
+                smile_drive *= (1.0 - max(atlas_primary_g, open_drive));
+            }
             open_w = open_drive * hybrid_matte(open_s.a, max(snap, 0.55));
-            // Kill soft ellipse cheek veil when open.png is primary.
-            open_w *= mix(1.0, step(0.30, open_s.a), open_primary_g * max(snap, 0.75));
+            // Kill soft ellipse cheek veil — hard matte only under snap.
+            open_w *= mix(1.0, step(0.40, open_s.a), max(open_primary_g, atlas_pref) * max(snap, 0.75));
             smile_w = smile_drive * hybrid_matte(smile_s.a, snap)
                 * (1.0 - open_w * avatar_recipe.y);
             open_drive_g = open_drive;
@@ -633,30 +645,55 @@ void main() {
 
         // L04/L05 CAPTURE LOOKS — plate RGB on top of rest-aligned identity.
         float open_plate_w = 0.0;
+        // Pose-shaped oral ellipse (EE wide / OU round / AA tall).
+        float jaw_n_oral = clamp(avatar_jaw.z / 0.55, 0.0, 1.0);
+        float hw_oral = max(avatar_mouth_line.z, 1.0);
+        float width_n = clamp(avatar_mouth_pose.x / 22.0, 0.0, 1.0);
+        float round_n = clamp(avatar_mouth_pose.z, 0.0, 1.0);
+        // Cover must be wider than rest smile corners or they ghost through.
+        vec2 oral_axis = vec2(
+            hw_oral * mix(1.15, 1.75, width_n) * mix(1.0, 0.80, round_n),
+            max(1.55, hw_oral * mix(0.42, 1.05, jaw_n_oral) * mix(1.0, 1.10, round_n))
+        );
+        vec2 oral_d = (grid_position - avatar_mouth_line.xy) / oral_axis;
+        float oral_disk = 1.0 - smoothstep(0.88, 1.02, length(oral_d));
+        float oral_hard = step(0.50, oral_disk);
         if (avatar_plates_ready == 1) {
-            // Cover resting smile-corner creases that sit outside the open O
-            // (full-cycle QA: dark horizontal \"scars\" beside the mouth).
-            float wing_y = 1.0 - smoothstep(
-                avatar_mouth_line.z * 0.45,
-                avatar_mouth_line.z * 1.05,
-                abs(grid_position.y - avatar_mouth_line.y)
-            );
-            float wing_x = smoothstep(
-                avatar_mouth_line.z * 0.75,
-                avatar_mouth_line.z * 2.10,
-                abs(grid_position.x - avatar_mouth_line.x)
-            );
-            // Corner cover when open.png owns (incl. mid-band fallback).
-            float corner_cover = open_drive_g * wing_y * wing_x
-                * smoothstep(0.12, 0.28, open_s.a)
-                * (1.0 - open_w)
-                * max(open_primary_g, 1.0 - atlas_primary_g)
-                * 0.35;
-            float open_commit = max(open_w, corner_cover);
-            color = mix(color, smile_s.rgb, smile_w);
-            color = mix(color, open_s.rgb, open_commit);
-            face_alpha = max(face_alpha, max(open_commit, smile_w));
-            open_plate_w = open_commit;
+            float atlas_pref = clamp(avatar_recipe.z, 0.0, 1.0);
+            if (atlas_pref > 0.50) {
+                // open.png α is a baked CIRCLE. Filling missing α with dark cavity
+                // painted brown corner scars. Instead: stamp cheek skin over the
+                // rest-smile corners, then composite open.png only on its α core.
+                float cover = oral_hard * step(0.08, layer_open);
+                float open_core = step(0.20, open_s.a);
+                float corner_zone = cover * (1.0 - open_core);
+                vec3 skin = photo_at(
+                    avatar_mouth_line.xy + vec2(0.0, max(oral_axis.y * 0.62, 2.0))
+                );
+                color = mix(color, skin, corner_zone);
+                vec3 mouth_rgb = open_s.rgb;
+                float a_raw = max(atlas_a_s.a, atlas_b_s.a);
+                vec3 atlas_rgb = mix(
+                    atlas_a_s.rgb,
+                    atlas_b_s.rgb,
+                    step(0.50, avatar_plate_blend.x)
+                );
+                mouth_rgb = mix(mouth_rgb, atlas_rgb, open_core * step(0.30, a_raw) * 0.55);
+                color = mix(color, mouth_rgb, cover * open_core);
+                open_w = cover * open_core;
+                smile_w = 0.0;
+                face_alpha = max(face_alpha, cover);
+                open_plate_w = cover;
+            } else {
+                open_w *= oral_hard;
+                open_w *= mix(1.0, step(0.48, open_s.a), max(snap, 0.85));
+                open_w = clamp(open_w, 0.0, 1.0);
+                float open_commit = open_w;
+                color = mix(color, smile_s.rgb, smile_w);
+                color = mix(color, open_s.rgb, open_commit);
+                face_alpha = max(face_alpha, max(open_commit, smile_w));
+                open_plate_w = open_commit;
+            }
         }
 
         // L06: optional cavity fill when the jaw actually parts.
@@ -693,12 +730,28 @@ void main() {
         );
         // Atlas billboard owns the oral interior — kill synthetic gap fill.
         cavity_gate *= (1.0 - mix(0.0, smoothstep(0.30, 0.70, atlas_own), snap));
-        // Plate-off: synthetic cavity (gap or ellipse) paints a dark zip/ghost
-        // band on sealed photo-lips. Keep shut until open.png or true lip
-        // separation owns the aperture (NWR: uniforms/muscles, not FIELD smear).
+        // VowelDesign plates-off: pose ellipse cavity (no open.png scars).
+        // Legacy plate-off zeroed cavity (zip/ghost on sealed lips) — keep that
+        // for non-vowel; recipe.z marks atlas/vowel speech ownership.
         if (avatar_plates_ready == 0) {
-            cavity_gate = 0.0;
-            mouth_inside = 0.0;
+            float vowel_speech = clamp(avatar_recipe.z, 0.0, 1.0)
+                * step(0.12, clamp(avatar_mouth_pose.y / 14.0, 0.0, 1.0));
+            if (vowel_speech > 0.50) {
+                float jaw_n_c = clamp(avatar_jaw.z / 0.55, 0.0, 1.0);
+                float hw_c = max(avatar_mouth_line.z, 1.0);
+                float width_c = clamp(avatar_mouth_pose.x / 22.0, 0.0, 1.0);
+                float round_c = clamp(avatar_mouth_pose.z, 0.0, 1.0);
+                vec2 axis_c = vec2(
+                    hw_c * mix(0.85, 1.45, width_c) * mix(1.0, 0.78, round_c),
+                    max(1.2, hw_c * mix(0.28, 0.85, max(jaw_n_c, clamp(avatar_mouth_pose.y / 14.0, 0.0, 1.0))))
+                );
+                float hole_c = step(0.55, 1.0 - smoothstep(0.82, 1.0, length((grid_position - avatar_mouth_line.xy) / axis_c)));
+                mouth_inside = hole_c;
+                cavity_gate = hole_c;
+            } else {
+                cavity_gate = 0.0;
+                mouth_inside = 0.0;
+            }
         }
         color = mix(
             color,
@@ -709,24 +762,32 @@ void main() {
                 * cavity_gate
         );
 
-        // L07: atlas plate memory — single owner with L05 (no 0.28 stack smear).
-        // Reuse early samples; ownership already gated on atlas alpha evidence.
+        // L07: atlas plate memory — interior detail under open cover (VowelDesign).
         if (avatar_plates_ready == 1 && avatar_plate_blend.y > 0.001) {
             float mix_ab = clamp(avatar_plate_blend.x, 0.0, 1.0);
-            // Hard A/B plate pick — never 50/50 ghost of two mouths.
             mix_ab = mix(mix_ab, step(0.50, mix_ab), max(snap, 0.75));
             vec3 plate_rgb = mix(atlas_a_s.rgb, atlas_b_s.rgb, mix_ab);
-            // Atlas primary when evidence is real; else almost no detail stack.
-            float atlas_ceil = mix(0.0, 1.0, atlas_primary_g);
-            // Mid-band amount also hard-steps so soft 0.3 veils die.
+            float atlas_pref = clamp(avatar_recipe.z, 0.0, 1.0);
+            float a_raw = max(atlas_a_s.a, atlas_b_s.a);
+            float a_hard = mix(
+                hybrid_matte(a_raw, max(snap, 0.55)),
+                step(0.35, a_raw),
+                max(snap, atlas_pref)
+            );
+            // Keep atlas inside the pose ellipse / open cover — never soft circle fringe.
+            a_hard *= oral_hard;
             float amt_y = clamp(avatar_plate_blend.y, 0.0, 1.0);
-            amt_y = mix(amt_y, mix(0.0, 1.0, step(0.12, amt_y)), max(snap, 0.75));
-            float plate_a = atlas_a_ev
-                * amt_y
-                * avatar_recipe.z
-                * atlas_ceil
-                * (1.0 - open_primary_g);
-            color = mix(color, plate_rgb, plate_a);
+            amt_y = mix(amt_y, mix(0.0, 1.0, step(0.10, amt_y)), max(snap, 0.75));
+            float plate_a;
+            if (atlas_pref > 0.50) {
+                // Interior only — open.png already covered the smile.
+                plate_a = a_hard * amt_y * 0.70 * step(0.20, open_plate_w);
+            } else {
+                float atlas_ceil = mix(0.0, 1.0, atlas_primary_g);
+                plate_a = a_hard * amt_y * avatar_recipe.z * atlas_ceil
+                    * (1.0 - open_primary_g);
+            }
+            color = mix(color, plate_rgb, clamp(plate_a, 0.0, 1.0));
             face_alpha = max(face_alpha, plate_a);
         }
 
@@ -836,22 +897,23 @@ void main() {
             }
         }
         if (knit > 0.05) {
-            int part_k = part_at(grid_position);
-            if (part_k == PART_LEFT_BROW || part_k == PART_RIGHT_BROW || part_k == PART_FACE) {
-                float brow_band_k = smoothstep(
-                    avatar_eye_centers.y + avatar_eye_shape.y * 0.85,
-                    avatar_eye_centers.y + avatar_eye_shape.y * 3.1,
-                    grid_position.y
-                );
-                float medial = clamp(1.0 - abs(grid_position.x - eye_mid_x) / max(half_width * 3.8, 1.0), 0.0, 1.0);
-                float toward = sign(eye_mid_x - grid_position.x);
-                vec2 knit_off = vec2(toward * knit * 4.6, -knit * 3.0);
-                vec3 knitted = photo_at(source + knit_off);
-                color = mix(color, knitted, brow_band_k * medial * knit * 0.92);
-                // Soft furrow shade between brows.
-                float furrow = medial * medial * knit * brow_band_k;
-                color *= (1.0 - furrow * 0.18);
-            }
+            // Do not gate on part ids — some worlds map brows as PART_FACE only.
+            float brow_band_k = smoothstep(
+                avatar_eye_centers.y + avatar_eye_shape.y * 0.55,
+                avatar_eye_centers.y + avatar_eye_shape.y * 3.4,
+                grid_position.y
+            );
+            float medial = clamp(
+                1.0 - abs(grid_position.x - eye_mid_x) / max(half_width * 4.6, 1.0),
+                0.0,
+                1.0
+            );
+            float toward = sign(eye_mid_x - grid_position.x);
+            vec2 knit_off = vec2(toward * knit * 9.0, -knit * 6.2);
+            vec3 knitted = photo_at(source + knit_off);
+            color = mix(color, knitted, brow_band_k * medial * knit);
+            float furrow = medial * medial * knit * brow_band_k;
+            color *= (1.0 - furrow * 0.40);
         }
     } else {
         // No atlas or tissue maps: show the portrait undeformed rather than
