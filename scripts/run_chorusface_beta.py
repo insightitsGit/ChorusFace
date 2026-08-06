@@ -62,7 +62,11 @@ def _preflight(world: Path) -> list[str]:
     meta_path = world / "face_cell_timeline" / "meta.json"
     if meta_path.is_file():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        if not str(meta.get("schema", "")).startswith("chorusface.face_cell_timeline"):
+        schema = str(meta.get("schema", ""))
+        if not (
+            schema.startswith("chorusface.face_cell_timeline")
+            or schema.startswith("aiface.face_cell_timeline")
+        ):
             fails.append(f"bad timeline schema {meta.get('schema')!r}")
         print(
             f"  timeline: schema={meta.get('schema')} "

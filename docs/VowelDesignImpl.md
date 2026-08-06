@@ -67,6 +67,11 @@ Returns `pulsechunk_b64`, schedules **first-class GA-16** spans on the mouth tim
 
 ```powershell
 pytest tests/test_vowel_muscle_drive.py tests/test_vowel_pulsechunk.py -q
+
+# Full GPU demo (biomech LOOK — NOT TickFeed plates / NOT HTML silhouette)
+python scripts/demo_vowel_design.py
+# Replay against an already-open vowel-design window:
+python scripts/demo_vowel_design.py --no-launch
 ```
 
 ## Still gated by teacher videos

@@ -20,6 +20,43 @@ DEFAULT_OUT = ROOT / "output" / "teacher" / "vowel_vector_demo.html"
 
 DEMOS = [
     {
+        "id": "vowels",
+        "label": "HAPPY — EE / OU / AA contrast",
+        "payload": {
+            "utterance_id": "demo_vowels",
+            "text": "see you ah",
+            "emotion_track": [{"emotion": "HAPPY", "start_s": 0.0, "end_s": 2.0}],
+            "spans": [
+                {"tag": "EE", "start_s": 0.05, "end_s": 0.45},
+                {"tag": "OU", "start_s": 0.55, "end_s": 0.95},
+                {"tag": "AA", "start_s": 1.10, "end_s": 1.60},
+            ],
+        },
+    },
+    {
+        "id": "angry_vowels",
+        "label": "ANGRY — EE / OU / AA (very angry take)",
+        "payload": {
+            "utterance_id": "demo_angry_vowels",
+            "text": "see you ah",
+            "emotion_track": [{"emotion": "ANGRY", "start_s": 0.0, "end_s": 2.0}],
+            "spans": [
+                {"tag": "EE", "start_s": 0.05, "end_s": 0.45},
+                {"tag": "OU", "start_s": 0.55, "end_s": 0.95},
+                {"tag": "AA", "start_s": 1.10, "end_s": 1.60},
+            ],
+        },
+    },
+    {
+        "id": "sad",
+        "label": "SAD — I miss you so much",
+        "payload": {
+            "utterance_id": "demo_sad",
+            "text": "I miss you so much",
+            "emotion_track": [{"emotion": "SAD", "start_s": 0.0, "end_s": 2.8}],
+        },
+    },
+    {
         "id": "happy",
         "label": "HAPPY — See you tomorrow",
         "payload": {
@@ -47,16 +84,21 @@ DEMOS = [
         },
     },
     {
-        "id": "vowels",
-        "label": "HAPPY — EE / OU / AA contrast",
+        "id": "neutral_blinks",
+        "label": "NEUTRAL — state 0 + blinks",
         "payload": {
-            "utterance_id": "demo_vowels",
-            "text": "see you ah",
-            "emotion_track": [{"emotion": "HAPPY", "start_s": 0.0, "end_s": 2.0}],
+            "utterance_id": "demo_neutral_blinks",
+            "text": "rest rest rest rest rest",
+            "blinks": True,
+            "blink_interval_s": 2.0,
+            "blink_seed": 1,
+            "emotion_track": [{"emotion": "NEUTRAL", "start_s": 0.0, "end_s": 5.0}],
             "spans": [
-                {"tag": "EE", "start_s": 0.05, "end_s": 0.45},
-                {"tag": "OU", "start_s": 0.55, "end_s": 0.95},
-                {"tag": "AA", "start_s": 1.10, "end_s": 1.60},
+                {"tag": "AX", "start_s": 0.3, "end_s": 0.55},
+                {"tag": "AX", "start_s": 1.3, "end_s": 1.55},
+                {"tag": "AX", "start_s": 2.3, "end_s": 2.55},
+                {"tag": "AX", "start_s": 3.3, "end_s": 3.55},
+                {"tag": "AX", "start_s": 4.3, "end_s": 4.55},
             ],
         },
     },

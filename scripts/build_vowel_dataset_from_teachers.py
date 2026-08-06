@@ -26,11 +26,13 @@ OUT = ROOT / "output" / "worlds" / "tickfeed" / "vowel"
 
 # Clip stem → emotion
 EMOTION_FROM_STEM = {
+    "VowelTeacher_NEUTRAL": "NEUTRAL",
     "VowelTeacher_HAPPY": "HAPPY",
     "VowelTeacher_SURPRISED": "SURPRISED",
     "VowelTeacher_THINKING": "THINKING",
     "VowelTeacher_SAD_Part1": "SAD",
     "VowelTeacher_SAD_Part2": "SAD",
+    "VowelTeacher_ANGRY": "ANGRY",
     "VowelTeacher_ANGRY_Part1": "ANGRY",
     "VowelTeacher_ANGRY_Part2": "ANGRY",
 }

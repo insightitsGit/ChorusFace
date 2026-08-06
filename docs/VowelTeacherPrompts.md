@@ -1,4 +1,4 @@
-# VowelDesign — teacher Veo prompts (5 emotions)
+# VowelDesign — teacher Veo prompts (5 emotions + NEUTRAL state-0)
 
 **Status:** ready to shoot — paste clips into `output/teacher/teacher_package_v1/videos/`.  
 **Duration:** **8–10s OK** (Veo often lands ~10s). Prefer 30 fps (24 OK).  
@@ -9,10 +9,11 @@
 
 | Emotion | Clips | Notes |
 | --- | --- | --- |
+| **NEUTRAL** | **1×8–10s** | State-0 baseline + **natural blinks** (no vowels) |
 | HAPPY | 1×8s (or 2×8s if dense) | Faster OK |
 | SAD | **2×8s** (morphological Part1 / Part2) | Slower face — default split |
 | SURPRISED | 1×8s (or 2×8s if dense) | |
-| ANGRY | **2×8s** (morphological Part1 / Part2) | Default split |
+| ANGRY | **1×8–10s one-shot** (VERY angry) or morphological 2×8s | Prefer one-shot if readable |
 | THINKING | 1×8s (or 2×8s if dense) | |
 
 **REST-under-emotion (critical):** between vowels, **mouth / lips / teeth / jaws
@@ -65,6 +66,44 @@ Hold each vowel long enough that lip shape is clearly readable.
 
 ---
 
+## Prompt — NEUTRAL (1×8–10s · state 0 + blinks · no vowels)
+
+**Purpose:** capture true face state 0 (mouth closed, relaxed brows/eyes) and natural
+blink timing for `EyeSystem` / Dataset A NEUTRAL×REST. No vowel walk in this clip.
+
+```text
+Create one continuous video, 8.0 to 10.0 seconds long, 24 or 30 fps.
+
+Subject: one adult woman, blonde, beautiful, natural makeup, clear skin,
+frontal face close-up, looking straight at the camera. Soft natural beauty-light.
+Eyes clearly visible. No sunglasses. No cuts, no scene changes.
+Head mostly still (tiny natural motion OK). Face fills most of the frame. Stable crop.
+Photorealistic, elegant, not cartoon, not stylized anime.
+
+Emotion for the WHOLE clip: NEUTRAL / calm resting face.
+Completely relaxed expression. Soft natural gaze at camera.
+Brows relaxed and level (not raised, not furrowed, not sad-oblique).
+Eyes open at a normal resting aperture — not wide, not squinted.
+Cheeks soft. No smile. No frown. No thinking crease. No surprise. No anger.
+
+MOUTH STATE 0 for the entire clip:
+Mouth fully closed, lips gently sealed and flat, teeth not visible, jaw closed.
+Do not speak. No vowel sounds. No whispering. Silent.
+
+BLINKS (required):
+Perform 3 to 5 natural full blinks spaced across the clip (about every 2 seconds).
+Each blink: both upper lids close fully over the eyes, then reopen to the same
+relaxed open state. Natural human blink speed — not slow dramatic, not a wink,
+not a squint. Keep the face NEUTRAL before and after every blink.
+Between blinks, hold the calm open-eyed resting face.
+
+One continuous take. Same crop and light throughout.
+```
+
+Save as: `VowelTeacher_NEUTRAL.mp4`
+
+---
+
 ## Prompt — HAPPY (1×8s; vowels 1–16 inventory order)
 
 ```text
@@ -82,6 +121,8 @@ If holds are unclear, reshoot as morphological Part1/Part2 like SAD.
 
 ## Prompt — SAD Part 1 (spread/open) and Part 2 (round/back)
 
+Part 1 (already shot OK) used milder sadness. Prefer **VERY SAD** for Part 2 below.
+
 ```text
 (Use shared framing.)
 
@@ -92,6 +133,38 @@ PART 1 (8.0s): EE IH EY EH AE AA AX ER only, mouth-REST between each.
 PART 2 (8.0s): AO OH UH OU AH AY AW OY only, same rules.
 Same subject, crop, light as Part 1. Vowel sounds only.
 ```
+
+### Prompt — SAD Part 2 only (VERY SAD · round/back · paste this)
+
+```text
+Create one continuous video, 8.0 to 10.0 seconds long, 24 or 30 fps.
+
+Subject: one adult woman, blonde, beautiful, natural makeup, clear skin,
+frontal face close-up, looking straight at the camera. Soft natural beauty-light.
+Eyes clearly visible. No sunglasses. No cuts, no scene changes.
+Head mostly still (tiny natural motion OK). Face fills most of the frame. Stable crop.
+Photorealistic, elegant face identity — but strongly sad expression (not cartoon).
+
+Emotion for the WHOLE clip: VERY SAD / deeply sorrowful / heartbroken.
+Inner eyebrows pulled UP and inward (classic sad oblique brows), forehead soft
+vertical tension between brows, heavy watery eyes, soft glassy gaze at camera,
+mouth corners gently down when closed, cheeks soft and heavy.
+Sadness must stay LOUD in eyes and eyebrows even when the mouth closes between vowels.
+Do NOT relax into mild concern, polite neutral, or blank face. Not angry. Not scared.
+This is clear, readable sorrow — expressive enough for lip/face teaching.
+
+Silent except for the required vowel sounds (no English words or sentences).
+
+PART 2 vowels ONLY — walk these 8 across the clip, with clear MOUTH REST between each:
+AO OH UH OU AH AY AW OY
+
+Between every vowel: mouth fully closed, lips flat, teeth not visible (mouth state 0),
+BUT keep the very-sad brows and watery eyes — never drop the emotional face.
+Hold each vowel long enough that lip shape is clearly readable (round/back shapes).
+Prefer clear holds over rushing. One continuous take. Same crop and light throughout.
+```
+
+Save as: `VowelTeacher_SAD_Part2.mp4`
 
 ---
 
@@ -109,18 +182,40 @@ Vowel sounds only. If holds are unclear, reshoot as morphological Part1/Part2 li
 
 ---
 
-## Prompt — ANGRY Part 1 / Part 2
+## Prompt — ANGRY (1×8–10s · one shot · VERY angry)
+
+**Use this for Veo when the mild angry take fails.** One continuous clip; do not split.
 
 ```text
-(Use shared framing.)
+Create one continuous video, 8.0 to 10.0 seconds long, 24 or 30 fps.
 
-Emotion for the whole clip: ANGRY — tense brows, firm face; keep anger in eyes/brows
-during mouth REST between vowels.
+Subject: one adult woman, blonde, beautiful, natural makeup, clear skin,
+frontal face close-up, looking straight at the camera. Soft natural beauty-light.
+Eyes clearly visible. No sunglasses. No cuts, no scene changes.
+Head mostly still (tiny natural motion OK). Face fills most of the frame. Stable crop.
+Photorealistic, elegant face identity — but extreme angry expression (not cartoon).
 
-PART 1 (8.0s): EE IH EY EH AE AA AX ER (spread/open/central).
-PART 2 (8.0s): AO OH UH OU AH AY AW OY (round/back/diphthongs).
-Same crop/light. Vowel sounds only. Sharper mouth attacks OK.
+Emotion for the WHOLE clip: VERY ANGRY / furious / enraged.
+Hard furrowed brows pulled down and inward (glare), narrowed intense eyes,
+tense jaw muscles, nostrils slightly flared, cheeks tight, fierce stare at camera.
+Anger must stay LOUD in eyes and eyebrows even when the mouth closes between vowels.
+Do NOT relax into mild irritation, polite firmness, or blank neutral. Not sad. Not scared.
+This is rage held under control — sharp, hot, confrontational.
+
+Silent except for the required vowel sounds (no English words or sentences).
+
+Walk all 16 vowels in this order across the clip, with a clear MOUTH REST between each:
+EE IH EY EH AE AA AO OH UH OU AH AX ER AY AW OY
+
+Between every vowel: mouth fully closed, lips flat, teeth not visible (mouth state 0),
+BUT keep the furious brows and angry eyes — never drop the emotional face.
+Hold each vowel long enough that lip shape is clearly readable.
+Vowel attacks may be sharper / more forceful than a calm take.
+Prefer clear holds over rushing. One take, one continuous shot.
 ```
+
+Optional fallback if one-shot is unreadable: morphological Part1/Part2 with the same
+VERY ANGRY emotion language above.
 
 ---
 

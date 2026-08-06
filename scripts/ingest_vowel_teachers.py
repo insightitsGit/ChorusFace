@@ -19,12 +19,14 @@ DEFAULT_PKG = ROOT / "output" / "teacher" / "teacher_package_v1"
 
 # Prefer these names if present; else take newest mp4s.
 PREFERRED = (
+    "VowelTeacher_NEUTRAL",
     "VowelTeacher_HAPPY",
     "VowelTeacher_SAD_Part1",
-    "VowelTeacher_ANGRY_Part1",
-    "VowelTeacher_SURPRISED",
-    "VowelTeacher_THINKING",
     "VowelTeacher_SAD_Part2",
+    "VowelTeacher_SURPRISED",
+    "VowelTeacher_ANGRY",  # one-shot very angry (prefer over Part1/Part2)
+    "VowelTeacher_THINKING",
+    "VowelTeacher_ANGRY_Part1",
     "VowelTeacher_ANGRY_Part2",
 )
 

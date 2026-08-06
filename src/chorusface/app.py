@@ -258,6 +258,15 @@ class AvatarFaceApp(FieldRuntime):
             help="Play a built-in phoneme loop without waiting for chat",
         )
         parser.add_argument(
+            "--vowel-design",
+            action="store_true",
+            default=_environment_flag("CHORUSFACE_VOWEL_DESIGN"),
+            help=(
+                "VowelDesign demo mode: disable TickFeed LOOK plates; speech is "
+                "GA-16 → BiomechanicalFace muscles/jaw only. Also CHORUSFACE_VOWEL_DESIGN=1"
+            ),
+        )
+        parser.add_argument(
             "--gpu-log",
             action="store_true",
             default=_environment_flag("CHORUSFACE_GPU_LOG"),
@@ -667,6 +676,9 @@ class AvatarFaceApp(FieldRuntime):
         self._tickfeed_look_authority = False
         self._tickfeed_lid_amt = 1.0
         self._tickfeed_lid_teacher = False
+        # VowelDesign: while set, speech LOOK uses biomech/mouth-timeline, not
+        # TickFeed plate labels (otherwise GA-16 collapses to the old 9-plate bank).
+        self._vowel_biomech_until = 0.0
         # Demo: play measured FaceCellTimeline once before zero-mood idle.
         self._tickfeed_calibration_active = False
         # Live chat/TTS overlay for TickFeed (bypasses MouthLayerTimeline LOOK).
@@ -833,6 +845,21 @@ class AvatarFaceApp(FieldRuntime):
         if bool(getattr(self.argv, "bridge", False)):
             self._start_face_bridge()
 
+        if bool(getattr(self.argv, "vowel_design", False)):
+            try:
+                self.wnd.title = "ChorusFace — VowelDesign (GA-16 biomech)"
+            except Exception:  # noqa: BLE001
+                pass
+            # Louder muscle travel so EE/OU/AA read on the photo face.
+            self._biomech.speech_travel_scale = 1.55
+            self._vowel_biomech_until = 1e9  # keep vowel LOOK path for the session
+            print("=" * 60)
+            print("VowelDesign demo mode")
+            print("  Speech LOOK: BiomechanicalFace (muscles + jaw) — NOT TickFeed plates")
+            print("  Inventory: GA-16 vowels · 6 emotions")
+            print("  Drive: POST /vowel/utterance  or  scripts/demo_vowel_design.py")
+            print("  Docs: docs/VowelDesignNWRReconciliation.md")
+            print("=" * 60)
         if bool(getattr(self.argv, "product_beta", False)):
             print("=" * 60)
             print("ChorusFace product beta")
@@ -1006,15 +1033,29 @@ class AvatarFaceApp(FieldRuntime):
             self._tickfeed_look_authority = bool(
                 self._tickfeed is not None and self._tickfeed.enabled
             )
+            if bool(getattr(self.argv, "vowel_design", False)):
+                # VowelDesign owns speech LOOK via biomech — never TickFeed plates.
+                self._tickfeed_look_authority = False
+                if self._tickfeed is not None:
+                    self._tickfeed.enabled = False
             wire = (
                 f"wire-loop={self._tickfeed.wire_loop_source}"
                 if self._tickfeed is not None and self._tickfeed.wire_loop
                 else "local-ring"
             )
+            look = (
+                "biomech-vowel"
+                if bool(getattr(self.argv, "vowel_design", False))
+                else (
+                    "tickfeed-labels"
+                    if self._tickfeed_look_authority
+                    else "mouth-timeline"
+                )
+            )
             print(
                 f"TickFeed: full-face ROI {face.w}x{face.h} @ ({face.x},{face.y}) "
                 f"— KEY/DELTA ingest (legacy ±4 cell plan disabled); "
-                f"LOOK authority={'tickfeed-labels' if self._tickfeed_look_authority else 'mouth-timeline'}; "
+                f"LOOK authority={look}; "
                 f"master={wire}"
             )
         except Exception as exc:  # noqa: BLE001 — adopt must not kill launch
@@ -1524,6 +1565,24 @@ class AvatarFaceApp(FieldRuntime):
         self._plate_blend = (float(mix), amount)
         self._plate_blend_current = (float(mix), amount)
 
+    def _vowel_biomech_active(self) -> bool:
+        """True while a VowelDesign utterance owns speech LOOK (biomech path)."""
+        until = float(getattr(self, "_vowel_biomech_until", 0.0) or 0.0)
+        if until <= 0.0:
+            return False
+        # Safe during __init__ before _audio / speech clock exist.
+        try:
+            now = self._speech_now()
+        except Exception:  # noqa: BLE001
+            now = time.perf_counter() - float(
+                getattr(self, "_clock0", time.perf_counter())
+            )
+        return now < until
+
+    def _tickfeed_look_owns_speech(self) -> bool:
+        """TickFeed plate labels own LOOK only when vowel biomech is not active."""
+        return bool(self._tickfeed_look_authority) and not self._vowel_biomech_active()
+
     def _tickfeed_live_active(self) -> bool:
         live = self._tickfeed_live
         if live is None:
@@ -1741,7 +1800,7 @@ class AvatarFaceApp(FieldRuntime):
         from chorusface.plates import HARD_SNAP_THRESHOLD
 
         now = time.perf_counter() - self._clock0
-        if self._tickfeed_look_authority and self._tickfeed is not None:
+        if self._tickfeed_look_owns_speech() and self._tickfeed is not None:
             # Expire live overlay
             if self._tickfeed_live is not None and not self._tickfeed_live_active():
                 self._tickfeed_live = None
@@ -2397,9 +2456,9 @@ class AvatarFaceApp(FieldRuntime):
         elif cal_mode == "field_only":
             # Full recipe gain — prove NWR warp without LOOK plate stack.
             field_gain = float(self._display_recipe.field_warp_gain)
-        elif speaking_plate and not self._tickfeed_look_authority:
+        elif speaking_plate and not self._tickfeed_look_owns_speech():
             field_gain *= 0.20
-        elif self._tickfeed_look_authority:
+        elif self._tickfeed_look_owns_speech():
             from chorusface.mouth_owner import look_field_gain_scale
 
             # §14.3 single owner: mute FIELD under LOOK plates (esp. live
@@ -2429,7 +2488,7 @@ class AvatarFaceApp(FieldRuntime):
         # Early atlas commitment during OPENING/CLOSING reduces mid-band ghosts.
         sharp = float(self._display_recipe.plate_sharpness)
         if (
-            self._tickfeed_look_authority
+            self._tickfeed_look_owns_speech()
             and str(getattr(self, "_mouth_transition", "REST"))
             in {"OPENING", "CLOSING", "OPEN"}
         ):
@@ -3009,6 +3068,8 @@ class AvatarFaceApp(FieldRuntime):
             if kind == "vowel":
                 # VowelDesign: GA-16 compose → schedule → BiomechanicalFace
                 # (submit_phoneme). Do not collapse tags to the coarse 7-vowel set.
+                # Take LOOK ownership away from TickFeed plates for this utterance
+                # so GA-16 muscle/jaw motion is actually visible on the photo face.
                 from chorusface.speech import schedule_spans
                 from chorusface.vowel.pipeline import compose_utterance
 
@@ -3021,22 +3082,39 @@ class AvatarFaceApp(FieldRuntime):
                 spans = [
                     (s.tag, s.start_s, s.end_s) for s in result.payload.spans
                 ]
-                if self._voice_epoch is None:
-                    self._voice_epoch = (
-                        time.perf_counter() - self._clock0 + self._voice_trim
+                # Vowel utterances are self-timed (no PCM stream). Always start
+                # from "now" so back-to-back demos do not pile on a stale epoch.
+                now_s = time.perf_counter() - self._clock0 + self._voice_trim
+                self._voice_epoch = now_s
+                end_s = 0.0
+                for _tag, _a, b in spans:
+                    end_s = max(end_s, float(b))
+                if result.payload.spans:
+                    end_s = max(
+                        end_s, max(float(s.end_s) for s in result.payload.spans)
                     )
+                # Speech clock ownership window (slight pad for release).
+                self._vowel_biomech_until = now_s + max(end_s, 0.4) + 0.25
+                self._tickfeed_live = None
                 events = schedule_spans(
-                    spans, self._voice_emotion, start_at=self._voice_epoch
+                    spans, self._voice_emotion, start_at=now_s
                 )
                 self._voice_inbox.extend(events)
                 self._voice_events += len(events)
                 # stash binary for debug / Fabric spool consumers
                 self._last_vowel_pulsechunk = result.chunk  # type: ignore[attr-defined]
+                print(
+                    f"VowelDesign: biomech LOOK on until t={self._vowel_biomech_until:.2f}s "
+                    f"tags={[s.tag for s in result.payload.spans][:8]} "
+                    f"emotion={emotion}",
+                    flush=True,
+                )
                 return {
                     "scheduled": len(events),
                     "pending": 0,
                     "mode": "vowel",
                     "drive": "biomech",
+                    "look": "biomech",
                     "n_ticks": result.chunk.n_ticks,
                 }
 
@@ -3354,6 +3432,12 @@ class AvatarFaceApp(FieldRuntime):
             "active_cells": int(self._telemetry.active_cells),
             "tickfeed": {
                 "look_authority": bool(self._tickfeed_look_authority),
+                "vowel_biomech": bool(self._vowel_biomech_active()),
+                "speech_look": (
+                    "biomech" if self._vowel_biomech_active() else "tickfeed-labels"
+                    if self._tickfeed_look_authority
+                    else "mouth-timeline"
+                ),
                 "open": float(getattr(self, "_ml_openness", 0.0) or 0.0),
                 "smile": float(getattr(self, "_ml_smile", 0.0) or 0.0),
                 "plate_open": float(getattr(self, "_plate_openness_current", 0.0) or 0.0),
@@ -3445,7 +3529,7 @@ class AvatarFaceApp(FieldRuntime):
         now = self._speech_now()
         key = canonical_viseme(phoneme)
 
-        if self._tickfeed_look_authority:
+        if self._tickfeed_look_owns_speech():
             # TickFeed path: instant viseme openness (no mid-band ramp);
             # overlay until = absolute audio span end (not now+vowel floor).
             from chorusface.mouth_owner import viseme_instant_openness
@@ -3736,10 +3820,13 @@ class AvatarFaceApp(FieldRuntime):
 
     def _step_biomechanics(self, frame_time: float) -> None:
         cpu_started = time.perf_counter()
+        # During VowelDesign utterances, do not treat TickFeed as FIELD owner —
+        # EyeSystem / muscle impulses must run so GA-16 is visible.
+        tickfeed_field = self._tickfeed_look_owns_speech()
         render, specs = self._biomech.step(
             max(frame_time, 0.0),
             tick=self.tick + 1,
-            tickfeed_field=bool(self._tickfeed_look_authority),
+            tickfeed_field=tickfeed_field,
         )
         self._render_state = render
         # expression.w drives smile.png in the shader. Use capture smile amount
@@ -3748,7 +3835,7 @@ class AvatarFaceApp(FieldRuntime):
             0.0,
             min(1.0, max(float(render.expression), float(getattr(self, "_ml_smile", 0.0)))),
         )
-        if self._tickfeed_look_authority:
+        if tickfeed_field:
             # Labels are already 0..1 LOOK amounts — do not apply old ×12 boost
             # (that left the mouth stuck open on small residuals).
             openness = float(self._plate_openness_current) * 8.0
