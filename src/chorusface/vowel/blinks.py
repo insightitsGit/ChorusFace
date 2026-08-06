@@ -13,9 +13,9 @@ from numpy.typing import NDArray
 from chorusface.vowel.schema import GROUP_DIM, TICK_HZ
 
 # Typical spontaneous blink: ~100–150 ms close+open; interval ~2.5–4.5 s.
-BLINK_CLOSE_TICKS = 3  # ~50 ms down
-BLINK_HOLD_TICKS = 2  # ~33 ms shut
-BLINK_OPEN_TICKS = 4  # ~67 ms up
+BLINK_CLOSE_TICKS = 4  # ~67 ms down
+BLINK_HOLD_TICKS = 4  # ~67 ms shut (readable on GPU)
+BLINK_OPEN_TICKS = 5  # ~83 ms up
 BLINK_TOTAL_TICKS = BLINK_CLOSE_TICKS + BLINK_HOLD_TICKS + BLINK_OPEN_TICKS
 DEFAULT_INTERVAL_S = 3.2
 MIN_INTERVAL_TICKS = int(2.0 * TICK_HZ)

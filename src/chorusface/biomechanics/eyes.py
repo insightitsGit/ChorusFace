@@ -80,9 +80,52 @@ class EyeSystem:
     state: EyeState = field(default_factory=EyeState)
     seed: int = 1
     _rng: int = 1
+    # Idle blink spacing (seconds). Product default ~2.8–5.2; VowelDesign can
+    # retune so blinks do not match the old photographed-plate cadence.
+    blink_interval_min_s: float = 2.8
+    blink_interval_span_s: float = 2.4
+    # Close/hold/open durations (override for softer / slower demo blinks).
+    blink_close_s: float = BLINK_CLOSE_S
+    blink_hold_s: float = BLINK_HOLD_S
+    blink_open_s: float = BLINK_OPEN_S
 
     def __post_init__(self) -> None:
         self._rng = int(self.seed) & 0x7FFFFFFF or 1
+
+    @property
+    def blink_total_s(self) -> float:
+        return (
+            float(self.blink_close_s)
+            + float(self.blink_hold_s)
+            + float(self.blink_open_s)
+        )
+
+    def configure_blinks(
+        self,
+        *,
+        interval_min_s: float | None = None,
+        interval_span_s: float | None = None,
+        close_s: float | None = None,
+        hold_s: float | None = None,
+        open_s: float | None = None,
+        seed: int | None = None,
+    ) -> None:
+        if interval_min_s is not None:
+            self.blink_interval_min_s = max(0.8, float(interval_min_s))
+        if interval_span_s is not None:
+            self.blink_interval_span_s = max(0.2, float(interval_span_s))
+        if close_s is not None:
+            self.blink_close_s = max(0.05, float(close_s))
+        if hold_s is not None:
+            self.blink_hold_s = max(0.02, float(hold_s))
+        if open_s is not None:
+            self.blink_open_s = max(0.05, float(open_s))
+        if seed is not None:
+            self.seed = int(seed)
+            self._rng = int(self.seed) & 0x7FFFFFFF or 1
+        self.state.blink_timer = (
+            self.blink_interval_min_s + self._next_unit() * self.blink_interval_span_s
+        )
 
     def _next_unit(self) -> float:
         # Deterministic LCG, same family used by idle/breathing systems.
@@ -93,6 +136,36 @@ class EyeSystem:
         self.state.target_x = max(-1.0, min(1.0, x))
         self.state.target_y = max(-1.0, min(1.0, y))
 
+    def _lid_close_amount_cfg(self, remaining: float) -> float:
+        """Instance-configured close curve (0 open → 1 shut)."""
+        total = self.blink_total_s
+        if remaining <= 0.0:
+            return 0.0
+        elapsed = total - min(remaining, total)
+        close_s = float(self.blink_close_s)
+        hold_s = float(self.blink_hold_s)
+        open_s = float(self.blink_open_s)
+        if elapsed < close_s:
+            t = elapsed / max(close_s, 1e-4)
+            return t * t * (3.0 - 2.0 * t)
+        if elapsed < close_s + hold_s:
+            return 1.0
+        open_t = (elapsed - close_s - hold_s) / max(open_s, 1e-4)
+        open_t = max(0.0, min(1.0, open_t))
+        u = open_t * open_t * (3.0 - 2.0 * open_t)
+        return 1.0 - u
+
+    def _blink_state_cfg(self, remaining: float) -> str:
+        total = self.blink_total_s
+        if remaining <= 0.0:
+            return BLINK_STATE_OPEN
+        elapsed = total - min(remaining, total)
+        if elapsed < float(self.blink_close_s):
+            return BLINK_STATE_CLOSING
+        if elapsed < float(self.blink_close_s) + float(self.blink_hold_s):
+            return BLINK_STATE_CLOSED
+        return BLINK_STATE_OPENING
+
     def request_blink(self) -> None:
         """Blink on the next step regardless of the scheduled interval.
 
@@ -101,16 +174,23 @@ class EyeSystem:
         that wants a blink now has to start the phase itself.
         """
         if self.state.blink_phase <= 0.0:
-            self.state.blink_phase = BLINK_TOTAL_S
+            self.state.blink_phase = self.blink_total_s
             self.state.blink_state = BLINK_STATE_CLOSING
-            self.state.blink_timer = 2.8 + self._next_unit() * 2.4
+            self.state.blink_timer = (
+                self.blink_interval_min_s
+                + self._next_unit() * self.blink_interval_span_s
+            )
 
     def set_arousal(self, arousal: float) -> None:
         # Higher arousal → larger pupils and more frequent blinks.
         self.state.pupil = max(0.15, min(0.95, 0.35 + 0.4 * max(0.0, arousal)))
-        interval = 3.4 - 1.2 * max(0.0, arousal)
+        # Scale idle interval with arousal but keep configured floor/span.
+        base = float(self.blink_interval_min_s) - 0.6 * max(0.0, arousal)
+        base = max(1.2, base)
         if self.state.blink_timer <= 0.0:
-            self.state.blink_timer = interval + self._next_unit() * 1.5
+            self.state.blink_timer = base + self._next_unit() * float(
+                self.blink_interval_span_s
+            )
 
     def closure_amount(self) -> float:
         """0 = open, 1 = fully closed (max of both lids)."""
@@ -148,16 +228,16 @@ class EyeSystem:
         step = min(max(float(dt), 0.0), BLINK_MAX_STEP_S)
         if self.state.blink_pause_s > 0.0 and self.state.blink_phase > 0.0:
             self.state.blink_pause_s = max(0.0, self.state.blink_pause_s - max(float(dt), 0.0))
-            close = _lid_close_amount(self.state.blink_phase)
-            self.state.blink_state = blink_state_from_remaining(self.state.blink_phase)
+            close = self._lid_close_amount_cfg(self.state.blink_phase)
+            self.state.blink_state = self._blink_state_cfg(self.state.blink_phase)
             self.state.lid_left = 1.0 - close
             self.state.lid_right = 1.0 - min(1.0, close * 0.94)
             self.state.lid_tension = close
             return impulses
         if self.state.blink_phase > 0.0:
             self.state.blink_phase = max(0.0, self.state.blink_phase - step)
-            close = _lid_close_amount(self.state.blink_phase)
-            self.state.blink_state = blink_state_from_remaining(self.state.blink_phase)
+            close = self._lid_close_amount_cfg(self.state.blink_phase)
+            self.state.blink_state = self._blink_state_cfg(self.state.blink_phase)
             # Mild asymmetry: left lid leads slightly.
             self.state.lid_left = 1.0 - close
             self.state.lid_right = 1.0 - min(1.0, close * 0.94)
@@ -182,9 +262,12 @@ class EyeSystem:
                 self.state.lid_right = 1.0
                 self.state.lid_tension = 0.0
         elif self.state.blink_timer <= 0.0:
-            self.state.blink_phase = BLINK_TOTAL_S
+            self.state.blink_phase = self.blink_total_s
             self.state.blink_state = BLINK_STATE_CLOSING
-            self.state.blink_timer = 2.8 + self._next_unit() * 2.4
+            self.state.blink_timer = (
+                self.blink_interval_min_s
+                + self._next_unit() * self.blink_interval_span_s
+            )
         else:
             self.state.lid_left = 1.0
             self.state.lid_right = 1.0

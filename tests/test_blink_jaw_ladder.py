@@ -52,7 +52,8 @@ def test_bj3_hard_zero_jaw_under_tickfeed_look() -> None:
     """BJ3: GPU jaw angle forced to 0 while TickFeed owns LOOK."""
     text = Path("src/chorusface/app.py").read_text(encoding="utf-8")
     assert "BJ3: TickFeed LOOK owns mouth via FIELD + plates" in text
-    assert "if bool(getattr(self, \"_tickfeed_look_authority\", False))" in text
+    assert "_tickfeed_look_owns_speech()" in text
+    assert "0.0 if tickfeed_owns else float(state.jaw_angle)" in text
     assert "phoneme_jaw=0.0" in text
     assert '"jaw_gpu"' in text
     # Must not re-land muscle jaw residual with this step.

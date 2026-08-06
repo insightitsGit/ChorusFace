@@ -243,16 +243,30 @@ class VowelComposer:
         )
 
 
+def _default_model_dir() -> Path | None:
+    """Prefer trained teacher models next to the TickFeed world."""
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[3] / "output" / "worlds" / "tickfeed" / "vowel",
+        Path.cwd() / "output" / "worlds" / "tickfeed" / "vowel",
+    ]
+    for d in candidates:
+        if (d / "model_a.npz").is_file():
+            return d
+    return None
+
+
 def compose_utterance(
     payload: UtterancePayload | dict,
     *,
     model_dir: str | Path | None = None,
     blinks: bool | None = None,
 ) -> ComposeResult:
+    resolved = Path(model_dir) if model_dir is not None else _default_model_dir()
     composer = (
-        VowelComposer.from_dir(model_dir) if model_dir else VowelComposer()
+        VowelComposer.from_dir(resolved) if resolved is not None else VowelComposer()
     )
-    if model_dir is None and not composer.model_a.trained:
+    if not composer.model_a.trained:
         composer.model_a.fit()
     if isinstance(payload, dict):
         if blinks is None and "blinks" in payload:
@@ -261,6 +275,9 @@ def compose_utterance(
             composer.blink_interval_s = float(payload["blink_interval_s"])
         if "blink_seed" in payload:
             composer.blink_seed = int(payload["blink_seed"])
+        # Default: blinks on for play demos (eyes are part of Dataset A/B path).
+        if blinks is None:
+            blinks = True
     if blinks is not None:
         composer.blinks = bool(blinks)
     return composer.compose(payload)

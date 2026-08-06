@@ -31,16 +31,18 @@ DEFAULT_PORT = 8766
 WORLD_BDS = ROOT / "output" / "worlds" / "tickfeed" / "avatar_face.bds"
 WORLD_FACE = ROOT / "output" / "worlds" / "tickfeed" / "source_face.png"
 
-# Long holds so a human can read lip silhouette on the photo face.
+# Long holds so a human can read lip silhouette + brows/blinks on the photo face.
+_BLINK = {"blinks": True, "blink_interval_s": 1.6, "blink_seed": 7}
 SHOW: list[dict] = [
     {
         "id": "contrast_happy",
-        "title": "1/4  HAPPY — watch EE (wide) → OU (round) → AA (open)",
-        "wait_s": 4.5,
+        "title": "1/5  HAPPY — EE/OU/AA + raised brows + blinks",
+        "wait_s": 4.6,
         "payload": {
             "utterance_id": "vd_happy_contrast",
             "text": "EE OU AA",
             "play": True,
+            **_BLINK,
             "emotion_track": [{"emotion": "HAPPY", "start_s": 0.0, "end_s": 4.2}],
             "spans": [
                 {"tag": "EE", "start_s": 0.20, "end_s": 1.20},
@@ -51,12 +53,13 @@ SHOW: list[dict] = [
     },
     {
         "id": "contrast_angry",
-        "title": "2/4  ANGRY — same EE / OU / AA under furious brows",
-        "wait_s": 4.5,
+        "title": "2/5  ANGRY — EE/OU/AA under knit brows",
+        "wait_s": 4.6,
         "payload": {
             "utterance_id": "vd_angry_contrast",
             "text": "EE OU AA",
             "play": True,
+            **{**_BLINK, "blink_seed": 11},
             "emotion_track": [{"emotion": "ANGRY", "start_s": 0.0, "end_s": 4.2}],
             "spans": [
                 {"tag": "EE", "start_s": 0.20, "end_s": 1.20},
@@ -67,12 +70,13 @@ SHOW: list[dict] = [
     },
     {
         "id": "contrast_sad",
-        "title": "3/4  SAD — EE / OU / AA with sorrow eyes/brows",
-        "wait_s": 4.5,
+        "title": "3/5  SAD — EE/OU/AA with sorrow brows",
+        "wait_s": 4.6,
         "payload": {
             "utterance_id": "vd_sad_contrast",
             "text": "EE OU AA",
             "play": True,
+            **{**_BLINK, "blink_seed": 13},
             "emotion_track": [{"emotion": "SAD", "start_s": 0.0, "end_s": 4.2}],
             "spans": [
                 {"tag": "EE", "start_s": 0.20, "end_s": 1.20},
@@ -82,14 +86,39 @@ SHOW: list[dict] = [
         },
     },
     {
+        "id": "blink_hold",
+        "title": "4/5  NEUTRAL blink hold — lids from F9 C[0]",
+        "wait_s": 3.8,
+        "payload": {
+            "utterance_id": "vd_blink_hold",
+            "text": "AX",
+            "play": True,
+            "blinks": True,
+            "blink_interval_s": 1.1,
+            "blink_seed": 3,
+            "emotion_track": [{"emotion": "NEUTRAL", "start_s": 0.0, "end_s": 3.4}],
+            "spans": [
+                {"tag": "AX", "start_s": 0.10, "end_s": 3.20},
+            ],
+        },
+    },
+    {
         "id": "sentence",
-        "title": "4/4  HAPPY sentence — See you tomorrow (G2P GA-16)",
-        "wait_s": 3.5,
+        "title": "5/5  HAPPY sentence — See you tomorrow",
+        "wait_s": 3.8,
         "payload": {
             "utterance_id": "vd_happy_sentence",
             "text": "See you tomorrow",
             "play": True,
-            "emotion_track": [{"emotion": "HAPPY", "start_s": 0.0, "end_s": 3.0}],
+            **{**_BLINK, "blink_seed": 17},
+            "emotion_track": [{"emotion": "HAPPY", "start_s": 0.0, "end_s": 3.4}],
+            "spans": [
+                {"tag": "EE", "start_s": 0.15, "end_s": 0.55},
+                {"tag": "OU", "start_s": 0.70, "end_s": 1.10},
+                {"tag": "AX", "start_s": 1.25, "end_s": 1.55},
+                {"tag": "AA", "start_s": 1.70, "end_s": 2.20},
+                {"tag": "OH", "start_s": 2.35, "end_s": 3.10},
+            ],
         },
     },
 ]
@@ -179,9 +208,15 @@ def launch_avatar(port: int, token: str) -> subprocess.Popen:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT / "src") + os.pathsep + env.get("PYTHONPATH", "")
     env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUNBUFFERED"] = "1"
     env["CHORUSFACE_VOWEL_DESIGN"] = "1"
+    # Avoid OpenBLAS/OMP deadlocks between HTTP bridge threads and the GL loop.
+    env.setdefault("OMP_NUM_THREADS", "1")
+    env.setdefault("OPENBLAS_NUM_THREADS", "1")
+    env.setdefault("MKL_NUM_THREADS", "1")
     cmd = [
         py,
+        "-u",
         "-m",
         "chorusface",
         "--vowel-design",
@@ -201,6 +236,7 @@ def launch_avatar(port: int, token: str) -> subprocess.Popen:
         str(WORLD_FACE),
         "--no-wire-loop",
         "--no-chat",
+        "--no-chat-box",
         "--fidelity-hud",
     ]
     log_path = ROOT / "output" / "teacher" / "vowel_design_demo.log"
@@ -292,6 +328,11 @@ def run_show(url: str, token: str, client_id: str, only: str) -> int:
 
 
 def main() -> int:
+    # Unbuffered console so progress appears while the GPU window runs.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--url", default=DEFAULT_URL)
     ap.add_argument("--token", default=DEFAULT_TOKEN)
@@ -306,10 +347,10 @@ def main() -> int:
 
     proc: subprocess.Popen | None = None
     if not args.no_launch:
-        print(f"[prep] free port {args.port}")
+        print(f"[prep] free port {args.port}", flush=True)
         free_port(args.port)
         proc = launch_avatar(args.port, args.token)
-        print(f"[ok] avatar pid={proc.pid}")
+        print(f"[ok] avatar pid={proc.pid}", flush=True)
 
     try:
         wait_bridge(url, args.token, client_id, args.wait_bridge)

@@ -212,9 +212,19 @@ def main() -> int:
         action="store_true",
         help="Write plate even without blink evidence (not recommended)",
     )
+    parser.add_argument(
+        "--video",
+        type=Path,
+        default=None,
+        help="Override calibration_take.mp4 (e.g. VowelTeacher_NEUTRAL.mp4)",
+    )
     args = parser.parse_args()
     world = args.world
-    video = world / "calibration_take.mp4"
+    video = (
+        Path(args.video)
+        if args.video is not None
+        else world / "calibration_take.mp4"
+    )
     source = world / "source_face.png"
     if not video.is_file():
         raise SystemExit(f"missing {video}")

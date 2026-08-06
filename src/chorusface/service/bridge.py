@@ -684,66 +684,108 @@ class FaceBridge:
                         return
                     if path == "/vowel/utterance":
                         # VowelDesign Phase-1: compose PulseChunk (+ optional play).
+                        # Keep the JSON lean — full controls_preview / pulsechunk_b64
+                        # are optional (include_binary=1) so play demos do not time out.
                         import base64
 
                         from chorusface.vowel.pipeline import compose_utterance
                         from chorusface.vowel.pulsechunk import encode_pulsechunk
 
                         payload = self._read_json()
-                        result = compose_utterance(payload)
-                        raw = encode_pulsechunk(result.chunk)
                         play = bool(payload.get("play", True))
+                        include_binary = bool(payload.get("include_binary"))
+                        raw_spans = payload.get("spans") or []
+                        has_spans = isinstance(raw_spans, list) and bool(raw_spans)
+                        # Always compose so eyes/brows ride Model A/B 9D (Dataset path).
+                        # OMP_NUM_THREADS=1 avoids OpenBLAS vs GL deadlock on this host.
+                        result = compose_utterance(payload)
                         scheduled = 0
+                        drive = ""
+                        look = ""
+                        utterance = {
+                            "utterance_id": str(
+                                payload.get("utterance_id")
+                                or result.payload.utterance_id
+                            ),
+                            "text": str(
+                                payload.get("text") or result.payload.text
+                            ),
+                            "emotion_track": payload.get("emotion_track")
+                            or [
+                                {
+                                    "emotion": e.emotion,
+                                    "start_s": e.start_s,
+                                    "end_s": e.end_s,
+                                }
+                                for e in result.payload.emotion_track
+                            ],
+                            "spans": (
+                                raw_spans
+                                if has_spans
+                                else [
+                                    {
+                                        "tag": s.tag,
+                                        "start_s": s.start_s,
+                                        "end_s": s.end_s,
+                                    }
+                                    for s in result.payload.spans
+                                ]
+                            ),
+                        }
                         if play and bridge._voice_handler is not None:
                             try:
                                 reply = bridge._voice_handler(
                                     "vowel",
                                     {
-                                        "utterance": {
-                                            "utterance_id": result.payload.utterance_id,
-                                            "text": result.payload.text,
-                                            "emotion_track": [
-                                                {
-                                                    "emotion": e.emotion,
-                                                    "start_s": e.start_s,
-                                                    "end_s": e.end_s,
-                                                }
-                                                for e in result.payload.emotion_track
-                                            ],
-                                            "spans": [
-                                                {
-                                                    "tag": s.tag,
-                                                    "start_s": s.start_s,
-                                                    "end_s": s.end_s,
-                                                }
-                                                for s in result.payload.spans
-                                            ],
-                                        },
-                                        "pulsechunk_b64": base64.b64encode(raw).decode(
-                                            "ascii"
-                                        ),
+                                        "utterance": utterance,
+                                        # Full 9D trajectory (T,9) — eyes/brows included.
+                                        "controls": result.controls,
                                     },
                                 )
                                 if isinstance(reply, dict):
                                     scheduled = int(reply.get("scheduled", 0) or 0)
+                                    drive = str(reply.get("drive") or "")
+                                    look = str(reply.get("look") or "")
                             except Exception as exc:  # noqa: BLE001 — surface to client
                                 raise BridgeError(
                                     HTTPStatus.BAD_REQUEST, f"vowel play failed: {exc}"
                                 ) from exc
-                        step = max(1, result.chunk.n_ticks // 8)
-                        self._send_json(
-                            HTTPStatus.OK,
-                            {
-                                "ok": True,
-                                "utterance_id": result.payload.utterance_id,
-                                "n_ticks": result.chunk.n_ticks,
-                                "n_words": len(result.chunk.word_slices),
-                                "primary_emotion": result.payload.primary_emotion,
-                                "scheduled": scheduled,
-                                "pulsechunk_b64": base64.b64encode(raw).decode("ascii"),
-                                "controls_preview": result.controls[::step].tolist(),
-                            },
-                        )
+                        tags = [
+                            str(s.get("tag") or s.get("phoneme") or "").upper()
+                            for s in utterance["spans"]
+                            if isinstance(s, dict)
+                        ]
+                        tags = [t for t in tags if t]
+                        n_ticks = int(result.chunk.n_ticks)
+                        n_words = len(result.chunk.word_slices)
+                        emotion = result.payload.primary_emotion
+                        body: dict[str, Any] = {
+                            "ok": True,
+                            "utterance_id": utterance["utterance_id"],
+                            "n_ticks": n_ticks,
+                            "n_words": n_words,
+                            "primary_emotion": emotion,
+                            "scheduled": scheduled,
+                            "tags": tags,
+                            "drive_channels": [
+                                "eye_aperture",
+                                "eye_gaze_or_blink",
+                                "brow_raise",
+                                "brow_knit",
+                            ],
+                        }
+                        if drive:
+                            body["drive"] = drive
+                        if look:
+                            body["look"] = look
+                        if include_binary:
+                            raw = encode_pulsechunk(result.chunk)
+                            step = max(1, result.chunk.n_ticks // 8)
+                            body["pulsechunk_b64"] = base64.b64encode(raw).decode(
+                                "ascii"
+                            )
+                            body["controls_preview"] = result.controls[::step].tolist()
+                        self._send_json(HTTPStatus.OK, body)
                         return
                     raise BridgeError(HTTPStatus.NOT_FOUND, f"unknown path {path}")
                 except BridgeError as exc:

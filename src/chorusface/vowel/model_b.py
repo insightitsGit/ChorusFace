@@ -147,6 +147,84 @@ class ModelB:
             out[i] = clamp_9d(wa * np.asarray(a) + wb * np.asarray(b))
         return out
 
+    def fit_from_transfers(
+        self,
+        controls_flat: NDArray[np.floating],
+        lengths: NDArray[np.integer],
+        emotions: NDArray[np.str_] | list[str],
+        *,
+        epochs: int = 200,
+        lr: float = 0.02,
+    ) -> dict[str, float | bool | int]:
+        """Fit residual corrector so analytic paths track measured Dataset B."""
+        flat = np.asarray(controls_flat, dtype=np.float64)
+        lengths = np.asarray(lengths, dtype=np.int32)
+        if flat.size == 0 or lengths.size == 0:
+            self.use_learned = False
+            return {"ok": False, "mse": 0.0, "n_pairs": 0, "use_learned": False}
+
+        feats: list[np.ndarray] = []
+        targets: list[np.ndarray] = []
+        offset = 0
+        for length, emotion in zip(lengths, emotions, strict=False):
+            n = int(length)
+            if n < 4:
+                offset += n
+                continue
+            clip = flat[offset : offset + n]
+            offset += n
+            # Analytic path toward clip mean (hold proxy).
+            c0 = clip[0]
+            c_tgt = np.mean(clip[n // 3 : max(n // 3 + 1, (2 * n) // 3)], axis=0)
+            analytic = self.generate_segment(
+                c0, c_tgt, n, str(emotion), release=False
+            )
+            for t in range(1, n):
+                feat = np.concatenate(
+                    [
+                        analytic[t - 1],
+                        c_tgt,
+                        [t / max(1, n - 1)],
+                        [1.0, 0.0, 0.0],
+                    ]
+                )
+                if feat.shape[0] < 22:
+                    feat = np.pad(feat, (0, 22 - feat.shape[0]))
+                else:
+                    feat = feat[:22]
+                # Learn residual: measured − analytic
+                feats.append(feat)
+                targets.append(clip[t] - analytic[t])
+
+        if not feats:
+            self.use_learned = False
+            return {"ok": False, "mse": 0.0, "n_pairs": 0, "use_learned": False}
+
+        X = np.stack(feats)
+        Y = np.stack(targets)
+        # Ridge-ish SGD
+        rng = np.random.default_rng(2)
+        n = X.shape[0]
+        mse = 0.0
+        for _ in range(max(1, epochs)):
+            perm = rng.permutation(n)
+            total = 0.0
+            for i in perm:
+                pred = X[i] @ self.W + self.b
+                err = pred - Y[i]
+                total += float(np.mean(err**2))
+                self.W -= lr * np.outer(X[i], err)
+                self.b -= lr * err
+                self.W *= 0.9995  # light weight decay
+            mse = total / n
+        self.use_learned = True
+        return {
+            "ok": True,
+            "mse": float(mse),
+            "n_pairs": int(n),
+            "use_learned": True,
+        }
+
     def save(self, path: str | Path) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)

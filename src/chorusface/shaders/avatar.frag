@@ -281,6 +281,17 @@ vec2 total_displacement(vec2 grid_position) {
         distance(grid_position, avatar_mouth_line.xy)
     );
     muscles *= mix(1.0, 0.55, smile_damp * mouth_prox);
+    // Plate-off (VowelDesign): keep lip muscle travel; damp only sub-lip chin
+    // tissue so jaw drop cannot duplicate the resting smile onto the chin.
+    if (avatar_plates_ready == 0) {
+        float chin_zone = 1.0 - smoothstep(
+            avatar_mouth_line.y - avatar_mouth_line.z * 1.85,
+            avatar_mouth_line.y - avatar_mouth_line.z * 0.10,
+            grid_position.y
+        );
+        muscles *= mix(1.0, 0.55, mouth_prox * chin_zone);
+        jaw *= mix(1.0, 0.55, chin_zone);
+    }
     // Region gate (B4-safe / §14.3): plate owns the oral disk — mute FIELD
     // *inside* that disk so warped identity doesn't ghost under LOOK.
     // Wider + harder commit when snap/plate amount is high (mid-band smear).
@@ -596,6 +607,26 @@ void main() {
         // smear under a committed LOOK plate (transition single-owner).
         vec2 source = inverse_warp(grid_position);
         float rest_mix = clamp(plate_own * 0.99 + plate_commit * 0.55, 0.0, 0.99);
+        // Plate-off (VowelDesign): rest-align the CHIN only. Full oral rest-align
+        // killed EE/OU/AA contrast; full warp stamped a second mouth on the chin.
+        if (avatar_plates_ready == 0) {
+            float oral_prox = 1.0 - smoothstep(
+                avatar_mouth_line.z * 0.75,
+                avatar_mouth_line.z * 2.30,
+                distance(grid_position, avatar_mouth_line.xy)
+            );
+            // y increases upward — chin is below the mouth line.
+            float chin_zone = 1.0 - smoothstep(
+                avatar_mouth_line.y - avatar_mouth_line.z * 1.85,
+                avatar_mouth_line.y - avatar_mouth_line.z * 0.10,
+                grid_position.y
+            );
+            float jaw_n = clamp(avatar_jaw.z / 0.55, 0.0, 1.0);
+            rest_mix = max(
+                rest_mix,
+                oral_prox * chin_zone * mix(0.55, 0.92, jaw_n)
+            );
+        }
         source = mix(source, grid_position, rest_mix);
         color = photo_at(source);
         face_alpha = smoothstep(0.02, 0.12, max(color.r, max(color.g, color.b)));
@@ -662,6 +693,11 @@ void main() {
         );
         // Atlas billboard owns the oral interior — kill synthetic gap fill.
         cavity_gate *= (1.0 - mix(0.0, smoothstep(0.30, 0.70, atlas_own), snap));
+        // Plate-off: cavity prediction is the ghost second mouth — keep shut.
+        if (avatar_plates_ready == 0) {
+            cavity_gate = 0.0;
+            mouth_inside = 0.0;
+        }
         color = mix(
             color,
             cavity_color(grid_position.y, gap, grid_position.x),
@@ -703,9 +739,9 @@ void main() {
         }
 
         // L09: eye LOOK region (§14.7) — same playbook as mouth plates.
-        // Photographed eyes_closed.png owns the aperture while blinking.
-        // Without that plate: do NOT invent lids and do NOT paint skin disks
-        // (Alt C looked worse than an open-eye hold on this take).
+        // Photographed eyes_closed.png owns the aperture when ready.
+        // VowelDesign / plate-off: geometric upper-lid curtain from socket skin
+        // (must not look like the old photographed blink plate).
         float aperture = max(tissue_at(source).a, tissue_at(grid_position).a);
         float blink = clamp(avatar_eye_state.w, 0.0, 1.0);
         float widen = clamp(avatar_expr_state.x, 0.0, 1.0);
@@ -739,12 +775,51 @@ void main() {
             float lid_w = ownership * smoothstep(0.04, 0.38, blink);
             lid_w = mix(lid_w, ownership, smoothstep(0.40, 0.70, blink));
             color = mix(color, ec.rgb, clamp(lid_w, 0.0, 1.0));
+        } else if (blink > 0.04 && avatar_eye_closed_ready != 1) {
+            // Aperture shrink on the OPEN photo (no eyes_closed.png).
+            // Iris compresses into a slit; outside the slit, sample lid rims.
+            vec2 axis = max(vec2(half_width, half_height), vec2(1.0));
+            float local_x = (grid_position.x - centre.x) / axis.x;
+            float local_y = (grid_position.y - centre.y) / axis.y;
+            float eye_disk = 1.0 - smoothstep(0.90, 1.16, length(vec2(local_x, local_y)));
+            float u = clamp(blink, 0.0, 1.0);
+            u = u * u * (3.0 - 2.0 * u);
+            // Visible half-height of the open aperture (1 → thin slit).
+            float open_h = mix(1.08, 0.05, u);
+            float in_open = 1.0 - smoothstep(open_h - 0.10, open_h + 0.04, abs(local_y));
+            // Compress globe into the remaining slit so iris does not vanish early.
+            float comp_y = local_y / max(open_h, 0.05);
+            vec2 globe_src = centre + vec2(local_x * axis.x, comp_y * axis.y * 0.90);
+            vec3 globe = photo_at(globe_src);
+            // Lid rims from open take — stay on the lid margin, never forehead.
+            vec2 upper_src = centre + vec2(
+                local_x * axis.x * 0.55,
+                axis.y * mix(0.98, 0.62, u)
+            );
+            vec2 lower_src = centre + vec2(
+                local_x * axis.x * 0.45,
+                -axis.y * mix(0.98, 0.62, u)
+            );
+            vec3 lid = mix(photo_at(lower_src), photo_at(upper_src), step(0.0, local_y));
+            // Bias upper lid (human blink is upper-led).
+            lid = mix(lid, photo_at(upper_src), 0.55);
+            float seam = (1.0 - smoothstep(0.0, 0.22, abs(local_y)))
+                * smoothstep(0.55, 1.0, u);
+            lid = mix(lid, lid * 0.80, seam * 0.75);
+            vec3 eye_col = mix(lid, globe, in_open);
+            // Near full close, force lid ownership so pupils cannot speck through.
+            float w = eye_disk * smoothstep(0.02, 0.20, blink);
+            w = mix(w, eye_disk, smoothstep(0.70, 0.92, u));
+            color = mix(color, eye_col, clamp(w, 0.0, 1.0));
         }
 
-        // L10: brow raise without a plate — display-only, not Master-Lock gated.
-        // Mute brow lift inside a blink so lids stay the single owner.
+        // L10: brow raise / knit without a plate — display-only.
+        // Mute brow motion inside a blink so lids stay the single owner.
         float brow = clamp(avatar_expr_state.y, 0.0, 1.0);
         brow *= (1.0 - smoothstep(0.08, 0.35, clamp(avatar_eye_state.w, 0.0, 1.0)));
+        // Negative z encodes brow_knit (VowelDesign F9 C[3]) when plate blend idle.
+        float knit = clamp(-min(avatar_expr_state.z, 0.0), 0.0, 1.0);
+        knit *= (1.0 - smoothstep(0.08, 0.35, clamp(avatar_eye_state.w, 0.0, 1.0)));
         if (brow > 0.04 && avatar_expr_state.z < 0.15) {
             int part = part_at(grid_position);
             if (part == PART_LEFT_BROW || part == PART_RIGHT_BROW || part == PART_FACE) {
@@ -756,6 +831,24 @@ void main() {
                 float lift = brow * 5.2;
                 vec3 lifted = photo_at(source - vec2(0.0, lift));
                 color = mix(color, lifted, brow_band * brow * 0.72);
+            }
+        }
+        if (knit > 0.05) {
+            int part_k = part_at(grid_position);
+            if (part_k == PART_LEFT_BROW || part_k == PART_RIGHT_BROW || part_k == PART_FACE) {
+                float brow_band_k = smoothstep(
+                    avatar_eye_centers.y + avatar_eye_shape.y * 0.85,
+                    avatar_eye_centers.y + avatar_eye_shape.y * 3.1,
+                    grid_position.y
+                );
+                float medial = clamp(1.0 - abs(grid_position.x - eye_mid_x) / max(half_width * 3.8, 1.0), 0.0, 1.0);
+                float toward = sign(eye_mid_x - grid_position.x);
+                vec2 knit_off = vec2(toward * knit * 4.6, -knit * 3.0);
+                vec3 knitted = photo_at(source + knit_off);
+                color = mix(color, knitted, brow_band_k * medial * knit * 0.92);
+                // Soft furrow shade between brows.
+                float furrow = medial * medial * knit * brow_band_k;
+                color *= (1.0 - furrow * 0.18);
             }
         }
     } else {

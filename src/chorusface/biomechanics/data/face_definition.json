@@ -689,11 +689,11 @@
       "OrbicularisOris": 0.12
     },
     "AA": {
-      "JawOpener": 1.25,
-      "DepressorLabii": 0.85,
-      "DepressorAnguliOris": 0.20,
-      "Platysma": 0.28,
-      "OrbicularisOris": 0.12
+      "JawOpener": 1.40,
+      "DepressorLabii": 0.32,
+      "DepressorAnguliOris": 0.12,
+      "Platysma": 0.12,
+      "OrbicularisOris": 0.08
     },
     "EH": {
       "JawOpener": 0.70,
@@ -707,10 +707,11 @@
       "OrbicularisOris": 0.25
     },
     "EE": {
-      "Risorius": 1.30,
-      "LevatorAnguliOris": 0.20,
-      "OrbicularisOris": 0.22,
-      "JawOpener": 0.16
+      "Risorius": 1.45,
+      "LevatorAnguliOris": 0.28,
+      "ZygomaticusMajor": 0.18,
+      "OrbicularisOris": 0.10,
+      "JawOpener": 0.10
     },
     "OH": {
       "OrbicularisOris": 0.95,
@@ -719,10 +720,11 @@
       "Mentalis": 0.20
     },
     "OU": {
-      "OrbicularisOris": 1.30,
-      "Buccinator": 1.15,
-      "JawOpener": 0.42,
-      "Mentalis": 0.25
+      "OrbicularisOris": 1.45,
+      "Buccinator": 1.30,
+      "JawOpener": 0.32,
+      "Mentalis": 0.30,
+      "Risorius": 0.0
     },
     "AE": {
       "JawOpener": 0.95,

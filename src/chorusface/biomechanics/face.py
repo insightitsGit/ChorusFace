@@ -78,6 +78,8 @@ class BiomechanicalFace:
     # Baked by chorusface-capture from the talk segment (1.0 = default travel).
     speech_travel_scale: float = 1.0
     lip_width_travel_scale: float = 1.0
+    # When True (VowelDesign), emotion/idle oral muscles cannot fight GA-16.
+    speech_owns_oral: bool = False
     _seed: int = 1
 
     @classmethod
@@ -198,9 +200,30 @@ class BiomechanicalFace:
 
         # Continuous layers inject into the same impulse queue.
         self.emotion.step(dt)
-        self.impulses.push_many(self.emotion.impulses(tick))
+        emo = self.emotion.impulses(tick)
+        idle = self.idle.step(dt, speaking=speaking)
+        if self.speech_owns_oral and speaking:
+            # Keep brows/lids from emotion; strip oral fighters (HAPPY grin etc.).
+            oral = {
+                "ZygomaticusMajor",
+                "ZygomaticusMinor",
+                "Risorius",
+                "OrbicularisOris",
+                "LevatorAnguliOris",
+                "LevatorLabii",
+                "DepressorAnguliOris",
+                "DepressorLabii",
+                "Buccinator",
+                "Mentalis",
+                "JawOpener",
+                "Masseter",
+                "Platysma",
+            }
+            emo = [imp for imp in emo if str(imp.muscle) not in oral]
+            idle = [imp for imp in idle if str(imp.muscle) not in oral]
+        self.impulses.push_many(emo)
         self.impulses.push_many(self.breathing.step(dt))
-        self.impulses.push_many(self.idle.step(dt, speaking=speaking))
+        self.impulses.push_many(idle)
         self.impulses.push_many(
             self.eyes.step(
                 dt,

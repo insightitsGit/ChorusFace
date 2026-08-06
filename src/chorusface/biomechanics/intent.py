@@ -28,9 +28,9 @@ PHONEME_JAW_TARGET: dict[str, float] = {
     "AA": 0.98,
     "EH": 0.52,
     "IH": 0.30,
-    "EE": 0.20,
+    "EE": 0.12,
     "OH": 0.74,
-    "OU": 0.40,
+    "OU": 0.34,
     # GA-16 extensions (VowelDesign)
     "AE": 0.78,
     "AO": 0.88,
@@ -133,7 +133,7 @@ class IntentSystem:
 
         key = canonical_viseme(phoneme)
         mapping = self.phoneme_muscles.get(key, self.phoneme_muscles.get("REST", {}))
-        scale = max(0.35, min(1.6, float(strength_scale)))
+        scale = max(0.35, min(1.85, float(strength_scale)))
         hold = max(float(duration), 0.12)
         impulses: list[MuscleImpulse] = []
         for muscle, strength in mapping.items():
@@ -141,7 +141,8 @@ class IntentSystem:
                 MuscleImpulse(
                     tick=tick,
                     muscle=str(muscle),
-                    strength=min(1.35, float(strength) * scale),
+                    # Allow stronger GA-16 contrast (EE wide / OU round / AA open).
+                    strength=min(1.55, float(strength) * scale),
                     duration=hold,
                     falloff=1.05,
                     priority=4 if source == "Speech" else 2,
