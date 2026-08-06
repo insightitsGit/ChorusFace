@@ -120,11 +120,6 @@ def emit_tick_packages(
         labels = _labels_from_control(c, tick_emo, plate)
         grid = controls_to_velocity_grid(c, cfg)
         must_key = t in key_set or t == 0 or prev is None
-        if not must_key and prev is not None:
-            # size crossover: if dense delta would be huge, KEY (approx)
-            delta = grid - prev
-            if float(np.mean(np.abs(delta))) > 0.05:
-                must_key = True
         if must_key:
             pkg = build_keyframe(
                 t,
@@ -134,7 +129,15 @@ def emit_tick_packages(
                 world_hash=cfg.world_hash,
             )
         else:
-            pkg = build_delta(
+            # F8: emit KEY when encoded Δ payload size ≥ KEY size.
+            key_pkg = build_keyframe(
+                t,
+                cfg.face,
+                grid,
+                labels=labels,
+                world_hash=cfg.world_hash,
+            )
+            delta_pkg = build_delta(
                 t,
                 cfg.face,
                 prev,
@@ -142,6 +145,10 @@ def emit_tick_packages(
                 labels=labels,
                 world_hash=cfg.world_hash,
             )
+            if len(encode(delta_pkg)) >= len(encode(key_pkg)):
+                pkg = key_pkg
+            else:
+                pkg = delta_pkg
         packages.append(pkg)
         prev = grid
     return packages

@@ -35,6 +35,7 @@ import queue
 import sys
 import threading
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -785,8 +786,6 @@ class AvatarFaceApp(FieldRuntime):
         self._open_voice_channel()
         self._chatbox = ChatBox()
         self._chat_box_visible = not bool(getattr(self.argv, "no_chat_box", False))
-        if bool(getattr(self.argv, "vowel_design", False)):
-            self._chat_box_visible = False
         self._configure_window_aspect()
         self._panel_rect = (0, 0, 0, 0)
         self._panel_fonts: tuple[object, object] | None = None
@@ -802,12 +801,17 @@ class AvatarFaceApp(FieldRuntime):
             # toggle typing, and closing mid-sentence is never what you meant.
             with contextlib.suppress(AttributeError, TypeError):
                 self.wnd.exit_key = None
-            self._chatbox.add(
-                SPEAKER_SYSTEM,
-                "0-state: closed lips + blink. Typing → hearing look. "
-                "Enter to chat; face returns to 0-state when done. "
-                "Hold slider / Mouth dropdown or M for plate timing.",
+            welcome = (
+                "VowelDesign: type here and press Enter — GA-16 biomech + Model A/B. "
+                "Esc toggles typing. Watch wide EE, round OU, open AA."
+                if bool(getattr(self.argv, "vowel_design", False))
+                else (
+                    "0-state: closed lips + blink. Typing → hearing look. "
+                    "Enter to chat; face returns to 0-state when done. "
+                    "Hold slider / Mouth dropdown or M for plate timing."
+                )
             )
+            self._chatbox.add(SPEAKER_SYSTEM, welcome)
 
         self._capture_directory = getattr(self.argv, "capture", None)
         self._capture_budget = max(int(getattr(self.argv, "capture_frames", 60)), 0)
@@ -856,32 +860,32 @@ class AvatarFaceApp(FieldRuntime):
                 self.wnd.title = "ChorusFace — VowelDesign (GA-16 biomech)"
             except Exception:  # noqa: BLE001
                 pass
-            # Biomech owns GA-16 shape. open/smile plates own the oral disk so
-            # the smiling source photo cannot ghost a second mouth under warp.
-            # Viseme atlas + TickFeed LOOK stay off; FIELD muted.
+            # Pure biomech LOOK: muscles+jaw only. No open/smile capture plates.
             self._plate_atlas = None
-            # F9 C[0] drives blink amount; photographed eyes_closed plate owns
-            # the socket (geometric lid path paints grey boxes on this photo).
+            self._use_plates = False
             self._use_eye_closed_plate = True
             self._tickfeed_look_authority = False
             self._tickfeed_lid_teacher = False
             self._tickfeed_lid_amt = 1.0
             self._tickfeed_calibration_active = False
-            # Width travel high (EE vs OU); jaw capped so cavity does not ghost.
-            self._biomech.speech_travel_scale = 1.40
-            self._biomech.lip_width_travel_scale = 1.70
+            self._vowel_prev_aperture = 0.0
+            # Exaggerate EE↔OU width / AA jaw so the photo face reads clearly.
+            self._biomech.speech_travel_scale = 1.65
+            self._biomech.lip_width_travel_scale = 2.05
             self._biomech.speech_owns_oral = True
             try:
                 self._biomech.jaw.max_opening = min(
-                    0.60, float(self._biomech.jaw.max_opening)
+                    0.72, float(self._biomech.jaw.max_opening)
                 )
             except Exception:  # noqa: BLE001
                 pass
             self._vowel_biomech_until = 1e9  # keep vowel LOOK path for the session
-            # Chat box / local LLM replies fight vowel utterances — mute them.
-            self._chat_box_visible = False
-            # Idle EyeSystem blinks between utterances; during play, F9 C[0..3]
-            # from Model A/B (+ blink overlay) owns lids/brows.
+            # Keep on-window chat unless explicitly disabled with --no-chat-box.
+            if self._chat_box_visible:
+                self._relayout_frame()
+                with contextlib.suppress(AttributeError, TypeError):
+                    self.wnd.exit_key = None
+            # EyeSystem owns blinks; F9 rising edges call request_blink().
             self._biomech.eyes.configure_blinks(
                 interval_min_s=2.8,
                 interval_span_s=2.2,
@@ -892,13 +896,12 @@ class AvatarFaceApp(FieldRuntime):
             )
             print("=" * 60)
             print("VowelDesign demo mode")
-            print("  Speech LOOK: BiomechanicalFace muscles+jaw (not TickFeed)")
-            print("  Oral disk: open/smile capture plates · viseme atlas: OFF")
-            print("  FIELD warp: muted · TickFeed lid teacher: OFF")
-            print("  Eyes/brows: F9 9D from Model A/B (teacher Dataset A/B)")
-            print("  Inventory: GA-16 vowels · 6 emotions")
-            print("  Chat box: OFF (drive only via /vowel/utterance)")
-            print("  Drive: POST /vowel/utterance  or  scripts/demo_vowel_design.py")
+            print("  Speech LOOK: BiomechanicalFace muscles+jaw (pure biomech)")
+            print("  Oral plates: OFF · viseme atlas: OFF · FIELD: muted")
+            print("  Blinks: EyeSystem (F9 schedule requests)")
+            print("  Brows: F9 C[2]/C[3] → Frontalis/Corrugator")
+            print("  Chat: type in the panel under the face (Esc = focus)")
+            print("  Drive: chat · POST /vowel/utterance · demo_vowel_design.py")
             print("  Docs: docs/VowelDesignNWRReconciliation.md")
             print("=" * 60)
         if bool(getattr(self.argv, "product_beta", False)):
@@ -1446,29 +1449,21 @@ class AvatarFaceApp(FieldRuntime):
         self._vowel_ctrl_sample = row
         return row
 
-    def _apply_vowel_lids_from_9d(self, c: object) -> None:
-        """Map F9 eye_aperture (0=open,1=closed) onto EyeSystem + render lids."""
+    def _drive_vowel_blinks_from_9d(self, c: object) -> None:
+        """EyeSystem owns lids; F9 C[0] rising edge requests a product blink."""
         eyes = self._biomech.eyes
-        # Forced calibrate blink owns lids until pause expires.
         if float(getattr(eyes.state, "blink_pause_s", 0.0) or 0.0) > 0.0:
-            self._render_state.lid_left = float(eyes.state.lid_left)
-            self._render_state.lid_right = float(eyes.state.lid_right)
-            self._tickfeed_lid_amt = float(
-                min(eyes.state.lid_left, eyes.state.lid_right)
-            )
             return
         row = np.asarray(c, dtype=np.float64).reshape(-1)
         close = float(np.clip(row[0], 0.0, 1.0))
-        lid = 1.0 - close
-        # Trajectory owns the lids — do not let EyeSystem start a rival blink.
-        eyes.state.blink_phase = 0.0
-        eyes.state.blink_timer = max(float(eyes.state.blink_timer), 1.25)
-        eyes.state.lid_left = lid
-        eyes.state.lid_right = 1.0 - min(1.0, close * 0.94)
-        eyes.state.lid_tension = close
-        self._render_state.lid_left = float(eyes.state.lid_left)
-        self._render_state.lid_right = float(eyes.state.lid_right)
-        self._tickfeed_lid_amt = lid
+        prev = float(getattr(self, "_vowel_prev_aperture", 0.0) or 0.0)
+        # Rising edge into blink shut → ask EyeSystem (recon ownership).
+        if close >= 0.55 and prev < 0.55 and float(eyes.state.blink_phase) <= 0.0:
+            eyes.request_blink()
+        self._vowel_prev_aperture = close
+        self._tickfeed_lid_amt = float(
+            min(eyes.state.lid_left, eyes.state.lid_right)
+        )
 
     def _push_vowel_brow_impulses(self, c: object) -> None:
         """Drive Frontalis / Corrugator from F9 brow channels before biomech step."""
@@ -2078,11 +2073,7 @@ class AvatarFaceApp(FieldRuntime):
         self._refresh_frame_layers()
 
     def _update_look_vowel_design(self, now: float) -> None:
-        """Pure GA-16 biomech LOOK — no plate atlas, live_vector, or behavior ML.
-
-        Old TickFeed demo stacked open.png + measured behavior on top of muscles,
-        which made EE/OU/AA collapse to one open-O with mouth ghosts/blur.
-        """
+        """Pure GA-16 biomech LOOK — muscles+jaw only (no open/smile plates)."""
         from chorusface.biomechanics.intent import PHONEME_JAW_TARGET
         from chorusface.speech import canonical_viseme, mouth_pose
 
@@ -2108,47 +2099,28 @@ class AvatarFaceApp(FieldRuntime):
             emotion = "NEUTRAL"
         pose = mouth_pose(phoneme, emotion)
         jaw_t = float(PHONEME_JAW_TARGET.get(phoneme, 0.1))
-        # Keep jaw on the GA-16 table — do not let plate/timeline remap collapse it.
         self._biomech.jaw.set_speech_target(jaw_t)
         open_n = max(0.0, min(1.0, float(pose.openness) / 14.0))
-        # Smile from vowel width only — never a 0.5 HAPPY floor (that forced grin).
         width_n = max(0.0, min(1.0, (float(pose.width) - 7.0) / 15.0))
-        smile_n = 0.0
-        if phoneme in {"EE", "IH", "EY", "SS"}:
-            smile_n = 0.20 + 0.40 * width_n
-        elif phoneme in {"EH", "AE"}:
-            smile_n = 0.12 * width_n
-        # open.png owns the oral hole (kills photo-smile ghost); amount tracks vowel.
-        if phoneme in {"AA", "AH", "AE", "AY", "AW"}:
-            plate_amt = max(0.62, min(1.0, open_n * 1.20))
-        elif phoneme in {"OU", "OH", "UH", "AO", "OY"}:
-            plate_amt = max(0.35, min(0.78, open_n * 0.95))
-        elif phoneme in {"EE", "IH", "EY"}:
-            # Need enough open/smile cover to hide the photo's resting smile line.
-            plate_amt = max(0.32, min(0.62, open_n * 0.95))
-            smile_n = max(smile_n, 0.55)
-        elif phoneme in {"REST", "CLOSED", "PP", "MM"}:
-            plate_amt = 0.0
-        else:
-            plate_amt = max(0.12, min(0.65, open_n))
+        # Pure biomech: never drive capture open/smile plates (NWR recon).
         self._layer_command = LayerCommand(
             phoneme=phoneme,
             atlas_viseme=phoneme,
             open_amount=open_n,
-            smile_amount=smile_n,
+            smile_amount=0.0,
             jaw_target=jaw_t,
-            plate_openness=plate_amt,
+            plate_openness=0.0,
             source="vowel-biomech",
             active_until=float(cmd.active_until),
         )
         self._ml_openness = open_n
         self._ml_jaw = jaw_t
         self._ml_width = width_n
-        self._ml_plate_gate = plate_amt
-        self._ml_smile = smile_n
-        self._plate_openness_current = plate_amt
-        self._plate_open_hyst = plate_amt
-        self._plate_blend_current = (0.0, plate_amt)
+        self._ml_plate_gate = 0.0
+        self._ml_smile = 0.0
+        self._plate_openness_current = 0.0
+        self._plate_open_hyst = 0.0
+        self._plate_blend_current = (0.0, 0.0)
         self._held_speech_viseme = phoneme
         self._open_close_source = "vowel-biomech"
         self._refresh_frame_layers()
@@ -2167,20 +2139,22 @@ class AvatarFaceApp(FieldRuntime):
         )
         field_gain = float(recipe.field_warp_gain)
         atlas_strength = float(recipe.atlas_strength)
+        smile_amt = float(cmd.smile_amount)
+        plate_amt = float(cmd.plate_openness)
         if self._vowel_design_mode():
-            # Mute FIELD + viseme atlas; keep open/smile oral ownership.
+            # Mute FIELD + viseme atlas + capture open/smile plates (pure biomech).
             field_gain = 0.0
             atlas_strength = 0.0
-            speaking_plate = float(cmd.plate_openness) > 0.02 or bool(
-                getattr(self._render_state, "speaking", False)
-            )
+            smile_amt = 0.0
+            plate_amt = 0.0
+            speaking_plate = bool(getattr(self._render_state, "speaking", False))
         self._frame_layers = evaluate_frame_layers(
             phoneme=phoneme,
-            plate_open_amount=float(cmd.plate_openness),
-            smile_amount=float(cmd.smile_amount),
+            plate_open_amount=plate_amt,
+            smile_amount=smile_amt,
             atlas_strength=atlas_strength,
             cavity_strength=float(recipe.cavity_strength) * (
-                0.25 if self._vowel_design_mode() else 1.0
+                0.15 if self._vowel_design_mode() else 1.0
             ),
             field_gain=field_gain,
             expr_blend=float(self._expr_plate_blend),
@@ -2611,8 +2585,8 @@ class AvatarFaceApp(FieldRuntime):
             0.0,
             0.0,
         )
-        # VowelDesign keeps open/smile oral plates (ghost kill) but not atlas.
-        plates_on = bool(self._use_plates)
+        # VowelDesign: hard-off open/smile plates even if textures loaded.
+        plates_on = bool(self._use_plates) and not self._vowel_design_mode()
         program["avatar_plates_ready"].value = 1 if plates_on else 0
         self._avatar_expr_plate_texture.use(location=8)
         program["avatar_expr_plate"].value = 8
@@ -3023,6 +2997,15 @@ class AvatarFaceApp(FieldRuntime):
             self.wnd.close()
             return
         self._chatbox.add(SPEAKER_YOU, spoken)
+        if self._vowel_design_mode():
+            # Animate what you typed immediately via GA-16 + Model A/B.
+            self._queue_spoken(spoken)
+            api_key = str(getattr(self.argv, "llm_api_key", "") or "").strip()
+            if api_key and self._kick_llm(spoken):
+                self._chatbox.pending = True
+            else:
+                self._chatbox.pending = False
+            return
         if self._kick_llm(spoken):
             self._chatbox.pending = True
         else:
@@ -3377,8 +3360,10 @@ class AvatarFaceApp(FieldRuntime):
                 ]
                 n_ticks = 0
                 controls = payload.get("controls")
-                if not spans:
-                    # Host omitted spans — compose once (G2P fill).
+                play_mode = str(payload.get("play_mode") or "biomech").lower()
+                min_start = float(payload.get("min_start_s") or 0.0)
+                early = bool(payload.get("early"))
+                if not spans and not early:
                     from chorusface.vowel.pipeline import compose_utterance
 
                     result = compose_utterance(utt_dict)
@@ -3389,6 +3374,10 @@ class AvatarFaceApp(FieldRuntime):
                     n_ticks = int(result.chunk.n_ticks)
                     controls = result.controls
                     self._last_vowel_pulsechunk = result.chunk  # type: ignore[attr-defined]
+                if min_start > 0.0:
+                    spans = [
+                        (t, a, b) for t, a, b in spans if float(a) >= min_start - 1e-6
+                    ]
                 emotion = parsed.primary_emotion
                 if emotion in EMOTION_IMPULSES:
                     self._voice_emotion = emotion
@@ -3397,39 +3386,95 @@ class AvatarFaceApp(FieldRuntime):
                 except Exception:  # noqa: BLE001
                     pass
                 self._voice_caption = strip_tags(parsed.text)
-                # Self-timed (no PCM): always start from now.
                 now_s = time.perf_counter() - self._clock0 + self._voice_trim
-                self._voice_epoch = now_s
+                if not early or self._voice_epoch is None:
+                    self._voice_epoch = now_s
+                epoch = float(self._voice_epoch)
                 end_s = max((float(b) for _t, _a, b in spans), default=0.4)
-                self._vowel_biomech_until = now_s + max(end_s, 0.4) + 0.25
+                self._vowel_biomech_until = epoch + max(end_s, 0.4) + 0.25
                 self._tickfeed_live = None
-                if controls is not None:
-                    self._arm_vowel_controls(controls, now_s)
+                if controls is not None and not early:
+                    self._arm_vowel_controls(controls, epoch)
+                    self._vowel_prev_aperture = 0.0
                     n_ticks = max(
                         n_ticks, int(np.asarray(controls, dtype=np.float32).shape[0])
                     )
+                # Optional TPK fidelity path (Fabric / spool) — biomech remains default.
+                tpk_n = 0
+                if play_mode == "tpk" and controls is not None and not early:
+                    try:
+                        import base64
+
+                        from chorusface.tickfeed.chorus_transport import (
+                            TickFeedTransport,
+                        )
+                        from chorusface.vowel.pulsechunk import (
+                            PulseChunk,
+                            decode_pulsechunk,
+                        )
+                        from chorusface.vowel.runtime import VowelRuntime
+                        from chorusface.vowel.schema import EMOTION_INDEX, TICK_HZ
+
+                        world = Path(self.world_path).parent
+                        rt = VowelRuntime.from_world(world)
+                        chunk = getattr(self, "_last_vowel_pulsechunk", None)
+                        pc_b64 = payload.get("pulsechunk_b64")
+                        if chunk is None and pc_b64:
+                            chunk = decode_pulsechunk(
+                                base64.b64decode(str(pc_b64)),
+                                utterance_id=str(parsed.utterance_id),
+                            )
+                        if chunk is None:
+                            chunk = PulseChunk(
+                                utterance_id=str(parsed.utterance_id),
+                                n_ticks=int(np.asarray(controls).shape[0]),
+                                primary_emotion=int(
+                                    EMOTION_INDEX.get(emotion, 0)
+                                ),
+                                word_slices=[],
+                                controls=np.asarray(controls, dtype=np.float32),
+                                tick_hz=TICK_HZ,
+                            )
+                        self._last_vowel_pulsechunk = chunk
+                        transport = None
+                        if self._tickfeed is not None:
+                            transport = getattr(self._tickfeed, "transport", None)
+                        if transport is None:
+                            transport = getattr(self, "_vowel_tpk_transport", None)
+                        if transport is None:
+                            transport = TickFeedTransport(
+                                world=world, use_chorus=False
+                            )
+                            self._vowel_tpk_transport = transport
+                        tpk_n = int(rt.push_to_transport(chunk, transport))
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"VowelDesign TPK push skipped: {exc}", flush=True)
                 events = schedule_spans(
-                    spans, self._voice_emotion, start_at=now_s
+                    spans, self._voice_emotion, start_at=epoch
                 )
                 self._voice_inbox.extend(events)
                 self._voice_events += len(events)
                 if n_ticks <= 0 and end_s > 0:
                     n_ticks = int(round(end_s * 60.0))
+                drive = "tpk+biomech" if tpk_n else "biomech+9d"
                 print(
                     f"VowelDesign: biomech LOOK on until t={self._vowel_biomech_until:.2f}s "
                     f"tags={[t for t, _, _ in spans][:8]} "
                     f"emotion={emotion} "
-                    f"9d={'yes' if controls is not None else 'no'}",
+                    f"9d={'yes' if controls is not None and not early else 'early'}"
+                    f"{f' tpk={tpk_n}' if tpk_n else ''}",
                     flush=True,
                 )
                 return {
                     "scheduled": len(events),
                     "pending": 0,
                     "mode": "vowel",
-                    "drive": "biomech+9d",
+                    "drive": drive,
                     "look": "biomech",
                     "n_ticks": n_ticks,
                     "upper_face": "f9",
+                    "early": early,
+                    "tpk_packages": tpk_n,
                 }
 
             if kind == "pcm":
@@ -3535,8 +3580,18 @@ class AvatarFaceApp(FieldRuntime):
         phonemes, emotion = extract_states(spoken)
         self._conversation.last_emotion = emotion
         self._chatbox.pending = False
-        self._chatbox.add(SPEAKER_FACE, strip_tags(spoken).strip())
+        text = strip_tags(spoken).strip()
+        self._chatbox.add(SPEAKER_FACE, text)
         self._overlay_dirty = True
+        if self._vowel_design_mode() and text:
+            # Chat /speak → same GA-16 + Model A/B path as /vowel/utterance.
+            n = self._drive_vowel_from_text(text, emotion or "NEUTRAL")
+            print(f"avatar: {spoken}")
+            print(
+                f"  vowel-design scheduled={n} emotion={emotion} "
+                f"history={self._conversation.turn_count}"
+            )
+            return
         if speech is not None and speech.spans:
             events = self._schedule_audio(speech, emotion)
         else:
@@ -3554,6 +3609,51 @@ class AvatarFaceApp(FieldRuntime):
         print(
             f"  {detail} emotion={emotion} history={self._conversation.turn_count}"
         )
+
+    def _drive_vowel_from_text(self, text: str, emotion: str) -> int:
+        """Compose + schedule a chat line on the VowelDesign biomech+9D path."""
+        from chorusface.speech import schedule_spans
+        from chorusface.vowel.pipeline import compose_utterance
+
+        emo = (emotion or "NEUTRAL").strip().upper()
+        if emo not in EMOTION_IMPULSES:
+            emo = "NEUTRAL"
+        result = compose_utterance(
+            {
+                "utterance_id": f"chat_{uuid.uuid4().hex[:10]}",
+                "text": text,
+                "emotion_track": [
+                    {"emotion": emo, "start_s": 0.0, "end_s": 12.0}
+                ],
+                "blinks": True,
+            }
+        )
+        spans = [
+            (s.tag, s.start_s, s.end_s) for s in result.payload.spans if s.tag
+        ]
+        if emo in EMOTION_IMPULSES:
+            self._voice_emotion = emo
+        try:
+            self._biomech.emotion.from_label(emo)
+        except Exception:  # noqa: BLE001
+            pass
+        now_s = time.perf_counter() - self._clock0 + self._voice_trim
+        self._voice_epoch = now_s
+        end_s = max((float(b) for _t, _a, b in spans), default=0.4)
+        self._vowel_biomech_until = now_s + max(end_s, 0.4) + 0.25
+        self._tickfeed_live = None
+        self._last_vowel_pulsechunk = result.chunk
+        self._arm_vowel_controls(result.controls, now_s)
+        self._vowel_prev_aperture = 0.0
+        events = schedule_spans(spans, self._voice_emotion, start_at=now_s)
+        self._voice_inbox.extend(events)
+        self._voice_events += len(events)
+        print(
+            f"VowelDesign chat: tags={[t for t, _, _ in spans][:10]} "
+            f"emotion={emo} n_ticks={result.chunk.n_ticks}",
+            flush=True,
+        )
+        return len(events)
 
     def _speak_without_chat(self, spoken: str) -> None:
         """Say a canned line, synthesising off the render thread if needed."""
@@ -3598,7 +3698,6 @@ class AvatarFaceApp(FieldRuntime):
         return True
 
     def _drain_chat(self) -> None:
-        vowel_mode = bool(getattr(self.argv, "vowel_design", False))
         while True:
             try:
                 message = self._chat_queue.get_nowait()
@@ -3607,16 +3706,25 @@ class AvatarFaceApp(FieldRuntime):
             if message == "__quit__":
                 self.wnd.close()
                 return
-            if vowel_mode:
-                continue  # ignore typed chat — vowel bridge owns speech
+            if self._vowel_design_mode():
+                # Always animate the typed line (no LLM required for mouth motion).
+                self._chatbox.add(SPEAKER_YOU, message)
+                self._chatbox.pending = True
+                self._overlay_dirty = True
+                self._queue_spoken(message)
+                # Optional LLM follow-up when a backend is configured.
+                api_key = str(getattr(self.argv, "llm_api_key", "") or "").strip()
+                if api_key:
+                    self._kick_llm(message)
+                else:
+                    self._chatbox.pending = False
+                continue
             self._kick_llm(message)
         while True:
             try:
                 reply = self._reply_queue.get_nowait()
             except queue.Empty:
                 break
-            if vowel_mode:
-                continue
             self._queue_spoken(reply.text, reply.speech)
 
     def _start_face_bridge(self) -> None:
@@ -4179,15 +4287,9 @@ class AvatarFaceApp(FieldRuntime):
         elif self._vowel_design_mode():
             # Pure muscle/jaw openness — never blend old open.png plate boost.
             openness = float(render.mouth_openness)
-            # Cap expression so HAPPY valence cannot re-force a grin over OU/AA.
-            expression = max(
-                -0.2,
-                min(
-                    0.35,
-                    float(render.expression) * 0.35
-                    + float(getattr(self, "_ml_smile", 0.0) or 0.0) * 0.55,
-                ),
-            )
+            # Expression.w feeds smile.png — keep at 0 in vowel mode.
+            expression = 0.0
+            self._ml_smile = 0.0
         else:
             # Openness units for shader (/14): boost from plate drive so open.png
             # has a strong signal even when jaw physics is still catching up.
@@ -4547,7 +4649,7 @@ class AvatarFaceApp(FieldRuntime):
                 self._push_vowel_brow_impulses(c9)
         self._step_biomechanics(frame_time)
         if c9 is not None:
-            self._apply_vowel_lids_from_9d(c9)
+            self._drive_vowel_blinks_from_9d(c9)
         self._ease_mouth_pose(frame_time)
         self._ease_plate_blend(frame_time)
         self._sync_expression_from_emotion()

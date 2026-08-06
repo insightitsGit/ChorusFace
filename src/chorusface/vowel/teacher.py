@@ -22,7 +22,9 @@ class D35Metrics:
     symmetry_ok: bool
     lip_closure_ok: bool
     passed: bool
+    hard_fail: bool = False
     notes: list[str] = field(default_factory=list)
+    mode: str = "vowel"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -33,8 +35,60 @@ class D35Metrics:
             "symmetry_ok": self.symmetry_ok,
             "lip_closure_ok": self.lip_closure_ok,
             "passed": self.passed,
+            "hard_fail": self.hard_fail,
+            "mode": self.mode,
             "notes": list(self.notes),
         }
+
+
+def savgol_landmarks_xy(
+    landmarks: NDArray[np.floating],
+    *,
+    window: int = 5,
+    poly: int = 2,
+) -> NDArray[np.float64]:
+    """F12 post-filter: Savitzky–Golay(5,2) on landmark x/y (z untouched)."""
+    lm = np.asarray(landmarks, dtype=np.float64).copy()
+    t = int(lm.shape[0])
+    if t < window:
+        return lm
+    try:
+        from scipy.signal import savgol_filter
+    except ImportError:
+        # Fallback: same 3-tap temporal smooth used elsewhere.
+        pad = np.pad(lm, ((1, 1), (0, 0), (0, 0)), mode="edge")
+        return 0.25 * pad[:-2] + 0.50 * pad[1:-1] + 0.25 * pad[2:]
+    w = window if window % 2 == 1 else window + 1
+    w = min(w, t if t % 2 == 1 else t - 1)
+    if w < poly + 2:
+        return lm
+    for axis in (0, 1):
+        # filter along time for each landmark
+        flat = lm[:, :, axis]
+        lm[:, :, axis] = savgol_filter(flat, window_length=w, polyorder=poly, axis=0)
+    return lm
+
+
+def trim_to_lip_closure(
+    landmarks: NDArray[np.floating],
+    *,
+    max_skip: int = 18,
+) -> NDArray[np.float64]:
+    """Drop leading frames until lips are near-closed (HAPPY open-start fix)."""
+    lm = np.asarray(landmarks, dtype=np.float64)
+    if lm.shape[0] < 4:
+        return lm
+    fw = _face_width(lm[0])
+    upper = lm[:, 13, :2]
+    lower = lm[:, 14, :2]
+    aperture = np.linalg.norm(upper - lower, axis=1)
+    thr = 0.08 * fw
+    for i in range(min(max_skip, len(aperture))):
+        if float(aperture[i]) < thr:
+            return lm[i:]
+    # Best near-closed in the lead-in window.
+    best = int(np.argmin(aperture[: max_skip + 1]))
+    return lm[best:]
 
 
 def _face_width(landmarks: NDArray[np.floating]) -> float:
@@ -49,15 +103,20 @@ def evaluate_landmarks(
     fps: float = 30.0,
     ee_peak_frame: int | None = None,
     ou_peak_frame: int | None = None,
+    mode: str = "vowel",
 ) -> D35Metrics:
     """Evaluate D35 metrics on (T, N, 2|3) landmark array.
 
     Uses lip-corner heuristic indices compatible with MediaPipe 478
     (61 / 291 outer corners; 13 / 14 upper/lower lip).
+
+    ``mode="neutral"``: REST jitter + lip closure + symmetry only (blink clip).
     """
+    del fps  # reserved for future temporal scaling
     lm = np.asarray(landmarks, dtype=np.float64)
     if lm.ndim != 3 or lm.shape[1] < 292:
         raise ValueError("landmarks must be (T, >=292, 2|3)")
+    mode_n = (mode or "vowel").strip().lower()
     T = lm.shape[0]
     fw = _face_width(lm[0])
     # lip corners
@@ -73,6 +132,41 @@ def evaluate_landmarks(
     corner = 0.5 * (left + right)
     jitter_px = float(np.std(corner[:rest_n], axis=0).mean())
     jitter_pct = 100.0 * jitter_px / fw
+
+    # L/R symmetry of lip corners y
+    sym_err = float(np.mean(np.abs(left[:, 1] - right[:, 1])))
+    sym_ok = sym_err < 0.02 * fw
+
+    # lip closure at start
+    closure_ok = float(aperture[0]) < 0.08 * fw
+
+    notes: list[str] = []
+    pass_jitter = jitter_pct < 0.3
+    if not pass_jitter:
+        notes.append(f"jitter {jitter_pct:.3f}% >= 0.3% face width")
+    if not sym_ok:
+        notes.append("L/R lip symmetry unstable")
+    if not closure_ok:
+        notes.append("lip closure at start not near-closed")
+
+    if mode_n == "neutral":
+        # Blink / state-0 clip — no EE–OU / vowel-hold gates.
+        hard_fail = jitter_pct > 0.8
+        passed = pass_jitter and sym_ok and closure_ok and not hard_fail
+        if hard_fail:
+            notes.append("HARD FAIL: REST jitter > 0.8% face width")
+        return D35Metrics(
+            jitter_face_width_pct=jitter_pct,
+            hold_stability_face_width_pct=0.0,
+            ee_ou_distance_face_width_pct=0.0,
+            velocity_continuity_ok=True,
+            symmetry_ok=sym_ok,
+            lip_closure_ok=closure_ok,
+            passed=passed,
+            hard_fail=hard_fail,
+            notes=notes,
+            mode="neutral",
+        )
 
     # EE vs OU: use provided peaks or max-width vs min-width frames
     if ee_peak_frame is None:
@@ -104,32 +198,19 @@ def evaluate_landmarks(
     if np.any(low) and acc.size:
         vel_ok = float(np.std(acc[low])) < 3.0 * float(np.median(np.abs(acc) + 1e-6))
 
-    # L/R symmetry of lip corners y
-    sym_err = float(np.mean(np.abs(left[:, 1] - right[:, 1])))
-    sym_ok = sym_err < 0.02 * fw
-
-    # lip closure at start
-    closure_ok = float(aperture[0]) < 0.08 * fw
-
-    notes: list[str] = []
     # Pass bars from FinalAnswers F12
-    pass_jitter = jitter_pct < 0.3
     pass_hold = hold_pct < 2.0
     pass_sep = sep_pct > 8.0
-    if not pass_jitter:
-        notes.append(f"jitter {jitter_pct:.3f}% >= 0.3% face width")
     if not pass_hold:
         notes.append(f"hold σ {hold_pct:.3f}% >= 2% face width")
     if not pass_sep:
         notes.append(f"EE-OU sep {sep_pct:.3f}% <= 8% face width")
     if not vel_ok:
         notes.append("velocity/accel continuity weak on holds")
-    if not sym_ok:
-        notes.append("L/R lip symmetry unstable")
-    if not closure_ok:
-        notes.append("lip closure at start not near-closed")
 
     hard_fail = jitter_pct > 0.8 or hold_pct > 5.0 or sep_pct < 4.0
+    if hard_fail:
+        notes.append("HARD FAIL: F12 hard threshold breached")
     passed = (
         pass_jitter
         and pass_hold
@@ -147,7 +228,9 @@ def evaluate_landmarks(
         symmetry_ok=sym_ok,
         lip_closure_ok=closure_ok,
         passed=passed,
+        hard_fail=hard_fail,
         notes=notes,
+        mode="vowel",
     )
 
 
@@ -248,11 +331,37 @@ def resample_to_60hz(
     return out
 
 
-def run_d35(video_path: str | Path, out_dir: str | Path | None = None) -> D35Metrics:
-    """Full D35 pipeline on one teacher clip."""
+def prepare_landmarks_60hz(
+    landmarks: NDArray[np.floating],
+    src_fps: float,
+    *,
+    emotion: str = "NEUTRAL",
+    apply_closure_trim: bool = True,
+) -> tuple[NDArray[np.float64], D35Metrics]:
+    """Resample → SG filter → optional lip-closure trim → evaluate D35."""
+    lm60 = resample_to_60hz(landmarks, src_fps)
+    lm60 = savgol_landmarks_xy(lm60)
+    emo = (emotion or "NEUTRAL").strip().upper()
+    mode = "neutral" if emo == "NEUTRAL" else "vowel"
+    if apply_closure_trim and mode == "vowel":
+        lm60 = trim_to_lip_closure(lm60)
+    metrics = evaluate_landmarks(lm60, fps=TICK_HZ, mode=mode)
+    return lm60, metrics
+
+
+def run_d35(
+    video_path: str | Path,
+    out_dir: str | Path | None = None,
+    *,
+    emotion: str | None = None,
+) -> D35Metrics:
+    """Full D35 pipeline on one teacher clip (F12 filtered)."""
     lm, fps = extract_mediapipe_landmarks(video_path)
-    lm60 = resample_to_60hz(lm, fps)
-    metrics = evaluate_landmarks(lm60, fps=TICK_HZ)
+    stem = Path(video_path).stem.upper()
+    emo = (emotion or "NEUTRAL").strip().upper()
+    if "NEUTRAL" in stem:
+        emo = "NEUTRAL"
+    lm60, metrics = prepare_landmarks_60hz(lm, fps, emotion=emo)
     if out_dir is not None:
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)

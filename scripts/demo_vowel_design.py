@@ -25,69 +25,84 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_URL = "http://127.0.0.1:8766"
-DEFAULT_TOKEN = "chorusface-beta"
 DEFAULT_CLIENT = "vowel-demo-client"
 DEFAULT_PORT = 8766
 WORLD_BDS = ROOT / "output" / "worlds" / "tickfeed" / "avatar_face.bds"
 WORLD_FACE = ROOT / "output" / "worlds" / "tickfeed" / "source_face.png"
 
-# Long holds so a human can read lip silhouette + brows/blinks on the photo face.
+
+def _default_token() -> str:
+    """Prefer local handoff vault primary key over the obsolete beta stub."""
+    handoff = ROOT / "secrets" / "api_keys.handoff.local.txt"
+    if handoff.is_file():
+        for line in handoff.read_text(encoding="utf-8").splitlines():
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 3 and parts[-1].strip():
+                return parts[-1].strip()
+    return "chorusface-beta"
+
+
+DEFAULT_TOKEN = _default_token()
+
+# Long holds so lip silhouettes read clearly (NEUTRAL first — no HAPPY grin mask).
 _BLINK = {"blinks": True, "blink_interval_s": 1.6, "blink_seed": 7}
 SHOW: list[dict] = [
     {
-        "id": "contrast_happy",
-        "title": "1/5  HAPPY — EE/OU/AA + raised brows + blinks",
-        "wait_s": 4.6,
+        "id": "contrast_neutral",
+        "title": "1/5  NEUTRAL — wide EE → round OU → open AA (watch lips)",
+        "wait_s": 5.8,
         "payload": {
-            "utterance_id": "vd_happy_contrast",
+            "utterance_id": "vd_neutral_contrast",
             "text": "EE OU AA",
             "play": True,
             **_BLINK,
-            "emotion_track": [{"emotion": "HAPPY", "start_s": 0.0, "end_s": 4.2}],
+            "emotion_track": [{"emotion": "NEUTRAL", "start_s": 0.0, "end_s": 5.4}],
             "spans": [
-                {"tag": "EE", "start_s": 0.20, "end_s": 1.20},
-                {"tag": "OU", "start_s": 1.50, "end_s": 2.50},
-                {"tag": "AA", "start_s": 2.80, "end_s": 4.00},
+                {"tag": "EE", "start_s": 0.20, "end_s": 1.60},
+                {"tag": "OU", "start_s": 1.90, "end_s": 3.40},
+                {"tag": "AA", "start_s": 3.70, "end_s": 5.20},
             ],
         },
     },
     {
         "id": "contrast_angry",
         "title": "2/5  ANGRY — EE/OU/AA under knit brows",
-        "wait_s": 4.6,
+        "wait_s": 5.2,
         "payload": {
             "utterance_id": "vd_angry_contrast",
             "text": "EE OU AA",
             "play": True,
             **{**_BLINK, "blink_seed": 11},
-            "emotion_track": [{"emotion": "ANGRY", "start_s": 0.0, "end_s": 4.2}],
+            "emotion_track": [{"emotion": "ANGRY", "start_s": 0.0, "end_s": 4.8}],
             "spans": [
-                {"tag": "EE", "start_s": 0.20, "end_s": 1.20},
-                {"tag": "OU", "start_s": 1.50, "end_s": 2.50},
-                {"tag": "AA", "start_s": 2.80, "end_s": 4.00},
+                {"tag": "EE", "start_s": 0.20, "end_s": 1.40},
+                {"tag": "OU", "start_s": 1.70, "end_s": 3.00},
+                {"tag": "AA", "start_s": 3.30, "end_s": 4.60},
             ],
         },
     },
     {
-        "id": "contrast_sad",
-        "title": "3/5  SAD — EE/OU/AA with sorrow brows",
-        "wait_s": 4.6,
+        "id": "contrast_happy",
+        "title": "3/5  HAPPY — same vowels + raised brows (oral still biomech)",
+        "wait_s": 5.2,
         "payload": {
-            "utterance_id": "vd_sad_contrast",
+            "utterance_id": "vd_happy_contrast",
             "text": "EE OU AA",
             "play": True,
             **{**_BLINK, "blink_seed": 13},
-            "emotion_track": [{"emotion": "SAD", "start_s": 0.0, "end_s": 4.2}],
+            "emotion_track": [{"emotion": "HAPPY", "start_s": 0.0, "end_s": 4.8}],
             "spans": [
-                {"tag": "EE", "start_s": 0.20, "end_s": 1.20},
-                {"tag": "OU", "start_s": 1.50, "end_s": 2.50},
-                {"tag": "AA", "start_s": 2.80, "end_s": 4.00},
+                {"tag": "EE", "start_s": 0.20, "end_s": 1.40},
+                {"tag": "OU", "start_s": 1.70, "end_s": 3.00},
+                {"tag": "AA", "start_s": 3.30, "end_s": 4.60},
             ],
         },
     },
     {
         "id": "blink_hold",
-        "title": "4/5  NEUTRAL blink hold — lids from F9 C[0]",
+        "title": "4/5  NEUTRAL blink hold — EyeSystem (F9 schedule requests)",
         "wait_s": 3.8,
         "payload": {
             "utterance_id": "vd_blink_hold",
@@ -104,14 +119,14 @@ SHOW: list[dict] = [
     },
     {
         "id": "sentence",
-        "title": "5/5  HAPPY sentence — See you tomorrow",
+        "title": "5/5  Chat-style sentence — See you tomorrow",
         "wait_s": 3.8,
         "payload": {
             "utterance_id": "vd_happy_sentence",
             "text": "See you tomorrow",
             "play": True,
             **{**_BLINK, "blink_seed": 17},
-            "emotion_track": [{"emotion": "HAPPY", "start_s": 0.0, "end_s": 3.4}],
+            "emotion_track": [{"emotion": "NEUTRAL", "start_s": 0.0, "end_s": 3.4}],
             "spans": [
                 {"tag": "EE", "start_s": 0.15, "end_s": 0.55},
                 {"tag": "OU", "start_s": 0.70, "end_s": 1.10},
@@ -198,7 +213,13 @@ def free_port(port: int) -> None:
     time.sleep(1.0)
 
 
-def launch_avatar(port: int, token: str) -> subprocess.Popen:
+def launch_avatar(
+    port: int,
+    token: str,
+    *,
+    capture_dir: Path | None = None,
+    capture_frames: int = 90,
+) -> subprocess.Popen:
     if not WORLD_BDS.is_file() or not WORLD_FACE.is_file():
         raise SystemExit(
             f"missing world assets:\n  {WORLD_BDS}\n  {WORLD_FACE}\n"
@@ -235,10 +256,18 @@ def launch_avatar(port: int, token: str) -> subprocess.Popen:
         "--face-image",
         str(WORLD_FACE),
         "--no-wire-loop",
-        "--no-chat",
-        "--no-chat-box",
         "--fidelity-hud",
     ]
+    if capture_dir is not None:
+        capture_dir.mkdir(parents=True, exist_ok=True)
+        cmd.extend(
+            [
+                "--capture",
+                str(capture_dir),
+                "--capture-frames",
+                str(max(1, int(capture_frames))),
+            ]
+        )
     log_path = ROOT / "output" / "teacher" / "vowel_design_demo.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_f = log_path.open("w", encoding="utf-8")
@@ -288,7 +317,9 @@ def run_show(url: str, token: str, client_id: str, only: str) -> int:
     print()
     print("=" * 60)
     print("WATCH THE GPU WINDOW:  ChorusFace — VowelDesign (GA-16 biomech)")
-    print("You should see wide EE, round OU, open AA — not plate jaw-pump.")
+    print("You should see wide EE, round OU, open AA — plates OFF (FIDELITY plate=0).")
+    print("After the auto scenes: click the chat panel, Esc to focus, type + Enter.")
+    print("Try:  EE OU AA   or   hello how are you")
     print("=" * 60)
 
     selected = [s for s in SHOW if not only or s["id"] == only]
@@ -323,7 +354,8 @@ def run_show(url: str, token: str, client_id: str, only: str) -> int:
         time.sleep(float(scene["wait_s"]))
 
     print()
-    print("Done. Window stays open — re-run with --no-launch to replay.")
+    print("Done with auto scenes. Window stays open — chat in the panel under the face.")
+    print("Re-run with --no-launch to replay scenes against the same window.")
     return 0
 
 
@@ -340,7 +372,19 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--no-launch", action="store_true", help="Use existing avatar")
     ap.add_argument("--only", default="", help="Scene id filter")
+    ap.add_argument(
+        "--chat-only",
+        action="store_true",
+        help="Launch avatar and skip auto scenes (chat in the window)",
+    )
     ap.add_argument("--wait-bridge", type=float, default=90.0)
+    ap.add_argument(
+        "--capture",
+        type=Path,
+        default=None,
+        help="Write GPU frames under this directory while demo runs",
+    )
+    ap.add_argument("--capture-frames", type=int, default=120)
     args = ap.parse_args()
     client_id = args.client_id or str(uuid.uuid4())
     url = args.url or f"http://127.0.0.1:{args.port}"
@@ -349,11 +393,29 @@ def main() -> int:
     if not args.no_launch:
         print(f"[prep] free port {args.port}", flush=True)
         free_port(args.port)
-        proc = launch_avatar(args.port, args.token)
+        proc = launch_avatar(
+            args.port,
+            args.token,
+            capture_dir=args.capture,
+            capture_frames=args.capture_frames,
+        )
         print(f"[ok] avatar pid={proc.pid}", flush=True)
 
     try:
         wait_bridge(url, args.token, client_id, args.wait_bridge)
+        if args.chat_only:
+            try:
+                post_json(
+                    url, args.token, client_id, "/auth/activate", {"client_id": client_id}
+                )
+            except urllib.error.HTTPError:
+                pass
+            print()
+            print("=" * 60)
+            print("Chat-only: focus the GPU window chat panel (Esc), type, Enter.")
+            print("Typed lines drive GA-16 biomech + Model A/B immediately.")
+            print("=" * 60)
+            return 0
         return run_show(url, args.token, client_id, args.only)
     finally:
         if proc is not None and proc.poll() is not None:

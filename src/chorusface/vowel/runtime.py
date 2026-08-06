@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 import numpy as np
 
-from chorusface.tickfeed.package import FaceBox, TickPackage
+from chorusface.tickfeed.package import FaceBox, TickPackage, encode
 from chorusface.vowel.expand import author_w_from_catalog, load_catalog, load_wexpand
 from chorusface.vowel.pipeline import ComposeResult, compose_utterance
 from chorusface.vowel.pulsechunk import PulseChunk, decode_pulsechunk
@@ -21,11 +21,12 @@ class VowelRuntime:
     W: np.ndarray | None = None
     cells: list[tuple[int, int]] | None = None
     model_dir: Path | None = None
+    world_dir: Path | None = None
 
     @classmethod
     def from_world(cls, world_dir: str | Path) -> VowelRuntime:
         world = Path(world_dir)
-        rt = cls(model_dir=world / "vowel")
+        rt = cls(model_dir=world / "vowel", world_dir=world)
         wexp = world / "vowel" / "expand_matrix_v1.wexpand"
         catalog = world / "region_catalog.json"
         if wexp.is_file():
@@ -51,6 +52,20 @@ class VowelRuntime:
     def packages_for(self, chunk: PulseChunk) -> list[TickPackage]:
         cfg = EmitConfig(face=self.face, W=self.W, cells=self.cells)
         return emit_tick_packages(chunk, cfg)
+
+    def push_to_transport(
+        self,
+        chunk: PulseChunk,
+        transport: Any,
+    ) -> int:
+        """Emit TPK1 stream onto TickFeedTransport (Fabric / spool lane B)."""
+        n = 0
+        for pkg in self.packages_for(chunk):
+            raw = encode(pkg)
+            kind = int(getattr(pkg, "kind", 0) or 0)
+            transport.push_package_bytes(int(pkg.tick), raw, kind=kind)
+            n += 1
+        return n
 
     def iter_packages(self, payload: dict) -> Iterator[TickPackage]:
         result = self.compose(payload)

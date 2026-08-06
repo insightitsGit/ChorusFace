@@ -683,25 +683,103 @@ class FaceBridge:
                         self._voice("end", {})
                         return
                     if path == "/vowel/utterance":
-                        # VowelDesign Phase-1: compose PulseChunk (+ optional play).
-                        # Keep the JSON lean — full controls_preview / pulsechunk_b64
-                        # are optional (include_binary=1) so play demos do not time out.
+                        # VowelDesign: compose PulseChunk (+ optional play).
+                        # play: true|"biomech" (default) | "tpk" | false/"off"
                         import base64
+                        import time as _time
 
+                        from chorusface.vowel.g2p import g2p_text
                         from chorusface.vowel.pipeline import compose_utterance
                         from chorusface.vowel.pulsechunk import encode_pulsechunk
 
                         payload = self._read_json()
-                        play = bool(payload.get("play", True))
+                        play_raw = payload.get("play", True)
+                        if play_raw is False or play_raw in (
+                            0,
+                            "0",
+                            "false",
+                            "False",
+                            "no",
+                            "off",
+                            "OFF",
+                        ):
+                            play_mode = "off"
+                        elif str(play_raw).lower() == "tpk":
+                            play_mode = "tpk"
+                        else:
+                            play_mode = "biomech"
                         include_binary = bool(payload.get("include_binary"))
                         raw_spans = payload.get("spans") or []
                         has_spans = isinstance(raw_spans, list) and bool(raw_spans)
-                        # Always compose so eyes/brows ride Model A/B 9D (Dataset path).
-                        # OMP_NUM_THREADS=1 avoids OpenBLAS vs GL deadlock on this host.
-                        result = compose_utterance(payload)
+
+                        # F4: schedule first resolvable word before full compose.
+                        first_motion_ms: float | None = None
+                        min_start_s = 0.0
                         scheduled = 0
                         drive = ""
                         look = ""
+                        if (
+                            play_mode != "off"
+                            and bridge._voice_handler is not None
+                            and not has_spans
+                        ):
+                            words = g2p_text(str(payload.get("text") or ""))
+                            early_spans: list[dict[str, Any]] = []
+                            cursor = 0.05
+                            for _w, tags0 in words:
+                                if not tags0:
+                                    continue
+                                for tag in tags0:
+                                    early_spans.append(
+                                        {
+                                            "tag": tag,
+                                            "start_s": cursor,
+                                            "end_s": cursor + 0.10,
+                                        }
+                                    )
+                                    cursor += 0.12
+                                min_start_s = cursor
+                                break
+                            if early_spans:
+                                emo_track = payload.get("emotion_track") or [
+                                    {
+                                        "emotion": "NEUTRAL",
+                                        "start_s": 0.0,
+                                        "end_s": 2.0,
+                                    }
+                                ]
+                                early_utt = {
+                                    "utterance_id": str(
+                                        payload.get("utterance_id") or "early"
+                                    ),
+                                    "text": str(payload.get("text") or ""),
+                                    "emotion_track": emo_track,
+                                    "spans": early_spans,
+                                }
+                                t0 = _time.perf_counter()
+                                try:
+                                    early_reply = bridge._voice_handler(
+                                        "vowel",
+                                        {
+                                            "utterance": early_utt,
+                                            "early": True,
+                                            "play_mode": play_mode,
+                                        },
+                                    )
+                                    first_motion_ms = (
+                                        _time.perf_counter() - t0
+                                    ) * 1000.0
+                                    if isinstance(early_reply, dict):
+                                        scheduled += int(
+                                            early_reply.get("scheduled", 0) or 0
+                                        )
+                                except Exception as exc:  # noqa: BLE001
+                                    raise BridgeError(
+                                        HTTPStatus.BAD_REQUEST,
+                                        f"vowel early play failed: {exc}",
+                                    ) from exc
+
+                        result = compose_utterance(payload)
                         utterance = {
                             "utterance_id": str(
                                 payload.get("utterance_id")
@@ -732,21 +810,25 @@ class FaceBridge:
                                 ]
                             ),
                         }
-                        if play and bridge._voice_handler is not None:
+                        if play_mode != "off" and bridge._voice_handler is not None:
                             try:
                                 reply = bridge._voice_handler(
                                     "vowel",
                                     {
                                         "utterance": utterance,
-                                        # Full 9D trajectory (T,9) — eyes/brows included.
                                         "controls": result.controls,
+                                        "play_mode": play_mode,
+                                        "min_start_s": min_start_s,
+                                        "pulsechunk_b64": base64.b64encode(
+                                            encode_pulsechunk(result.chunk)
+                                        ).decode("ascii"),
                                     },
                                 )
                                 if isinstance(reply, dict):
-                                    scheduled = int(reply.get("scheduled", 0) or 0)
+                                    scheduled += int(reply.get("scheduled", 0) or 0)
                                     drive = str(reply.get("drive") or "")
                                     look = str(reply.get("look") or "")
-                            except Exception as exc:  # noqa: BLE001 — surface to client
+                            except Exception as exc:  # noqa: BLE001
                                 raise BridgeError(
                                     HTTPStatus.BAD_REQUEST, f"vowel play failed: {exc}"
                                 ) from exc
@@ -767,6 +849,7 @@ class FaceBridge:
                             "primary_emotion": emotion,
                             "scheduled": scheduled,
                             "tags": tags,
+                            "play_mode": play_mode,
                             "drive_channels": [
                                 "eye_aperture",
                                 "eye_gaze_or_blink",
@@ -774,6 +857,8 @@ class FaceBridge:
                                 "brow_knit",
                             ],
                         }
+                        if first_motion_ms is not None:
+                            body["first_motion_ms"] = round(first_motion_ms, 3)
                         if drive:
                             body["drive"] = drive
                         if look:

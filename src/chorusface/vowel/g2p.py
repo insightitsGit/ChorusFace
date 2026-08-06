@@ -94,23 +94,18 @@ def _load_dict() -> dict[str, tuple[str, ...]]:
     return out
 
 
+# Conservative digraph rules only — single-letter wildcards removed (F3: no invent).
 _VOWEL_RULES: list[tuple[re.Pattern[str], tuple[str, ...]]] = [
-    (re.compile(r"ee|ea|ie|ey$"), ("EE",)),
-    (re.compile(r"oo|ou|u$"), ("OU",)),
-    (re.compile(r"ow|ou"), ("AW",)),
+    (re.compile(r"ee|ea|ie"), ("EE",)),
+    (re.compile(r"ey$"), ("EY",)),
+    (re.compile(r"oo"), ("OU",)),
+    (re.compile(r"ou|ow"), ("AW",)),
     (re.compile(r"oy|oi"), ("OY",)),
     (re.compile(r"ay|ai"), ("AY",)),
-    (re.compile(r"oa|oe|o$"), ("OH",)),
+    (re.compile(r"oa|oe"), ("OH",)),
     (re.compile(r"au|aw"), ("AO",)),
-    (re.compile(r"ar|er|ir|ur|or"), ("ER",)),
-    (re.compile(r"a$|ah"), ("AA",)),
-    (re.compile(r"i$|ih|y$"), ("IH",)),
-    (re.compile(r"e$|eh"), ("EH",)),
-    (re.compile(r"a"), ("AE",)),
-    (re.compile(r"o"), ("AA",)),
-    (re.compile(r"u"), ("AH",)),
-    (re.compile(r"e"), ("EH",)),
-    (re.compile(r"i"), ("IH",)),
+    (re.compile(r"er|ir|ur"), ("ER",)),
+    (re.compile(r"ar|or"), ("AA", "ER")),
 ]
 
 
@@ -129,19 +124,26 @@ def g2p_word(word: str) -> tuple[str, ...] | None:
     if key in d:
         return d[key]
     # strip common clitics
-    for suffix in ("'s", "'t", "'re", "'ve", "'ll", "'d"):
+    for suffix in ("'s", "'t", "'re", "'ve", "'ll", "'d", "n't"):
         if key.endswith(suffix):
             base = key[: -len(suffix)]
             if base in d:
                 return d[base]
-    # rule-based: collect vowel-ish hits in order (coarse)
+            # wouldn't → wouldn already in dict; n't strip → wouldn
+            if suffix == "n't" and (base + "n") in d:
+                return d[base + "n"]
+    # Multi-letter unknowns: digraph rules only when the token has a vowel letter.
+    # Junk (no vowel / no digraph) → None → REST WordSlice (F3: no invent).
+    if len(key) <= 1:
+        return None
+    if not re.search(r"[aeiouy]", key):
+        return None
     found: list[str] = []
-    rest = key
     pos = 0
-    while pos < len(rest):
+    while pos < len(key):
         matched = False
         for pat, tags in _VOWEL_RULES:
-            m = pat.match(rest, pos)
+            m = pat.match(key, pos)
             if m:
                 found.extend(tags)
                 pos = m.end()
@@ -149,7 +151,6 @@ def g2p_word(word: str) -> tuple[str, ...] | None:
                 break
         if not matched:
             pos += 1
-    # de-dupe adjacent identical
     out: list[str] = []
     for t in found:
         if t in GA16_INDEX and (not out or out[-1] != t):
