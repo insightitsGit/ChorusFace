@@ -51,7 +51,7 @@ _BLINK = {"blinks": True, "blink_interval_s": 1.6, "blink_seed": 7}
 SHOW: list[dict] = [
     {
         "id": "contrast_neutral",
-        "title": "1/5  NEUTRAL — wide EE → round OU → open AA (watch lips)",
+        "title": "1/6  NEUTRAL — wide EE → round OU → open AA (watch lips)",
         "wait_s": 5.8,
         "payload": {
             "utterance_id": "vd_neutral_contrast",
@@ -68,7 +68,7 @@ SHOW: list[dict] = [
     },
     {
         "id": "contrast_angry",
-        "title": "2/5  ANGRY — EE/OU/AA under knit brows",
+        "title": "2/6  ANGRY — EE/OU/AA under knit brows",
         "wait_s": 5.2,
         "payload": {
             "utterance_id": "vd_angry_contrast",
@@ -85,7 +85,7 @@ SHOW: list[dict] = [
     },
     {
         "id": "contrast_happy",
-        "title": "3/5  HAPPY — same vowels + raised brows (oral still biomech)",
+        "title": "3/6  HAPPY — same vowels + raised brows (oral still biomech)",
         "wait_s": 5.2,
         "payload": {
             "utterance_id": "vd_happy_contrast",
@@ -102,7 +102,7 @@ SHOW: list[dict] = [
     },
     {
         "id": "blink_hold",
-        "title": "4/5  NEUTRAL blink hold — EyeSystem (F9 schedule requests)",
+        "title": "4/6  NEUTRAL blink hold — EyeSystem (F9 schedule requests)",
         "wait_s": 3.8,
         "payload": {
             "utterance_id": "vd_blink_hold",
@@ -119,7 +119,7 @@ SHOW: list[dict] = [
     },
     {
         "id": "sentence",
-        "title": "5/5  Chat-style sentence — See you tomorrow",
+        "title": "5/6  Chat-style sentence — See you tomorrow",
         "wait_s": 3.8,
         "payload": {
             "utterance_id": "vd_happy_sentence",
@@ -133,6 +133,23 @@ SHOW: list[dict] = [
                 {"tag": "AX", "start_s": 1.25, "end_s": 1.55},
                 {"tag": "AA", "start_s": 1.70, "end_s": 2.20},
                 {"tag": "OH", "start_s": 2.35, "end_s": 3.10},
+            ],
+        },
+    },
+    {
+        "id": "tpk_fidelity",
+        "title": "6/6  TPK fidelity — play:tpk → TickFeedTransport spool",
+        "wait_s": 3.2,
+        "payload": {
+            "utterance_id": "vd_tpk_fidelity",
+            "text": "EE OU AA",
+            "play": "tpk",
+            **{**_BLINK, "blink_seed": 19},
+            "emotion_track": [{"emotion": "NEUTRAL", "start_s": 0.0, "end_s": 3.0}],
+            "spans": [
+                {"tag": "EE", "start_s": 0.15, "end_s": 0.90},
+                {"tag": "OU", "start_s": 1.10, "end_s": 1.85},
+                {"tag": "AA", "start_s": 2.05, "end_s": 2.85},
             ],
         },
     },

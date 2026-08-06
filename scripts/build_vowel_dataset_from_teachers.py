@@ -121,6 +121,60 @@ def _hold_window(series: np.ndarray, center: int, half: int = 4) -> np.ndarray:
     return np.mean(series[a:b], axis=0)
 
 
+def _ahr_segments(
+    controls: np.ndarray,
+    width: np.ndarray,
+    peaks: list[int],
+    tags: list[str],
+    emotion: str,
+    stem: str,
+) -> tuple[list[np.ndarray], list[dict]]:
+    """Cut attack/hold/release 9D paths around each script peak (Dataset B)."""
+    segs: list[np.ndarray] = []
+    meta: list[dict] = []
+    t = int(controls.shape[0])
+    if not peaks:
+        return segs, meta
+    # Valleys = midpoints between peaks (REST-ish).
+    bounds = [0]
+    for i in range(len(peaks) - 1):
+        bounds.append(int(0.5 * (peaks[i] + peaks[i + 1])))
+    bounds.append(t - 1)
+    for i, tag in enumerate(tags):
+        if i >= len(peaks):
+            break
+        peak = int(peaks[i])
+        a0 = int(bounds[i])
+        a1 = peak
+        # Hold: most stable 7 ticks near peak
+        hold_half = 3
+        h0 = max(0, peak - hold_half)
+        h1 = min(t, peak + hold_half + 1)
+        r0 = peak
+        r1 = int(bounds[i + 1]) if i + 1 < len(bounds) else t - 1
+        for phase, lo, hi in (
+            ("attack", a0, a1),
+            ("hold", h0, h1),
+            ("release", r0, r1),
+        ):
+            if hi - lo < 2:
+                continue
+            seg = controls[lo:hi].astype(np.float32)
+            segs.append(seg)
+            meta.append(
+                {
+                    "stem": stem,
+                    "emotion": emotion,
+                    "tag": tag,
+                    "phase": phase,
+                    "start": lo,
+                    "end": hi,
+                    "n": int(seg.shape[0]),
+                }
+            )
+    return segs, meta
+
+
 def build_datasets(
     pkg: Path,
 ) -> tuple[np.ndarray, np.ndarray, dict, dict, dict]:
@@ -137,6 +191,8 @@ def build_datasets(
     transfer_controls: list[np.ndarray] = []
     transfer_emotions: list[str] = []
     transfer_stems: list[str] = []
+    ahr_controls: list[np.ndarray] = []
+    ahr_meta: list[dict] = []
     d35_reports: list[dict] = []
     label_notes: list[dict] = []
 
@@ -179,6 +235,11 @@ def build_datasets(
                 "mismatch": mismatch,
             }
         )
+        segs, seg_meta = _ahr_segments(
+            controls, width, peaks, tags, emotion, video.stem
+        )
+        ahr_controls.extend(segs)
+        ahr_meta.extend(seg_meta)
         for i, tag in enumerate(tags):
             if i < len(peaks):
                 frame = peaks[i]
@@ -245,19 +306,34 @@ def build_datasets(
         if transfer_controls
         else np.zeros((0, GROUP_DIM), np.float32)
     )
+    ahr_lengths = np.asarray([c.shape[0] for c in ahr_controls], dtype=np.int32)
+    ahr_flat = (
+        np.concatenate(ahr_controls, axis=0)
+        if ahr_controls
+        else np.zeros((0, GROUP_DIM), np.float32)
+    )
     transfer = {
         "controls": flat,
         "lengths": lengths,
         "emotions": np.asarray(transfer_emotions),
         "stems": np.asarray(transfer_stems),
         "tick_hz": np.asarray([TICK_HZ]),
+        # Clean AHR cuts for Model B residual / schedule training.
+        "ahr_controls": ahr_flat,
+        "ahr_lengths": ahr_lengths,
+        "ahr_meta_json": np.asarray([json.dumps(m) for m in ahr_meta]),
     }
     meta = {
         "d35": d35_reports,
         "n_pose": len(pose_keys),
         "n_transfer_clips": len(transfer_stems),
+        "n_ahr_segments": len(ahr_meta),
         "hard_fails": hard_fails,
         "label_notes": label_notes,
+        "d35_pass_n": sum(1 for d in d35_reports if d.get("passed")),
+        "d35_soft_fail_n": sum(
+            1 for d in d35_reports if not d.get("passed") and not d.get("hard_fail")
+        ),
     }
     return X, Y, pose, transfer, meta
 
@@ -304,18 +380,37 @@ def main() -> int:
     onnx_ok = bool(model_a.try_export_onnx(args.out / "model_a.onnx"))
 
     model_b = ModelB()
-    stats_b = model_b.fit_from_transfers(
-        transfer["controls"],
-        transfer["lengths"],
-        transfer["emotions"],
-        epochs=args.b_epochs,
-    )
+    # Prefer clean AHR segments when available; fall back to whole-clip series.
+    if int(transfer["ahr_lengths"].size) > 0:
+        ahr_emos = []
+        for raw in transfer["ahr_meta_json"]:
+            try:
+                ahr_emos.append(json.loads(str(raw)).get("emotion", "NEUTRAL"))
+            except json.JSONDecodeError:
+                ahr_emos.append("NEUTRAL")
+        stats_b = model_b.fit_from_transfers(
+            transfer["ahr_controls"],
+            transfer["ahr_lengths"],
+            ahr_emos,
+            epochs=args.b_epochs,
+        )
+        stats_b = {**stats_b, "source": "ahr_segments", "n_segments": int(len(ahr_emos))}
+    else:
+        stats_b = model_b.fit_from_transfers(
+            transfer["controls"],
+            transfer["lengths"],
+            transfer["emotions"],
+            epochs=args.b_epochs,
+        )
+        stats_b = {**stats_b, "source": "whole_clip"}
     model_b.save(args.out / "model_b.npz")
 
     report = evaluate_model_a(model_a)
     angry = model_a.predict("AA", "ANGRY")
     happy = model_a.predict("AA", "HAPPY")
     upper_l2 = float(np.linalg.norm(angry[:4] - happy[:4]))
+    d35_pass_n = int(meta.get("d35_pass_n") or 0)
+    d35_total = len(meta["d35"])
 
     out = {
         "ok": bool(report.passed) and upper_l2 >= 0.12,
@@ -328,7 +423,10 @@ def main() -> int:
         "upper_face_l2_angry_vs_happy": upper_l2,
         "acceptance": report.to_dict(),
         "d35": meta["d35"],
+        "d35_pass_n": d35_pass_n,
+        "d35_total": d35_total,
         "d35_soft_fail_n": len(soft_fails),
+        "n_ahr_segments": int(meta.get("n_ahr_segments") or 0),
         "label_notes": meta["label_notes"],
         "sample_targets": {
             "EE|HAPPY": model_a.predict("EE", "HAPPY").tolist(),

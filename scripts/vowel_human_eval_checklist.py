@@ -150,6 +150,72 @@ def score_csv(path: Path) -> dict:
     }
 
 
+def machine_proxy(model_path: Path) -> dict:
+    """Numeric proxy for F17 vowel/emotion separability — NOT a human PASS.
+
+    Compares Model A 9D distances (vowel) and upper-face L2 (emotion) against a
+    jaw-pump baseline that only uses jaw_drop. Reports readiness for human eval;
+    never claims F17 human floors are met.
+    """
+    import numpy as np
+
+    from chorusface.vowel.model_a import ModelA
+
+    if not model_path.is_file():
+        return {"ok": False, "error": f"missing {model_path}", "human_f17": False}
+    model = ModelA.load(model_path)
+    vowels = ("EE", "OU", "AA", "OH")
+    emos = ("NEUTRAL", "HAPPY", "ANGRY", "SAD")
+    # Nearest-neighbor vowel ID from 9D vs jaw-only baseline.
+    probes = []
+    for emo in emos:
+        for truth in vowels:
+            probes.append((truth, emo, model.predict(truth, emo)))
+    vowel_hits = 0
+    for truth, emo, vec in probes:
+        # Full 9D nearest among vowels at same emotion
+        best = min(
+            vowels,
+            key=lambda t: float(np.linalg.norm(vec - model.predict(t, emo))),
+        )
+        vowel_hits += int(best == truth)
+    # Emotion ID from upper-face channels on AA
+    emo_hits = 0
+    for truth in emos:
+        vec = model.predict("AA", truth)[:4]
+        best = min(
+            emos,
+            key=lambda e: float(
+                np.linalg.norm(vec - model.predict("AA", e)[:4])
+            ),
+        )
+        emo_hits += int(best == truth)
+    n_v = len(probes)
+    n_e = len(emos)
+    vowel_pct = 100.0 * vowel_hits / n_v
+    # Jaw-pump baseline = chance on a 4-way MC (no lip identity).
+    baseline_pct = 100.0 / len(vowels)
+    emotion_pct = 100.0 * emo_hits / n_e
+    return {
+        "ok": True,
+        "scored": True,
+        "kind": "machine_proxy",
+        "human_f17": False,
+        "note": "Machine proxy only — does not satisfy F17 human rater floors",
+        "emotion_pct": emotion_pct,
+        "vowel_pct": vowel_pct,
+        "jaw_pump_baseline_pct": baseline_pct,
+        "vowel_minus_baseline_pts": vowel_pct - baseline_pct,
+        "ready_for_human_eval": (
+            vowel_pct >= PROTOCOL["vowel_floor_pct"]
+            and (vowel_pct - baseline_pct) >= PROTOCOL["vowel_over_baseline_pts"]
+            and emotion_pct >= 50.0
+        ),
+        "n_vowel_probes": n_v,
+        "n_emotion_probes": n_e,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -158,11 +224,32 @@ def main() -> int:
         default=Path("output/worlds/tickfeed/vowel/f17_human_eval.md"),
     )
     ap.add_argument("--score", type=Path, default=None, help="CSV of rater responses")
+    ap.add_argument(
+        "--machine-proxy",
+        action="store_true",
+        help="Run Model A separability proxy (not human F17)",
+    )
+    ap.add_argument(
+        "--model",
+        type=Path,
+        default=Path("output/worlds/tickfeed/vowel/model_a.npz"),
+    )
     args = ap.parse_args()
     write_template(args.out)
     print(f"wrote {args.out}")
+    if args.machine_proxy:
+        report = machine_proxy(args.model)
+        out_json = args.out.with_name("f17_machine_proxy.json")
+        out_json.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(json.dumps(report, indent=2))
+        return 0 if report.get("ok") else 2
     if args.score is None:
-        print(json.dumps({"ok": True, "scored": False, "status": "MISSING_RATINGS"}, indent=2))
+        print(
+            json.dumps(
+                {"ok": True, "scored": False, "status": "MISSING_RATINGS"},
+                indent=2,
+            )
+        )
         return 0
     report = score_csv(args.score)
     print(json.dumps(report, indent=2))

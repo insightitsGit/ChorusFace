@@ -269,15 +269,19 @@ class BiomechanicalFace:
             * self.lip_width_travel_scale
         )
         roundness = max(0.0, min(1.0, roundness + buccinator * 0.85 - risorius * 0.40))
-        # Keep smile expression muscle-light during speech; HAPPY owns smile.
-        expression += (
-            zygo * 0.35
-            + levator_anguli * 0.20
-            - depressor * 0.80
-            - corrugator * 0.45
-            + self.emotion.state.valence * 0.20
-        )
-        expression = max(-1.0, min(1.0, expression))
+        # Smile expression from valence/zygo fights vowel silhouette — mute while
+        # speech owns the oral disk (VowelDesign / speech_owns_oral).
+        if self.speech_owns_oral and speaking:
+            expression = 0.0
+        else:
+            expression += (
+                zygo * 0.35
+                + levator_anguli * 0.20
+                - depressor * 0.80
+                - corrugator * 0.45
+                + self.emotion.state.valence * 0.20
+            )
+            expression = max(-1.0, min(1.0, expression))
         width = max(7.0, min(22.0, width))
         openness = max(0.7, min(14.0, openness))
 

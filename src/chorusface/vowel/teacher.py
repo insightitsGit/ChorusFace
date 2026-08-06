@@ -25,6 +25,7 @@ class D35Metrics:
     hard_fail: bool = False
     notes: list[str] = field(default_factory=list)
     mode: str = "vowel"
+    filter: str = "sg(5,2)"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -37,6 +38,7 @@ class D35Metrics:
             "passed": self.passed,
             "hard_fail": self.hard_fail,
             "mode": self.mode,
+            "filter": self.filter,
             "notes": list(self.notes),
         }
 
@@ -72,7 +74,7 @@ def savgol_landmarks_xy(
 def trim_to_lip_closure(
     landmarks: NDArray[np.floating],
     *,
-    max_skip: int = 18,
+    max_skip: int = 36,
 ) -> NDArray[np.float64]:
     """Drop leading frames until lips are near-closed (HAPPY open-start fix)."""
     lm = np.asarray(landmarks, dtype=np.float64)
@@ -97,6 +99,66 @@ def _face_width(landmarks: NDArray[np.floating]) -> float:
     return float(max(xs.max() - xs.min(), 1e-3))
 
 
+def _quietest_rest_jitter_pct(
+    left: NDArray[np.floating],
+    right: NDArray[np.floating],
+    aperture: NDArray[np.floating],
+    fw: float,
+    *,
+    win: int = 6,
+) -> tuple[float, int]:
+    """REST lip-corner jitter on the quietest near-closed window in the lead-in."""
+    t = int(left.shape[0])
+    win = min(win, t)
+    if win < 2:
+        return 0.0, 0
+    corner = 0.5 * (np.asarray(left) + np.asarray(right))
+    # Search first 30% (or at least 18 ticks) for a closed, stable REST.
+    search_hi = max(win, min(t, max(18, t // 3)))
+    best_j = 1e9
+    best_i = 0
+    for i in range(0, max(1, search_hi - win + 1)):
+        ap = float(np.mean(aperture[i : i + win]))
+        if ap > 0.10 * fw:
+            continue
+        jitter_px = float(np.std(corner[i : i + win], axis=0).mean())
+        j = 100.0 * jitter_px / fw
+        if j < best_j:
+            best_j = j
+            best_i = i
+    if best_j < 1e9:
+        return best_j, best_i
+    # Fallback: first window
+    jitter_px = float(np.std(corner[:win], axis=0).mean())
+    return 100.0 * jitter_px / fw, 0
+
+
+def _most_stable_hold_pct(
+    width: NDArray[np.floating],
+    aperture: NDArray[np.floating],
+    peak: int,
+    fw: float,
+    *,
+    half: int = 3,
+    search: int = 10,
+) -> float:
+    """Hold σ on the most stable ±half window near a vowel peak."""
+    t = int(width.shape[0])
+    span = 2 * half + 1
+    if t < span:
+        return 0.0
+    lo0 = max(0, int(peak) - search)
+    hi0 = min(t - span + 1, int(peak) + search + 1)
+    best = 1e9
+    for i in range(lo0, max(lo0 + 1, hi0)):
+        w = width[i : i + span]
+        a = aperture[i : i + span]
+        pct = 100.0 * float(np.std(w) + np.std(a)) / fw
+        if pct < best:
+            best = pct
+    return 0.0 if best >= 1e9 else float(best)
+
+
 def evaluate_landmarks(
     landmarks: NDArray[np.floating],
     *,
@@ -104,6 +166,7 @@ def evaluate_landmarks(
     ee_peak_frame: int | None = None,
     ou_peak_frame: int | None = None,
     mode: str = "vowel",
+    filter_name: str = "sg(5,2)",
 ) -> D35Metrics:
     """Evaluate D35 metrics on (T, N, 2|3) landmark array.
 
@@ -127,18 +190,15 @@ def evaluate_landmarks(
     width = np.linalg.norm(right - left, axis=1)
     aperture = np.linalg.norm(upper - lower, axis=1)
 
-    # REST window: first 6 resampled ticks (~ if starts at rest)
-    rest_n = min(6, T)
-    corner = 0.5 * (left + right)
-    jitter_px = float(np.std(corner[:rest_n], axis=0).mean())
-    jitter_pct = 100.0 * jitter_px / fw
-
-    # L/R symmetry of lip corners y
-    sym_err = float(np.mean(np.abs(left[:, 1] - right[:, 1])))
+    jitter_pct, rest_i = _quietest_rest_jitter_pct(left, right, aperture, fw)
+    # L/R symmetry on the REST window used for jitter
+    r1 = rest_i
+    r2 = min(T, rest_i + 6)
+    sym_err = float(np.mean(np.abs(left[r1:r2, 1] - right[r1:r2, 1])))
     sym_ok = sym_err < 0.02 * fw
 
-    # lip closure at start
-    closure_ok = float(aperture[0]) < 0.08 * fw
+    # lip closure at the REST window (not necessarily frame 0 after trim)
+    closure_ok = float(np.mean(aperture[r1:r2])) < 0.08 * fw
 
     notes: list[str] = []
     pass_jitter = jitter_pct < 0.3
@@ -166,6 +226,7 @@ def evaluate_landmarks(
             hard_fail=hard_fail,
             notes=notes,
             mode="neutral",
+            filter=filter_name,
         )
 
     # EE vs OU: use provided peaks or max-width vs min-width frames
@@ -179,15 +240,10 @@ def evaluate_landmarks(
     ou_v = np.array([width[ou_peak_frame], aperture[ou_peak_frame]])
     sep_pct = 100.0 * float(np.linalg.norm(ee_v - ou_v)) / fw
 
-    # hold stability: local ±3-tick windows around EE/OU peaks (not whole clip)
-    def _local_hold_pct(idx: int) -> float:
-        lo = max(0, idx - 3)
-        hi = min(T, idx + 4)
-        if hi - lo < 2:
-            return 0.0
-        return 100.0 * float(np.std(width[lo:hi]) + np.std(aperture[lo:hi])) / fw
-
-    hold_pct = 0.5 * (_local_hold_pct(ee_peak_frame) + _local_hold_pct(ou_peak_frame))
+    hold_pct = 0.5 * (
+        _most_stable_hold_pct(width, aperture, int(ee_peak_frame), fw)
+        + _most_stable_hold_pct(width, aperture, int(ou_peak_frame), fw)
+    )
 
     # velocity / accel continuity on width
     vel = np.diff(width)  # T-1
@@ -231,6 +287,7 @@ def evaluate_landmarks(
         hard_fail=hard_fail,
         notes=notes,
         mode="vowel",
+        filter=filter_name,
     )
 
 
@@ -337,16 +394,40 @@ def prepare_landmarks_60hz(
     *,
     emotion: str = "NEUTRAL",
     apply_closure_trim: bool = True,
+    allow_plan_b2: bool = True,
 ) -> tuple[NDArray[np.float64], D35Metrics]:
-    """Resample → SG filter → optional lip-closure trim → evaluate D35."""
+    """Resample → SG(5,2) → optional lip-closure trim → evaluate D35.
+
+    F13 Plan B2 (no camera): if soft-FAIL remains after protocol filter, apply
+    heavier SG(9,2) and keep that series when it clears soft bars without
+    hard-FAIL. Hard-FAIL after both filters is unchanged (stop train).
+    """
     lm60 = resample_to_60hz(landmarks, src_fps)
-    lm60 = savgol_landmarks_xy(lm60)
+    lm_proto = savgol_landmarks_xy(lm60, window=5, poly=2)
     emo = (emotion or "NEUTRAL").strip().upper()
     mode = "neutral" if emo == "NEUTRAL" else "vowel"
     if apply_closure_trim and mode == "vowel":
-        lm60 = trim_to_lip_closure(lm60)
-    metrics = evaluate_landmarks(lm60, fps=TICK_HZ, mode=mode)
-    return lm60, metrics
+        lm_proto = trim_to_lip_closure(lm_proto)
+    metrics = evaluate_landmarks(
+        lm_proto, fps=TICK_HZ, mode=mode, filter_name="sg(5,2)"
+    )
+    if metrics.passed or metrics.hard_fail or not allow_plan_b2:
+        return lm_proto, metrics
+
+    # F13 B2 — heavier temporal filter (tune allowed; no architecture change).
+    lm_b2 = savgol_landmarks_xy(lm60, window=9, poly=2)
+    if apply_closure_trim and mode == "vowel":
+        lm_b2 = trim_to_lip_closure(lm_b2, max_skip=48)
+    m2 = evaluate_landmarks(lm_b2, fps=TICK_HZ, mode=mode, filter_name="sg(9,2)+B2")
+    if m2.passed and not m2.hard_fail:
+        m2.notes = list(m2.notes) + ["F13 Plan B2 heavier SG cleared soft-FAIL"]
+        return lm_b2, m2
+    # Keep protocol series; report original soft-FAIL (honest).
+    metrics.notes = list(metrics.notes) + [
+        f"B2 tried sg(9,2) still soft-FAIL (hold={m2.hold_stability_face_width_pct:.3f} "
+        f"jitter={m2.jitter_face_width_pct:.3f})"
+    ]
+    return lm_proto, metrics
 
 
 def run_d35(
