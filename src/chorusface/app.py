@@ -115,6 +115,7 @@ from chorusface.skinning import (
     default_tissue_path,
     jaw_pose_from_definition,
     load_tissue_maps,
+    muscle_anchor_grid,
     pack_muscle_uniforms,
     save_tissue_maps,
 )
@@ -297,6 +298,16 @@ class AvatarFaceApp(FieldRuntime):
             help=(
                 "Show fidelity HUD (viseme/transition/plate/gain). "
                 "Toggle with F. Also CHORUSFACE_FIDELITY_HUD=1"
+            ),
+        )
+        parser.add_argument(
+            "--face-debug",
+            action="store_true",
+            default=_environment_flag("CHORUSFACE_FACE_DEBUG"),
+            help=(
+                "Show face-function debug HUD (muscles/width/round/field/9D). "
+                "Toggle with D. Also CHORUSFACE_FACE_DEBUG=1. "
+                "On by default with --vowel-design."
             ),
         )
         parser.add_argument(
@@ -684,7 +695,17 @@ class AvatarFaceApp(FieldRuntime):
         self._vowel_controls: object | None = None
         self._vowel_controls_t0 = 0.0
         self._vowel_ctrl_sample: object | None = None
-        # Demo: play measured FaceCellTimeline once before zero-mood idle.
+        # When True, F9 9D owns oral LOOK (skip phoneme_muscles).
+        self._vowel_9d_owns_look = False
+        self._vowel_9d_lid_amt = 1.0
+        self._vowel_9d_mouth = {
+            "width": 14.0,
+            "openness": 1.0,
+            "roundness": 0.12,
+            "jaw_n": 0.0,
+            "plate_open": 0.0,
+            "smile": 0.0,
+        }
         self._tickfeed_calibration_active = False
         # Live chat/TTS overlay for TickFeed (bypasses MouthLayerTimeline LOOK).
         self._tickfeed_live: dict[str, float | str] | None = None
@@ -706,6 +727,13 @@ class AvatarFaceApp(FieldRuntime):
 
         self._mouth_motion = MouthMotionState()
         self._fidelity_hud = bool(getattr(self.argv, "fidelity_hud", False))
+        self._mouth_line_rest_hw = 0.0
+        self._vowel_field_spec_n = 0
+        self._vowel_field_cmd_n = 0
+        # Face-function debug: default on for VowelDesign so lip/jaw data is visible.
+        self._face_debug_hud = bool(getattr(self.argv, "face_debug", False)) or bool(
+            getattr(self.argv, "vowel_design", False)
+        )
         from chorusface.tickfeed.side_a_debug import SideADebugLog
 
         self._side_a_debug = SideADebugLog(
@@ -716,6 +744,8 @@ class AvatarFaceApp(FieldRuntime):
             print(f"TickFeed Side A debug: {self._side_a_debug.path}")
         if self._fidelity_hud:
             print("Fidelity HUD: on (press F to toggle)")
+        if self._face_debug_hud:
+            print("Face debug HUD: on (press D to toggle)")
         # 0-state / hearing / speaking — chat presence for the demo face.
         self._presence: str = PRESENCE_ZERO
         # Idle face within 0-state: neutral | smile | waiting (Z cycles).
@@ -860,18 +890,17 @@ class AvatarFaceApp(FieldRuntime):
                 self.wnd.title = "ChorusFace — VowelDesign (GA-16 biomech)"
             except Exception:  # noqa: BLE001
                 pass
-            # Pure biomech LOOK: muscles+jaw only. No open/smile capture plates.
-            self._plate_atlas = None
-            self._use_plates = False
+            # 9D owns LOOK (Dataset A/B). Keep open.png for aperture; skip oral
+            # muscle path — C[4..8] drive uniforms/jaw/plates directly.
+            self._vowel_9d_owns_look = True
+            # Keep capture open/smile plates if already loaded (aperture needs them).
+            # Do not clear _plate_atlas — pair lookup still useful for labels.
             self._use_eye_closed_plate = True
             self._tickfeed_look_authority = False
             self._tickfeed_lid_teacher = False
             self._tickfeed_lid_amt = 1.0
             self._tickfeed_calibration_active = False
             self._vowel_prev_aperture = 0.0
-            # Exaggerate EE↔OU width / AA jaw so the photo face reads clearly.
-            self._biomech.speech_travel_scale = 1.65
-            self._biomech.lip_width_travel_scale = 2.05
             self._biomech.speech_owns_oral = True
             try:
                 self._biomech.jaw.max_opening = min(
@@ -896,10 +925,11 @@ class AvatarFaceApp(FieldRuntime):
             )
             print("=" * 60)
             print("VowelDesign demo mode")
-            print("  Speech LOOK: BiomechanicalFace muscles+jaw (pure biomech)")
-            print("  Oral plates: OFF · viseme atlas: OFF · FIELD: muted")
-            print("  Blinks: EyeSystem (F9 schedule requests)")
-            print("  Brows: F9 C[2]/C[3] → Frontalis/Corrugator")
+            print("  Speech LOOK: F9 9D (Dataset A/B Model A/B) → uniforms/jaw/plates")
+            print("  Oral muscles: OFF (9D owns mouth) · FIELD: muted")
+            print(f"  Open plate: {'ON' if self._use_plates else 'OFF'}")
+            print("  Channels: C0 lids · C2/C3 brows · C4–C8 mouth/jaw")
+            print("  Debug: face HUD on (D) · fidelity HUD (F)")
             print("  Chat: type in the panel under the face (Esc = focus)")
             print("  Drive: chat · POST /vowel/utterance · demo_vowel_design.py")
             print("  Docs: docs/VowelDesignNWRReconciliation.md")
@@ -1466,37 +1496,52 @@ class AvatarFaceApp(FieldRuntime):
         )
 
     def _push_vowel_brow_impulses(self, c: object) -> None:
-        """Drive Frontalis / Corrugator from F9 brow channels before biomech step."""
-        from chorusface.biomechanics.muscles import MuscleImpulse
+        """9D owns brows via expr uniforms — no Frontalis/Corrugator impulses."""
+        del c
+        return
 
+    def _apply_vowel_9d_row(self, c: object) -> dict[str, float]:
+        """Map one F9 9D row → jaw / mouth pose / plate / lid numbers."""
         row = np.asarray(c, dtype=np.float64).reshape(-1)
-        raise_n = float(np.clip(row[2], 0.0, 1.0))
-        knit_n = float(np.clip(row[3], 0.0, 1.0))
-        tick = int(self.tick) + 1
-        if raise_n > 0.08:
-            self._biomech.impulses.push(
-                MuscleImpulse(
-                    tick=tick,
-                    muscle="Frontalis",
-                    strength=min(1.0, raise_n * 1.15),
-                    duration=0.05,
-                    falloff=1.0,
-                    priority=3,
-                    source="Vowel9D",
-                )
-            )
-        if knit_n > 0.08:
-            self._biomech.impulses.push(
-                MuscleImpulse(
-                    tick=tick,
-                    muscle="Corrugator",
-                    strength=min(1.0, knit_n * 1.25),
-                    duration=0.05,
-                    falloff=1.0,
-                    priority=3,
-                    source="Vowel9D",
-                )
-            )
+        if row.size < 9:
+            row = np.pad(row, (0, 9 - int(row.size)))
+        # C0 = eye_aperture close amount (1=shut). C4 gap, C5 spread [-1,1],
+        # C6 round, C7 teeth, C8 jaw_drop.
+        close = float(np.clip(row[0], 0.0, 1.0))
+        gap = float(np.clip(row[4], 0.0, 1.0))
+        spread = float(np.clip(row[5], -1.0, 1.0))
+        round_n = float(np.clip(row[6], 0.0, 1.0))
+        teeth = float(np.clip(row[7], 0.0, 1.0))
+        jaw_n = float(np.clip(row[8], 0.0, 1.0))
+        # Width in MouthPose units (~7..22). Spread +1 → wide EE, -1 → narrow OU.
+        width = 14.0 + spread * 7.5 - round_n * 3.5
+        width = float(np.clip(width, 7.0, 22.0))
+        # Openness units for shader (/14). Gap + jaw + teeth open the hole.
+        open_n = float(np.clip(max(gap, jaw_n * 0.95, teeth * 0.55), 0.0, 1.0))
+        openness = 1.0 + open_n * 12.0
+        plate_open = float(np.clip(max(gap, jaw_n, teeth * 0.65), 0.0, 1.0))
+        # Smile plate only when spread is happy-wide and jaw is nearly shut.
+        emo = str(
+            getattr(self, "_voice_emotion", None)
+            or getattr(self._telemetry, "last_emotion", None)
+            or "NEUTRAL"
+        ).strip().upper()
+        smile = 0.0
+        if emo in {"HAPPY", "JOY"} and plate_open < 0.22 and spread > 0.25:
+            smile = float(np.clip(spread * 0.55, 0.0, 0.65))
+        if emo in {"ANGRY", "SAD", "THINKING"}:
+            smile = 0.0
+        self._biomech.jaw.set_speech_target(jaw_n)
+        self._vowel_9d_lid_amt = float(np.clip(1.0 - close, 0.0, 1.0))
+        self._vowel_9d_mouth = {
+            "width": width,
+            "openness": openness,
+            "roundness": round_n,
+            "jaw_n": jaw_n,
+            "plate_open": plate_open,
+            "smile": smile,
+        }
+        return self._vowel_9d_mouth
 
     def _sync_expression_from_emotion(self) -> None:
         """Drive eye widen / brow raise / upper plate from catalog + biomech."""
@@ -1507,27 +1552,30 @@ class AvatarFaceApp(FieldRuntime):
             brow_raise = float(np.clip(row[2], 0.0, 1.0))
             brow_knit = float(np.clip(row[3], 0.0, 1.0))
             # Shader brow.y lifts tissue — suppress lift for angry/sad knit.
-            knit_owns = brow_knit >= 0.22 and brow_knit >= (brow_raise * 0.70)
+            knit_owns = brow_knit >= 0.18 and brow_knit >= (brow_raise * 0.55)
             if knit_owns:
-                self._expr_target_brow = float(np.clip(brow_raise * 0.12, 0.0, 0.14))
+                # Push knit into shader via negative expr_z (see uniforms).
+                self._expr_target_brow = float(np.clip(brow_raise * 0.08, 0.0, 0.10))
+                self._expr_target_blend = 0.0
             else:
                 # Center raise against a mild open baseline so emotions separate.
                 self._expr_target_brow = float(
-                    np.clip((brow_raise - 0.28) / 0.55, 0.0, 1.0)
+                    np.clip((brow_raise - 0.22) / 0.50, 0.0, 1.0)
                 )
             self._expr_target_widen = float(
                 np.clip(
-                    max(0.0, brow_raise - 0.30) * (1.0 - close) * 0.95,
+                    max(0.0, brow_raise - 0.25) * (1.0 - close) * 1.05,
                     0.0,
                     1.0,
                 )
             )
             # Soft upper plate only for strong raise (surprised).
-            self._expr_target_blend = (
-                float(np.clip((brow_raise - 0.40) * 0.9, 0.0, 0.55))
-                if brow_raise > 0.55 and not knit_owns
-                else 0.0
-            )
+            if not knit_owns:
+                self._expr_target_blend = (
+                    float(np.clip((brow_raise - 0.40) * 0.9, 0.0, 0.55))
+                    if brow_raise > 0.55
+                    else 0.0
+                )
             self._expr_role_name = "vowel-9d"
             self._render_state.brow_raise = brow_raise
             self._render_state.brow_knit = brow_knit
@@ -2073,9 +2121,9 @@ class AvatarFaceApp(FieldRuntime):
         self._refresh_frame_layers()
 
     def _update_look_vowel_design(self, now: float) -> None:
-        """Pure GA-16 biomech LOOK — muscles+jaw only (no open/smile plates)."""
+        """F9 9D owns LOOK when armed; else phoneme label only (no oral muscles)."""
         from chorusface.biomechanics.intent import PHONEME_JAW_TARGET
-        from chorusface.speech import canonical_viseme, mouth_pose
+        from chorusface.speech import canonical_viseme
 
         upcoming_due, upcoming_phoneme = self._upcoming_viseme()
         cmd = self._mouth_timeline.tick(
@@ -2090,39 +2138,67 @@ class AvatarFaceApp(FieldRuntime):
             upcoming_phoneme=upcoming_phoneme,
         )
         phoneme = canonical_viseme(cmd.phoneme or "REST")
-        emotion = str(
-            getattr(self, "_voice_emotion", None)
-            or getattr(self._telemetry, "last_emotion", None)
-            or "NEUTRAL"
-        ).strip().upper()
-        if emotion not in EMOTION_IMPULSES:
-            emotion = "NEUTRAL"
-        pose = mouth_pose(phoneme, emotion)
-        jaw_t = float(PHONEME_JAW_TARGET.get(phoneme, 0.1))
-        self._biomech.jaw.set_speech_target(jaw_t)
-        open_n = max(0.0, min(1.0, float(pose.openness) / 14.0))
-        width_n = max(0.0, min(1.0, (float(pose.width) - 7.0) / 15.0))
-        # Pure biomech: never drive capture open/smile plates (NWR recon).
+        c9 = self._sample_vowel_controls(now)
+        if c9 is not None and bool(getattr(self, "_vowel_9d_owns_look", False)):
+            m = self._apply_vowel_9d_row(c9)
+            open_n = float(m["plate_open"])
+            jaw_t = float(m["jaw_n"])
+            width_n = max(0.0, min(1.0, (float(m["width"]) - 7.0) / 15.0))
+            smile = float(m["smile"])
+            source = "vowel-9d"
+            # Capture open.png reads aperture; smile only for HAPPY closed.
+            self._layer_command = LayerCommand(
+                phoneme=phoneme,
+                atlas_viseme=phoneme,
+                open_amount=open_n,
+                smile_amount=smile,
+                jaw_target=jaw_t,
+                plate_openness=open_n,
+                source=source,
+                active_until=float(cmd.active_until),
+            )
+            self._ml_openness = open_n
+            self._ml_jaw = jaw_t
+            self._ml_width = width_n
+            self._ml_plate_gate = 1.0 if open_n > 0.08 else 0.0
+            self._ml_smile = smile
+            self._plate_openness_current = open_n
+            self._plate_open_hyst = open_n
+            # Drive plate blend amount from 9D openness (atlas still off).
+            self._plate_blend_current = (0.0, open_n if self._use_plates else 0.0)
+            self._held_speech_viseme = phoneme
+            self._open_close_source = source
+            self._target_mouth_pose = MouthPose(
+                width=float(m["width"]),
+                openness=float(m["openness"]),
+                roundness=float(m["roundness"]),
+                expression=smile,
+            )
+            self._refresh_frame_layers()
+            return
+
+        # Idle / no 9D tape: closed REST, no oral muscle table.
+        self._biomech.jaw.set_speech_target(0.0)
         self._layer_command = LayerCommand(
             phoneme=phoneme,
             atlas_viseme=phoneme,
-            open_amount=open_n,
+            open_amount=0.0,
             smile_amount=0.0,
-            jaw_target=jaw_t,
+            jaw_target=0.0,
             plate_openness=0.0,
-            source="vowel-biomech",
+            source="vowel-9d-idle",
             active_until=float(cmd.active_until),
         )
-        self._ml_openness = open_n
-        self._ml_jaw = jaw_t
-        self._ml_width = width_n
+        self._ml_openness = 0.0
+        self._ml_jaw = 0.0
+        self._ml_width = 0.5
         self._ml_plate_gate = 0.0
         self._ml_smile = 0.0
         self._plate_openness_current = 0.0
         self._plate_open_hyst = 0.0
         self._plate_blend_current = (0.0, 0.0)
         self._held_speech_viseme = phoneme
-        self._open_close_source = "vowel-biomech"
+        self._open_close_source = "vowel-9d-idle"
         self._refresh_frame_layers()
 
     def _refresh_frame_layers(self) -> FrameLayerState:
@@ -2142,19 +2218,25 @@ class AvatarFaceApp(FieldRuntime):
         smile_amt = float(cmd.smile_amount)
         plate_amt = float(cmd.plate_openness)
         if self._vowel_design_mode():
-            # Mute FIELD + viseme atlas + capture open/smile plates (pure biomech).
+            # 9D owns oral LOOK — FIELD off; open.png on when plates loaded.
             field_gain = 0.0
             atlas_strength = 0.0
-            smile_amt = 0.0
-            plate_amt = 0.0
-            speaking_plate = bool(getattr(self._render_state, "speaking", False))
+            if bool(getattr(self, "_vowel_9d_owns_look", False)):
+                smile_amt = float(getattr(self, "_ml_smile", 0.0) or 0.0)
+                plate_amt = float(getattr(self, "_ml_openness", 0.0) or 0.0)
+            else:
+                smile_amt = 0.0
+                plate_amt = 0.0
+            speaking_plate = plate_amt > 0.08 or bool(
+                getattr(self._render_state, "speaking", False)
+            )
         self._frame_layers = evaluate_frame_layers(
             phoneme=phoneme,
             plate_open_amount=plate_amt,
             smile_amount=smile_amt,
             atlas_strength=atlas_strength,
             cavity_strength=float(recipe.cavity_strength) * (
-                0.15 if self._vowel_design_mode() else 1.0
+                0.35 if self._vowel_design_mode() else 1.0
             ),
             field_gain=field_gain,
             expr_blend=float(self._expr_plate_blend),
@@ -2464,12 +2546,14 @@ class AvatarFaceApp(FieldRuntime):
         mouth_config = definition.get("mouth_line", {})
         mouth_uv = definition.get("mouth_center", [0.50, 0.78])
         line_x, line_y = to_grid(mouth_uv)
+        hw = float(mouth_config.get("half_width", 0.20)) * box["width"]
         self._mouth_line = (
             line_x,
             line_y,
-            float(mouth_config.get("half_width", 0.20)) * box["width"],
+            hw,
             float(mouth_config.get("softness_cells", 1.6)),
         )
+        self._mouth_line_rest_hw = float(hw)
 
         self._jaw = jaw_pose_from_definition(definition, box, self.grid_height)
 
@@ -2532,17 +2616,22 @@ class AvatarFaceApp(FieldRuntime):
         if measured_mouth is not None:
             line_x = measured_mouth[0]
             line_y = float(self.grid_height) - measured_mouth[1]
+            hw = float(mouth_config.get("half_width", 0.20)) * box["width"]
             self._mouth_line = (
                 line_x,
                 line_y,
-                float(mouth_config.get("half_width", 0.20)) * box["width"],
+                hw,
                 float(mouth_config.get("softness_cells", 1.6)),
             )
+            self._mouth_line_rest_hw = float(hw)
 
     def _update_avatar_uniforms(self) -> None:
         pose = self._mouth_pose
         state = self._render_state
         program = self.render_program
+
+        # Keep mouth_line at rest half-width. Width/round live in muscle warp +
+        # jaw cavity — stretching line.z alone painted a horizontal "zip" scar.
 
         self._avatar_base_texture.use(location=2)
         program["avatar_base_color"].value = 2
@@ -2585,8 +2674,11 @@ class AvatarFaceApp(FieldRuntime):
             0.0,
             0.0,
         )
-        # VowelDesign: hard-off open/smile plates even if textures loaded.
-        plates_on = bool(self._use_plates) and not self._vowel_design_mode()
+        # VowelDesign + 9D: allow open/smile capture plates (aperture from C4–C8).
+        plates_on = bool(self._use_plates) and (
+            (not self._vowel_design_mode())
+            or bool(getattr(self, "_vowel_9d_owns_look", False))
+        )
         program["avatar_plates_ready"].value = 1 if plates_on else 0
         self._avatar_expr_plate_texture.use(location=8)
         program["avatar_expr_plate"].value = 8
@@ -2625,11 +2717,12 @@ class AvatarFaceApp(FieldRuntime):
             1.0 if self._expression_catalog is not None else 0.0,
         )
 
-        # TickFeed owns face FIELD + plates; muscle warp on top made lips muddy
-        # and fought KEY clears. VowelDesign must always upload live muscles/jaw
-        # — never the empty TickFeed stub (that made jaw "unrelated").
+        # 9D owns oral LOOK — do not upload oral muscle warp (fights plates).
         tickfeed_owns = self._tickfeed_look_owns_speech()
-        if tickfeed_owns:
+        vowel_9d = self._vowel_design_mode() and bool(
+            getattr(self, "_vowel_9d_owns_look", False)
+        )
+        if tickfeed_owns or vowel_9d:
             uniforms = pack_muscle_uniforms(
                 self._biomech.registry,
                 {},
@@ -2651,20 +2744,26 @@ class AvatarFaceApp(FieldRuntime):
         self._active_muscle_count = uniforms.count
 
         program["avatar_mouth_line"].value = self._mouth_line
-        # BJ3: TickFeed LOOK owns mouth via FIELD + plates. Residual jaw angle
-        # (phoneme springs / open_from_jaw) biases openness and slides the chin.
-        jaw_angle = (
-            0.0 if tickfeed_owns else float(state.jaw_angle)
-        )
+        # 9D jaw_n → radians for shader (spring may lag; force from tape).
+        if vowel_9d:
+            jaw_n = float(self._vowel_9d_mouth.get("jaw_n", 0.0) or 0.0)
+            max_open = float(getattr(self._biomech.jaw, "max_opening", 0.55) or 0.55)
+            jaw_angle = jaw_n * max_open
+        else:
+            jaw_angle = (
+                0.0 if tickfeed_owns else float(state.jaw_angle)
+            )
         jaw = replace(self._jaw, angle=jaw_angle)
         program["avatar_jaw"].value = jaw.uniform
         program["avatar_jaw_span"].value = jaw.span_uniform
         program["avatar_eye_shape"].value = self._eye_shape
         program["avatar_eye_centers"].value = self._eye_centers
         # LOOK lid_amt (1=open) owns blink when teacher present; else EyeSystem.
-        # VowelDesign: always EyeSystem — measured TickFeed lids = old blink look.
+        # VowelDesign 9D: C0 close → lid amount.
         lid_local = float(min(state.lid_left, state.lid_right))
-        if (
+        if vowel_9d:
+            lid_amt = float(getattr(self, "_vowel_9d_lid_amt", lid_local) or lid_local)
+        elif (
             (not self._vowel_design_mode())
             and self._tickfeed_look_authority
             and bool(getattr(self, "_tickfeed_lid_teacher", False))
@@ -2679,12 +2778,21 @@ class AvatarFaceApp(FieldRuntime):
             float(state.pupil),
             blink_amt,
         )
-        program["avatar_mouth_pose"].value = (
-            pose.width,
-            pose.openness,
-            pose.roundness,
-            pose.expression,
-        )
+        if vowel_9d:
+            m = self._vowel_9d_mouth
+            program["avatar_mouth_pose"].value = (
+                float(m.get("width", pose.width)),
+                float(m.get("openness", pose.openness)),
+                float(m.get("roundness", pose.roundness)),
+                float(m.get("smile", pose.expression)),
+            )
+        else:
+            program["avatar_mouth_pose"].value = (
+                pose.width,
+                pose.openness,
+                pose.roundness,
+                pose.expression,
+            )
         # Digested GPU display recipe knobs (same contract at train and play).
         from chorusface.plates import HARD_SNAP_THRESHOLD
 
@@ -2697,12 +2805,13 @@ class AvatarFaceApp(FieldRuntime):
         )
         if self._vowel_design_mode():
             # recipe: x=jaw-at-full-open, y=smile-suppress, z=atlas, w=cavity
-            knobs[2] = 0.0  # viseme atlas off — open/smile plates only
+            knobs[2] = 0.0  # viseme atlas off — open/smile plates from 9D
             held_ph = str(getattr(self, "_held_speech_viseme", "REST") or "REST")
-            if held_ph in {"OU", "OH", "UH", "AO", "OY"}:
-                knobs[1] = max(float(knobs[1]), 0.85)  # suppress smile plate on round
-            knobs[3] = min(float(knobs[3]), 0.35)
-            speaking_plate = float(self._plate_blend_current[1]) > 0.12
+            emo = str(getattr(self, "_voice_emotion", "") or "").upper()
+            if held_ph in {"OU", "OH", "UH", "AO", "OY"} or emo in {"ANGRY", "SAD"}:
+                knobs[1] = max(float(knobs[1]), 0.90)  # suppress smile scars
+            knobs[3] = max(float(knobs[3]), 0.55)
+            speaking_plate = float(self._plate_blend_current[1]) > 0.08
         elif speaking_plate:
             # Atlas must fully own the mouth while a speech plate is active.
             knobs[2] = max(float(knobs[2]), 1.0)
@@ -2720,7 +2829,8 @@ class AvatarFaceApp(FieldRuntime):
         cal_mode = str(getattr(self, "_calibrate_mode", "normal") or "normal")
         # Legacy atlas path crushed FIELD so plates wouldn't smear.
         if self._vowel_design_mode():
-            # FIELD residuals were the "little blur" + unrelated mouth slides.
+            # NWR: muscle/jaw uniforms own lips. FIELD ±4 on unlocked tissue still
+            # smears photo-lips into a zip against Master-locked cheeks — mute.
             field_gain = 0.0
         elif cal_mode == "plate_only":
             field_gain = 0.0
@@ -4009,21 +4119,34 @@ class AvatarFaceApp(FieldRuntime):
                 due_at=due_at,
             )
             self._presence = PRESENCE_SPEAKING
-            if self._vowel_design_mode():
+            if self._vowel_design_mode() and bool(
+                getattr(self, "_vowel_9d_owns_look", False)
+            ):
+                # 9D tape owns oral LOOK — do not fire phoneme_muscles.
+                hold = max(float(duration), 1.0 / 60.0)
+                self._biomech.last_phoneme = key
+                self._biomech.speaking_until = self._biomech.simulation_time + hold
+            elif self._vowel_design_mode():
                 # Exact host span length — old 0.36s mouth-hold floor smeared vowels.
                 hold = max(float(duration), 1.0 / 60.0)
+                self._biomech.submit_phoneme(
+                    phoneme,
+                    tick=self.tick + 1,
+                    emotion_label=emotion,
+                    duration=hold,
+                )
             else:
                 # Wall-clock hold only (seconds) — never multiply by frame count.
                 hold = float(getattr(self, "_mouth_hold_min", 0.36))
                 if key in OPEN_TOOTH_VISEMES:
                     hold = max(float(duration), 1.0 / 60.0)
                 hold = max(float(duration), hold)
-            self._biomech.submit_phoneme(
-                phoneme,
-                tick=self.tick + 1,
-                emotion_label=emotion,
-                duration=hold,
-            )
+                self._biomech.submit_phoneme(
+                    phoneme,
+                    tick=self.tick + 1,
+                    emotion_label=emotion,
+                    duration=hold,
+                )
         self._telemetry.last_phoneme = phoneme
         self._telemetry.last_emotion = emotion
         self._telemetry.impulses_fired += 1
@@ -4090,11 +4213,75 @@ class AvatarFaceApp(FieldRuntime):
         return ownership
 
     def _enqueue_field_specs(self, specs: Sequence[FieldImpulseSpec]) -> None:
-        """No-op — legacy ±4 muscle field writes removed (TickFeed owns ch0/1)."""
-        del specs
+        """Queue muscle ±4 velocity for VowelDesign (TickFeed does not own lips)."""
+        self._vowel_field_spec_n = 0
+        self._vowel_field_cmd_n = 0
+        if not specs:
+            return
+        if not self._vowel_design_mode():
+            return
+        index = self._cell_clusters
+        cluster = index.primary_mouth() if index is not None else None
+        tick = int(self.tick) + 1
+        box = self._face_box
+        registry = self._biomech.registry
+        impulses = []
+        for spec in specs:
+            # Anchors are face-box UV (v down), not full-grid UV.
+            try:
+                muscle = registry.get(spec.muscle)
+            except KeyError:
+                muscle = None
+            if muscle is not None:
+                cx, cy_grid = muscle_anchor_grid(
+                    muscle, box, int(self.grid_height)
+                )
+            else:
+                cx = float(box["x"]) + float(spec.center_uv[0]) * float(box["width"])
+                cy_img = (
+                    float(box["y"])
+                    + float(spec.center_uv[1]) * float(box["height"])
+                )
+                cy_grid = float(self.grid_height) - cy_img
+            if cluster is not None:
+                impulses.extend(
+                    distribute_to_nearby_cells(
+                        cluster,
+                        (float(cx), float(cy_grid)),
+                        (float(spec.velocity[0]), float(spec.velocity[1])),
+                        tick=tick,
+                        radius_cells=max(5.0, float(spec.radius) * 0.40),
+                        budget=32,
+                    )
+                )
+            else:
+                from chorusface.cell_cluster import cell_impulse
+
+                impulses.append(
+                    cell_impulse(
+                        int(round(cx)),
+                        int(round(cy_grid)),
+                        float(spec.velocity[0]),
+                        float(spec.velocity[1]),
+                        tick=tick,
+                    )
+                )
+        if not impulses:
+            self._vowel_field_spec_n = len(specs)
+            return
+        commands = to_commands(
+            impulses,
+            grid_width=int(self.grid_width),
+            grid_height=int(self.grid_height),
+        )
+        self._pending_cell_commands.extend(commands)
+        self._vowel_field_spec_n = len(specs)
+        self._vowel_field_cmd_n = len(commands)
 
     def _flush_pending_cell_commands(self) -> None:
-        """No-op — legacy pending ±4 queue cleared; TickFeed owns FIELD."""
+        """Push queued ±4 rows onto the FieldRuntime command stream."""
+        for cmd in self._pending_cell_commands:
+            self._enqueue(cmd)
         self._pending_cell_commands = []
 
     def _enqueue_mouth_cell_plan(self) -> None:
@@ -4284,12 +4471,37 @@ class AvatarFaceApp(FieldRuntime):
             # (that left the mouth stuck open on small residuals).
             openness = float(self._plate_openness_current) * 8.0
             expression = float(self._ml_smile)
+            self._target_mouth_pose = MouthPose(
+                width=render.mouth_width,
+                openness=openness,
+                roundness=render.mouth_roundness,
+                expression=expression,
+            )
         elif self._vowel_design_mode():
-            # Pure muscle/jaw openness — never blend old open.png plate boost.
-            openness = float(render.mouth_openness)
-            # Expression.w feeds smile.png — keep at 0 in vowel mode.
-            expression = 0.0
-            self._ml_smile = 0.0
+            # 9D owns oral pose when armed; else keep jaw/open at rest.
+            if bool(getattr(self, "_vowel_9d_owns_look", False)) and (
+                getattr(self, "_vowel_ctrl_sample", None) is not None
+            ):
+                m = self._vowel_9d_mouth
+                openness = float(m.get("openness", 1.0))
+                expression = float(m.get("smile", 0.0))
+                self._ml_smile = expression
+                self._target_mouth_pose = MouthPose(
+                    width=float(m.get("width", 14.0)),
+                    openness=openness,
+                    roundness=float(m.get("roundness", 0.12)),
+                    expression=expression,
+                )
+            else:
+                openness = float(render.mouth_openness)
+                expression = 0.0
+                self._ml_smile = 0.0
+                self._target_mouth_pose = MouthPose(
+                    width=render.mouth_width,
+                    openness=openness,
+                    roundness=render.mouth_roundness,
+                    expression=expression,
+                )
         else:
             # Openness units for shader (/14): boost from plate drive so open.png
             # has a strong signal even when jaw physics is still catching up.
@@ -4298,13 +4510,20 @@ class AvatarFaceApp(FieldRuntime):
                 float(self._plate_openness_current)
                 * float(self._display_recipe.openness_plate_boost),
             )
-        self._target_mouth_pose = MouthPose(
-            width=render.mouth_width,
-            openness=openness,
-            roundness=render.mouth_roundness,
-            expression=expression,
-        )
-        del specs  # legacy ±4 muscle field impulses unused (TickFeed owns ch0/1)
+            self._target_mouth_pose = MouthPose(
+                width=render.mouth_width,
+                openness=openness,
+                roundness=render.mouth_roundness,
+                expression=expression,
+            )
+        # VowelDesign: no ±4 FIELD when 9D owns (muscle/field smear).
+        if self._vowel_design_mode() and not bool(
+            getattr(self, "_vowel_9d_owns_look", False)
+        ):
+            self._enqueue_field_specs(specs)
+            self._flush_pending_cell_commands()
+        else:
+            del specs
         self._refresh_frame_layers()
         self._cpu_frame_ms = (time.perf_counter() - cpu_started) * 1000.0
 
@@ -4440,6 +4659,29 @@ class AvatarFaceApp(FieldRuntime):
         from chorusface.tickfeed.schema import RING_DEPTH
 
         next_tick = self.tick + 1
+        # VowelDesign: muscle ±4 PaintCommands own lip FIELD. TickFeed KEY/synth
+        # would overwrite ch0/1 every tick and leave only jaw (uniform) motion.
+        if self._vowel_design_mode():
+            self._tickfeed_last_pkg = None
+            self._tickfeed_last_live = False
+            self._tickfeed_last_live_mode = "vowel-biomech"
+            if self._tickfeed is not None:
+                from chorusface.tickfeed.package import TickPackage
+                from chorusface.tickfeed.schema import DeltaEncoding, PackageKind
+
+                self.queue_tick_package(
+                    TickPackage(
+                        kind=PackageKind.DELTA,
+                        tick=int(next_tick),
+                        face=self._tickfeed.face,
+                        delta_encoding=DeltaEncoding.EMPTY,
+                    )
+                )
+            else:
+                self.queue_tick_package(None)
+            super()._simulate_tick()
+            return
+
         if self._tickfeed is not None and self._tickfeed.enabled:
             live = self._tickfeed_live_active()
             mode = self._tickfeed_live_mode()
@@ -4864,7 +5106,120 @@ class AvatarFaceApp(FieldRuntime):
                 f"src={snap['provenance']} "
                 f"open.png={'on' if snap.get('open_png') else 'off'}"
             )
+        if bool(getattr(self, "_face_debug_hud", False)):
+            lines.extend(self._face_debug_hud_lines())
         return lines
+
+    def _face_debug_snapshot(self) -> dict[str, object]:
+        """Live face-function channels — HAS/MISS for diagnosing jaw-only lips."""
+        state = self._render_state
+        pose = self._mouth_pose
+        groups = dict(getattr(state, "group_activations", {}) or {})
+        key_groups = (
+            "Risorius",
+            "OrbicularisOris",
+            "ZygomaticusMajor",
+            "Buccinator",
+            "JawOpener",
+            "DepressorLabii",
+            "Frontalis",
+            "Corrugator",
+        )
+        gvals = {name: float(groups.get(name, 0.0)) for name in key_groups}
+        c9 = getattr(self, "_vowel_ctrl_sample", None)
+        c9_ok = c9 is not None
+        c9_vals: list[float] = []
+        if c9_ok:
+            try:
+                c9_vals = [
+                    float(x) for x in np.asarray(c9, dtype=np.float64).reshape(-1)[:9]
+                ]
+            except Exception:  # noqa: BLE001
+                c9_vals = []
+                c9_ok = False
+        specs_n = int(getattr(self, "_vowel_field_spec_n", 0) or 0)
+        cmds_n = int(getattr(self, "_vowel_field_cmd_n", 0) or 0)
+        gain = float(getattr(self, "_field_gain_eff", 0.0) or 0.0)
+        line_hw = (
+            float(self._mouth_line[2]) if self._mouth_line is not None else 0.0
+        )
+        rest_hw = float(getattr(self, "_mouth_line_rest_hw", 0.0) or 0.0)
+        speaking = bool(getattr(state, "speaking", False))
+        flags = {
+            "width": "HAS" if abs(float(pose.width) - 14.0) > 0.35 else "MISS",
+            "round": "HAS" if float(pose.roundness) > 0.18 else "MISS",
+            "open": "HAS" if float(pose.openness) > 1.4 else "MISS",
+            "jaw": "HAS" if abs(float(state.jaw_angle)) > 0.02 else "MISS",
+            "ris": "HAS" if gvals["Risorius"] >= 0.04 else "MISS",
+            "oris": "HAS" if gvals["OrbicularisOris"] >= 0.04 else "MISS",
+            "field_specs": "HAS" if specs_n > 0 else "MISS",
+            "field_cmds": "HAS" if cmds_n > 0 else "MISS",
+            "field_gain": "HAS" if gain >= 0.05 else "MISS",
+            "plates": "OFF" if self._vowel_design_mode() else (
+                "ON" if bool(self._use_plates) else "OFF"
+            ),
+            "9d": "HAS" if c9_ok else "MISS",
+            "blink": "HAS" if float(state.blink_timer) > 0.0 or float(
+                min(state.lid_left, state.lid_right)
+            ) < 0.92 else "IDLE",
+            "speaking": "YES" if speaking else "no",
+        }
+        return {
+            "pose_w": float(pose.width),
+            "pose_o": float(pose.openness),
+            "pose_r": float(pose.roundness),
+            "jaw": float(state.jaw_angle),
+            "groups": gvals,
+            "specs": specs_n,
+            "cmds": cmds_n,
+            "gain": gain,
+            "line_hw": line_hw,
+            "rest_hw": rest_hw,
+            "c9": c9_vals,
+            "phoneme": str(getattr(state, "last_phoneme", "") or ""),
+            "flags": flags,
+            "mean_speed": float(self._telemetry.mean_speed),
+            "peak_speed": float(self._telemetry.peak_speed),
+        }
+
+    def _face_debug_hud_lines(self) -> list[str]:
+        snap = self._face_debug_snapshot()
+        g = snap["groups"]
+        flags = snap["flags"]
+        c9 = snap["c9"]
+        c9_txt = (
+            " ".join(f"{v:.2f}" for v in c9)
+            if c9
+            else "—"
+        )
+        return [
+            (
+                f"FACEDBG ph={snap['phoneme']} speak={flags['speaking']} "
+                f"W={snap['pose_w']:.1f}({flags['width']}) "
+                f"O={snap['pose_o']:.1f}({flags['open']}) "
+                f"R={snap['pose_r']:.2f}({flags['round']}) "
+                f"jaw={snap['jaw']:.3f}({flags['jaw']}) "
+                f"hw={snap['line_hw']:.1f}/{snap['rest_hw']:.1f}"
+            ),
+            (
+                f"  mus ris={g['Risorius']:.2f}({flags['ris']}) "
+                f"oris={g['OrbicularisOris']:.2f}({flags['oris']}) "
+                f"zygo={g['ZygomaticusMajor']:.2f} "
+                f"bucc={g['Buccinator']:.2f} "
+                f"jawM={g['JawOpener']:.2f} "
+                f"depL={g['DepressorLabii']:.2f} "
+                f"fr={g['Frontalis']:.2f} kn={g['Corrugator']:.2f}"
+            ),
+            (
+                f"  field specs={snap['specs']}({flags['field_specs']}) "
+                f"cmds={snap['cmds']}({flags['field_cmds']}) "
+                f"gain={snap['gain']:.2f}({flags['field_gain']}) "
+                f"plates={flags['plates']} "
+                f"|V|={snap['mean_speed']:.3f}/{snap['peak_speed']:.3f} "
+                f"9D={flags['9d']} blink={flags['blink']}"
+            ),
+            f"  9D[{c9_txt}]",
+        ]
 
     def _configure_window_aspect(self) -> None:
         """Lock OS window + viewport to portrait/chat (or square face-only)."""
@@ -4958,6 +5313,18 @@ class AvatarFaceApp(FieldRuntime):
                 self._overlay_dirty = True
                 print(
                     f"Fidelity HUD: {'on' if self._fidelity_hud else 'off'}",
+                    flush=True,
+                )
+                return
+            if key == keys.D and not (
+                self._chat_box_visible and self._chatbox.focused
+            ):
+                self._face_debug_hud = not bool(
+                    getattr(self, "_face_debug_hud", False)
+                )
+                self._overlay_dirty = True
+                print(
+                    f"Face debug HUD: {'on' if self._face_debug_hud else 'off'}",
                     flush=True,
                 )
                 return

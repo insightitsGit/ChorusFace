@@ -693,7 +693,9 @@ void main() {
         );
         // Atlas billboard owns the oral interior — kill synthetic gap fill.
         cavity_gate *= (1.0 - mix(0.0, smoothstep(0.30, 0.70, atlas_own), snap));
-        // Plate-off: cavity prediction is the ghost second mouth — keep shut.
+        // Plate-off: synthetic cavity (gap or ellipse) paints a dark zip/ghost
+        // band on sealed photo-lips. Keep shut until open.png or true lip
+        // separation owns the aperture (NWR: uniforms/muscles, not FIELD smear).
         if (avatar_plates_ready == 0) {
             cavity_gate = 0.0;
             mouth_inside = 0.0;
